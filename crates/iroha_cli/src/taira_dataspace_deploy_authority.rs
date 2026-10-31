@@ -518,13 +518,14 @@ fn closure_names(inventory: &Inventory) -> BTreeSet<String> {
         .chain(["authority.json".into(), "lock".into()])
         .collect()
 }
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn revalidate_directory(journal: &Journal, inventory: &Inventory) -> Result<()> {
     journal.revalidate()?;
-    let names = fs::read_dir(&journal.path)?
-        .map(|row| {
-            row?.file_name()
-                .into_string()
+    let names = journal
+        .entry_names()?
+        .into_iter()
+        .map(|name| {
+            name.into_string()
                 .map_err(|_| eyre!("authority filename is not UTF-8"))
         })
         .collect::<Result<BTreeSet<_>>>()?;
@@ -545,7 +546,7 @@ fn revalidate_directory(journal: &Journal, inventory: &Inventory) -> Result<()> 
 }
 
 impl VerifyAuthority {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn run_without_client_config(&self, mut output: impl std::io::Write) -> Result<()> {
         let trust = PublicInput::read(&self.trust)?;
         let journal = Journal::open(&self.bundle, false)?;
@@ -581,7 +582,7 @@ impl VerifyAuthority {
         output.write_all(b"\n")?;
         Ok(())
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     pub(crate) fn run_without_client_config(&self, _: impl std::io::Write) -> Result<()> {
         eyre::bail!("authority file custody requires Unix")
     }
@@ -595,12 +596,12 @@ pub(super) fn export(
     update: Option<&runtime_update::Verified>,
     destination: &Path,
 ) -> Result<()> {
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (journal, plan, report, trust_path, update, destination);
         eyre::bail!("authority export requires Unix");
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         require(
             report.deployment_complete
@@ -724,10 +725,13 @@ pub(super) fn export(
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt as _, symlink};
+    #[cfg(windows)]
+    use std::os::windows::fs::symlink_file as symlink;
 
     fn inventory() -> Inventory {
         Inventory {
@@ -918,6 +922,7 @@ mod tests {
         fs::remove_file(&original).unwrap();
         fs::rename(&retained, &original).unwrap();
         fs::write(&original, b"[]").unwrap();
+        #[cfg(unix)]
         fs::set_permissions(&original, fs::Permissions::from_mode(0o600)).unwrap();
         assert!(revalidate_directory(&bundle, &inventory).is_err());
     }

@@ -40,11 +40,17 @@ mod staking;
 mod subscriptions;
 mod sumeragi;
 mod taira;
+mod taira_config_retirement_evidence;
 mod taira_dataspace_deploy;
+#[cfg(any(unix, test))]
+mod taira_inrou_validation;
 pub use taira_dataspace_deploy::{
     DataspaceAuthorityOriginal, VerifiedDataspaceAuthority, dataspace_authority_completion_sha256,
     dataspace_authority_original_inventory, verify_dataspace_authority_originals,
 };
+#[cfg(test)]
+mod deployment_genesis_fixture;
+#[cfg(unix)]
 mod taira_public_reset;
 mod transaction_journal;
 mod transaction_load;
@@ -1610,16 +1616,19 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
         ))
         .map(|()| std::process::ExitCode::SUCCESS);
     }
+    #[cfg(unix)]
     if let Command::Taira(taira::Command::PublicReset(reset)) = &args.command {
         reject_irrelevant_taira_public_reset_globals(&args)?;
         return map_command_result(reset.run_without_client_config(io::stdout()))
             .map(|()| std::process::ExitCode::SUCCESS);
     }
+    #[cfg(unix)]
     if let Command::Taira(taira::Command::RetireValidatorConfig(command)) = &args.command {
         reject_irrelevant_local_tool_globals(&args, "taira retire-validator-config")?;
         return map_command_result(command.run_without_client_config(io::stdout()))
             .map(|()| std::process::ExitCode::SUCCESS);
     }
+    #[cfg(unix)]
     if let Command::Taira(taira::Command::StoppedOwnerMaintenance(command)) = &args.command {
         reject_irrelevant_local_tool_globals(&args, "taira stopped-owner-maintenance")?;
         return map_command_result(command.run_without_client_config(io::stdout()))

@@ -3,7 +3,11 @@
 struct TwoSlotFileIdentityV1 {
     platform: u8,
     first: u64,
+    #[cfg(not(windows))]
     second: u64,
+    // Windows local custody keeps the complete FILE_ID_128, including its upper half.
+    #[cfg(windows)]
+    second: [u8; 16],
 }
 impl From<FileIdentity> for TwoSlotFileIdentityV1 {
     fn from(identity: FileIdentity) -> Self {
@@ -19,8 +23,8 @@ impl From<FileIdentity> for TwoSlotFileIdentityV1 {
         {
             Self {
                 platform: 2,
-                first: u64::from(identity.volume_serial_number),
-                second: identity.file_index,
+                first: identity.native.local_parts().1,
+                second: identity.native.local_parts().2,
             }
         }
         #[cfg(not(any(unix, windows)))]
@@ -29,7 +33,7 @@ impl From<FileIdentity> for TwoSlotFileIdentityV1 {
             Self {
                 platform: 0,
                 first: 0,
-                second: 0,
+                second: Default::default(),
             }
         }
     }
@@ -194,6 +198,8 @@ struct TwoSlotFileV1 {
     handle: Arc<File>,
     identity: FileIdentity,
     name: OsString,
+    #[cfg(windows)]
+    private_acl: platform::WindowsDaclSnapshot,
 }
 /// One exact selected record returned by a two-slot V1 store.
 ///
@@ -337,18 +343,18 @@ fn zero_two_slot_binding_material() -> TwoSlotBindingMaterialV1 {
         init_lock_identity: TwoSlotFileIdentityV1 {
             platform: 0,
             first: 0,
-            second: 0,
+            second: Default::default(),
         },
         slot_identities: [
             TwoSlotFileIdentityV1 {
                 platform: 0,
                 first: 0,
-                second: 0,
+                second: Default::default(),
             },
             TwoSlotFileIdentityV1 {
                 platform: 0,
                 first: 0,
-                second: 0,
+                second: Default::default(),
             },
         ],
     }
@@ -643,7 +649,7 @@ impl RootedDirectory {
         writable: bool,
     ) -> io::Result<Self> {
         platform::ensure_supported()?;
-        let metadata = handle.metadata()?;
+        let metadata = native_metadata(&handle)?;
         validate_directory_metadata(&display_path, &metadata)?;
         #[cfg(windows)]
         let owner_sid = platform::directory_owner_sid(&handle, &display_path)?;
@@ -669,7 +675,7 @@ impl RootedDirectory {
     /// Revalidate the retained object and its current pathname binding.
     pub(super) fn verify_path_binding(&self, path: &Path) -> io::Result<()> {
         self.verify_handle()?;
-        let linked = fs::symlink_metadata(path)?;
+        let linked = named_metadata(path)?;
         validate_directory_metadata(path, &linked)?;
         if file_identity(&linked)? != self.identity {
             return Err(io::Error::other(format!(
@@ -683,7 +689,7 @@ impl RootedDirectory {
     pub(super) fn verify(&self) -> io::Result<()> {
         self.verify_handle()?;
         if let Some(binding) = &self.binding {
-            let parent_metadata = binding.parent.metadata()?;
+            let parent_metadata = native_metadata(&binding.parent)?;
             validate_directory_metadata(&self.display_path, &parent_metadata)?;
             if file_identity(&parent_metadata)? != binding.parent_identity {
                 return Err(io::Error::other(format!(
@@ -692,7 +698,7 @@ impl RootedDirectory {
                 )));
             }
             let linked = platform::open_directory(&binding.parent, &binding.name, self.writable)?;
-            let linked_metadata = linked.metadata()?;
+            let linked_metadata = native_metadata(&linked)?;
             validate_directory_metadata(&self.display_path, &linked_metadata)?;
             if file_identity(&linked_metadata)? != self.identity {
                 return Err(io::Error::other(format!(
@@ -711,13 +717,16 @@ impl RootedDirectory {
         hasher.update(b"sorafs.governance-rooted-fs.directory-identity.v1\0");
         hasher.update(&[identity.platform]);
         hasher.update(&identity.first.to_le_bytes());
+        #[cfg(not(windows))]
         hasher.update(&identity.second.to_le_bytes());
+        #[cfg(windows)]
+        hasher.update(&identity.second);
         let digest = *hasher.finalize().as_bytes();
         self.verify()?;
         Ok(digest)
     }
     fn verify_handle(&self) -> io::Result<()> {
-        let before = self.handle.metadata()?;
+        let before = native_metadata(&self.handle)?;
         validate_directory_metadata(&self.display_path, &before)?;
         if file_identity(&before)? != self.identity {
             return Err(io::Error::other(format!(
@@ -737,7 +746,7 @@ impl RootedDirectory {
         }
         #[cfg(not(windows))]
         platform::validate_directory_acl(&self.handle, &self.display_path)?;
-        let after = self.handle.metadata()?;
+        let after = native_metadata(&self.handle)?;
         validate_directory_metadata(&self.display_path, &after)?;
         if file_identity(&after)? != self.identity {
             return Err(io::Error::other(format!(
@@ -763,7 +772,7 @@ impl RootedDirectory {
             ));
         }
         self.verify()?;
-        self.handle.sync_all()?;
+        sync_directory(&self.handle)?;
         self.verify()
     }
     /// Open one direct child directory without following links/reparse points.
@@ -771,7 +780,7 @@ impl RootedDirectory {
         validate_component(name)?;
         self.verify()?;
         let handle = Arc::new(platform::open_directory(&self.handle, name, self.writable)?);
-        let metadata = handle.metadata()?;
+        let metadata = native_metadata(&handle)?;
         let display_path = self.display_path.join(name);
         validate_directory_metadata(&display_path, &metadata)?;
         #[cfg(windows)]
@@ -811,7 +820,7 @@ impl RootedDirectory {
                     Err(error) => return Err(error),
                 }
                 let directory = self.open_directory(name)?;
-                self.handle.sync_all()?;
+                sync_directory(&self.handle)?;
                 self.verify()?;
                 directory.verify()?;
                 Ok(directory)
@@ -893,7 +902,9 @@ impl RootedDirectory {
             return Err(platform::unsupported());
         }
         let installed = destination_parent.open_directory(destination_name)?;
-        if installed.identity != identity || file_identity(&child.handle.metadata()?)? != identity {
+        if installed.identity != identity
+            || file_identity(&native_metadata(&child.handle)?)? != identity
+        {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "two-slot directory rename installed a substituted object",
@@ -1013,7 +1024,7 @@ impl RootedDirectory {
         validate_component(name)?;
         self.verify()?;
         let mut file = platform::open_file(&self.handle, name, false)?;
-        let before = file.metadata()?;
+        let before = native_metadata(&file)?;
         let path = self.display_path.join(name);
         validate_file_metadata(&path, &before, max_bytes, private)?;
         let identity = file_identity(&before)?;
@@ -1032,7 +1043,7 @@ impl RootedDirectory {
                 ),
             ));
         }
-        let after = file.metadata()?;
+        let after = native_metadata(&file)?;
         validate_file_metadata(&path, &after, max_bytes, private)?;
         if !metadata_stable_during_read(&before, &after) {
             return Err(io::Error::other(format!(
@@ -1041,7 +1052,7 @@ impl RootedDirectory {
             )));
         }
         let linked = platform::open_file(&self.handle, name, false)?;
-        let linked_metadata = linked.metadata()?;
+        let linked_metadata = native_metadata(&linked)?;
         validate_file_metadata(&path, &linked_metadata, max_bytes, private)?;
         if file_identity(&linked_metadata)? != identity {
             return Err(io::Error::other(format!(
@@ -1089,7 +1100,7 @@ impl RootedDirectory {
             }
             Err(error) => return Err(error),
         };
-        let metadata = handle.metadata()?;
+        let metadata = native_metadata(&handle)?;
         let path = self.display_path.join(name);
         validate_file_metadata(&path, &metadata, max_bytes, true)?;
         let identity = file_identity(&metadata)?;
@@ -1116,8 +1127,12 @@ impl RootedDirectory {
         validate_component(name)?;
         self.verify()?;
         let path = self.display_path.join(name);
-        let retained_metadata = handle.metadata()?;
+        let retained_metadata = native_metadata(&handle)?;
         validate_file_metadata(&path, &retained_metadata, max_bytes, private)?;
+        #[cfg(windows)]
+        if private {
+            platform::validate_private_storage_acl(handle, &path)?;
+        }
         if file_identity(&retained_metadata)? != expected {
             return Err(io::Error::other(format!(
                 "retained governance file `{}` changed identity",
@@ -1125,8 +1140,12 @@ impl RootedDirectory {
             )));
         }
         let linked = platform::open_file(&self.handle, name, false)?;
-        let linked_metadata = linked.metadata()?;
+        let linked_metadata = native_metadata(&linked)?;
         validate_file_metadata(&path, &linked_metadata, max_bytes, private)?;
+        #[cfg(windows)]
+        if private {
+            platform::validate_private_storage_acl(&linked, &path)?;
+        }
         if file_identity(&linked_metadata)? != expected {
             return Err(io::Error::other(format!(
                 "governance file binding `{}` was substituted",
@@ -1181,7 +1200,7 @@ impl RootedDirectory {
             }
             Err(error) => return Err(error),
         };
-        let metadata = handle.metadata()?;
+        let metadata = native_metadata(&handle)?;
         let path = self.display_path.join(name);
         validate_file_metadata(&path, &metadata, max_bytes, private)?;
         let identity = file_identity(&metadata)?;
@@ -1204,7 +1223,7 @@ impl RootedDirectory {
         self.verify()?;
         match platform::open_file(&self.handle, name, false) {
             Ok(file) => {
-                let metadata = file.metadata()?;
+                let metadata = native_metadata(&file)?;
                 let path = self.display_path.join(name);
                 if private {
                     validate_private_regular_file_metadata(&path, &metadata)?;
@@ -1243,7 +1262,7 @@ impl RootedDirectory {
             expected,
             || Ok(()),
             |file| file.sync_all(),
-            |directory| directory.sync_all(),
+            sync_directory,
         )
     }
     #[expect(clippy::too_many_arguments, reason = "durability test seam")]
@@ -1324,7 +1343,7 @@ impl RootedDirectory {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let retained_name = match &expected {
             ExpectedFile::Identity(binding) => {
-                let metadata = binding.handle.metadata()?;
+                let metadata = native_metadata(&binding.handle)?;
                 validate_regular_file_metadata(&self.display_path.join(name), &metadata)?;
                 Some(self.available_atomic_retained_name(name, metadata.len(), binding.private)?)
             }
@@ -1362,7 +1381,7 @@ impl RootedDirectory {
                     ),
                 )
             })?;
-            let temporary_metadata = temporary.metadata()?;
+            let temporary_metadata = native_metadata(&temporary)?;
             validate_private_regular_file_metadata(&temporary_path, &temporary_metadata)?;
             let temporary_identity = file_identity(&temporary_metadata)?;
             verify_expected_file(self, name, &expected).map_err(|error| {
@@ -1451,7 +1470,7 @@ impl RootedDirectory {
                     ),
                 )
             })?;
-            let promoted_metadata = promoted.metadata()?;
+            let promoted_metadata = native_metadata(&promoted)?;
             validate_private_regular_file_metadata(
                 &self.display_path.join(name),
                 &promoted_metadata,
@@ -1480,7 +1499,7 @@ impl RootedDirectory {
                             ),
                         )
                     })?;
-                let predecessor_metadata = predecessor.metadata()?;
+                let predecessor_metadata = native_metadata(&predecessor)?;
                 validate_file_metadata(
                     &temporary_path,
                     &predecessor_metadata,
@@ -1523,7 +1542,7 @@ impl RootedDirectory {
                 })?;
                 let retained_path = self.display_path.join(retained_name);
                 let retained = platform::open_file(&self.handle, retained_name, false)?;
-                let retained_metadata = retained.metadata()?;
+                let retained_metadata = native_metadata(&retained)?;
                 validate_file_metadata(
                     &retained_path,
                     &retained_metadata,
@@ -1531,7 +1550,7 @@ impl RootedDirectory {
                     expected_private,
                 )?;
                 if file_identity(&retained_metadata)? != expected_identity
-                    || file_identity(&predecessor.metadata()?)? != expected_identity
+                    || file_identity(&native_metadata(&predecessor)?)? != expected_identity
                     || retained_metadata.len() != predecessor_metadata.len()
                 {
                     return Err(io::Error::new(
@@ -1559,7 +1578,7 @@ impl RootedDirectory {
                     ),
                 )
             })?;
-            let durable_metadata = durable.metadata()?;
+            let durable_metadata = native_metadata(&durable)?;
             validate_private_regular_file_metadata(
                 &self.display_path.join(name),
                 &durable_metadata,
@@ -1578,7 +1597,7 @@ impl RootedDirectory {
                 &self.handle,
                 &temporary,
                 temporary_name,
-                file_identity(&temporary.metadata()?).ok(),
+                file_identity(&native_metadata(&temporary)?).ok(),
             );
         }
         // POSIX has no conditional unlink-by-descriptor, so a failed
@@ -1619,7 +1638,7 @@ impl RootedDirectory {
                 continue;
             };
             let retained = platform::open_file(&self.handle, &name, false)?;
-            let metadata = retained.metadata()?;
+            let metadata = native_metadata(&retained)?;
             validate_file_metadata(
                 &self.display_path.join(&name),
                 &metadata,
@@ -1628,7 +1647,7 @@ impl RootedDirectory {
             )?;
             let identity = file_identity(&metadata)?;
             let linked = platform::open_file(&self.handle, &name, false)?;
-            let linked_metadata = linked.metadata()?;
+            let linked_metadata = native_metadata(&linked)?;
             validate_file_metadata(
                 &self.display_path.join(&name),
                 &linked_metadata,
@@ -1744,11 +1763,11 @@ impl RootedDirectory {
             }
             self.verify()?;
             let file = platform::open_file(&self.handle, &name, true)?;
-            let metadata = file.metadata()?;
+            let metadata = native_metadata(&file)?;
             validate_regular_file_metadata(&self.display_path.join(&name), &metadata)?;
             let identity = file_identity(&metadata)?;
             let linked = platform::open_file(&self.handle, &name, false)?;
-            let linked_metadata = linked.metadata()?;
+            let linked_metadata = native_metadata(&linked)?;
             validate_regular_file_metadata(&self.display_path.join(&name), &linked_metadata)?;
             if file_identity(&linked_metadata)? != identity {
                 return Err(io::Error::other(format!(
@@ -1763,7 +1782,7 @@ impl RootedDirectory {
             removed = removed.saturating_add(1);
         }
         if removed != 0 {
-            self.handle.sync_all()?;
+            sync_directory(&self.handle)?;
         }
         self.verify()?;
         Ok(removed)
@@ -1794,8 +1813,8 @@ impl RootedDirectory {
             quarantine,
             quarantine_name,
             before_rename,
-            |directory| directory.sync_all(),
-            |directory| directory.sync_all(),
+            sync_directory,
+            sync_directory,
         )
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1852,7 +1871,8 @@ impl RootedDirectory {
         source_sync?;
         quarantine_sync?;
         let snapshot = quarantine.read_file_with_policy(quarantine_name, max_bytes, private)?;
-        if snapshot.binding.identity != identity || file_identity(&handle.metadata()?)? != identity
+        if snapshot.binding.identity != identity
+            || file_identity(&native_metadata(&handle)?)? != identity
         {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -1887,7 +1907,7 @@ impl RootedDirectory {
         platform::remove_open_file(&self.handle, &handle, &name, Some(identity))?;
         drop(handle);
         self.require_file_name_absent(&name)?;
-        self.handle.sync_all()?;
+        sync_directory(&self.handle)?;
         self.verify()
     }
     fn require_file_name_absent(&self, name: &OsStr) -> io::Result<()> {
@@ -1932,8 +1952,8 @@ impl RootedDirectory {
             quarantine,
             quarantine_name,
             before_rename,
-            |directory| directory.sync_all(),
-            |directory| directory.sync_all(),
+            sync_directory,
+            sync_directory,
         )
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1995,7 +2015,9 @@ impl RootedDirectory {
         source_sync?;
         quarantine_sync?;
         let isolated = quarantine.open_directory(quarantine_name)?;
-        if isolated.identity != identity || file_identity(&child.handle.metadata()?)? != identity {
+        if isolated.identity != identity
+            || file_identity(&native_metadata(&child.handle)?)? != identity
+        {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "governance recovery quarantine captured a substituted directory; the preserved entry requires offline inspection",
@@ -2093,7 +2115,7 @@ impl RootedDirectory {
             }
             Err(error) => return Err(error),
         }
-        self.handle.sync_all()?;
+        sync_directory(&self.handle)?;
         self.verify()
     }
     #[cfg(test)]
@@ -2183,10 +2205,12 @@ fn open_existing_two_slot_file(
     } else {
         platform::open_file(&directory.handle, name, false)?
     };
-    let metadata = handle.metadata()?;
+    let metadata = native_metadata(&handle)?;
     let path = directory.display_path.join(name);
     let max_bytes = two_slot_file_byte_limit(layout)?;
     validate_file_metadata(&path, &metadata, max_bytes, true)?;
+    #[cfg(windows)]
+    let private_acl = platform::private_storage_acl_snapshot(&handle, &path)?;
     if metadata.len() != layout.slot_file_bytes {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -2204,13 +2228,22 @@ fn open_existing_two_slot_file(
         handle: Arc::new(handle),
         identity,
         name: name.to_os_string(),
+        #[cfg(windows)]
+        private_acl,
     })
 }
 fn verify_two_slot_file(store: &TwoSlotStoreV1, slot: &TwoSlotFileV1) -> io::Result<()> {
     let max_bytes = two_slot_file_byte_limit(store.layout)?;
     let path = store.directory.display_path.join(&slot.name);
-    let metadata = slot.handle.metadata()?;
+    let metadata = native_metadata(&slot.handle)?;
     validate_file_metadata(&path, &metadata, max_bytes, true)?;
+    #[cfg(windows)]
+    if platform::private_storage_acl_snapshot(&slot.handle, &path)? != slot.private_acl {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "governance two-slot file owner SID or DACL changed",
+        ));
+    }
     if metadata.len() != store.layout.slot_file_bytes || file_identity(&metadata)? != slot.identity
     {
         return Err(io::Error::new(
@@ -2221,9 +2254,21 @@ fn verify_two_slot_file(store: &TwoSlotStoreV1, slot: &TwoSlotFileV1) -> io::Res
             ),
         ));
     }
-    store
-        .directory
-        .verify_file_binding(&slot.name, &slot.handle, slot.identity, max_bytes, true)
+    store.directory.verify_file_binding(
+        &slot.name,
+        &slot.handle,
+        slot.identity,
+        max_bytes,
+        true,
+    )?;
+    #[cfg(windows)]
+    if platform::private_storage_acl_snapshot(&slot.handle, &path)? != slot.private_acl {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "governance two-slot file owner SID or DACL changed during revalidation",
+        ));
+    }
+    Ok(())
 }
 fn verify_two_slot_headers(store: &TwoSlotStoreV1) -> io::Result<()> {
     store.directory.verify()?;
@@ -2274,6 +2319,10 @@ fn verify_two_slot_headers(store: &TwoSlotStoreV1) -> io::Result<()> {
             ));
         }
     }
+    #[cfg(windows)]
+    for slot in &store.slots {
+        verify_two_slot_file(store, slot)?;
+    }
     store.directory.verify()
 }
 fn open_existing_two_slot_store(
@@ -2318,6 +2367,11 @@ fn open_existing_two_slot_store(
         slots,
         process_lock: Arc::new(Mutex::new(())),
     };
+    #[cfg(windows)]
+    // Windows byte-range locks protect reads as well as writes. Immutable headers must
+    // be admitted through the same slot lock when another retained store may be loading.
+    store.with_exclusive_lock(|_| Ok(()))?;
+    #[cfg(not(windows))]
     verify_two_slot_headers(&store)?;
     Ok(store)
 }
@@ -2543,6 +2597,10 @@ struct TwoSlotInitFileLockV1 {
     name: OsString,
     handle: File,
     identity: FileIdentity,
+    #[cfg(windows)]
+    private_acl: platform::WindowsDaclSnapshot,
+    #[cfg(windows)]
+    durably_establish: bool,
     locked: bool,
 }
 impl TwoSlotInitFileLockV1 {
@@ -2577,9 +2635,11 @@ impl TwoSlotInitFileLockV1 {
         handle: File,
         durably_establish: bool,
     ) -> io::Result<Self> {
-        let metadata = handle.metadata()?;
+        let metadata = native_metadata(&handle)?;
         let path = root.display_path.join(&name);
         validate_file_metadata(&path, &metadata, 0, true)?;
+        #[cfg(windows)]
+        let private_acl = platform::private_storage_acl_snapshot(&handle, &path)?;
         if metadata.len() != 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -2588,6 +2648,7 @@ impl TwoSlotInitFileLockV1 {
         }
         let identity = file_identity(&metadata)?;
         root.verify_file_binding(&name, &handle, identity, 0, true)?;
+        #[cfg(not(windows))]
         if durably_establish {
             // Every initializer establishes the empty lock file and its parent
             // binding durably before it can serialize initialization. This
@@ -2601,6 +2662,10 @@ impl TwoSlotInitFileLockV1 {
             name,
             handle,
             identity,
+            #[cfg(windows)]
+            private_acl,
+            #[cfg(windows)]
+            durably_establish,
             locked: false,
         })
     }
@@ -2609,6 +2674,8 @@ impl TwoSlotInitFileLockV1 {
         File::lock(&lock.handle)?;
         lock.locked = true;
         lock.verify()?;
+        #[cfg(windows)]
+        lock.establish_durable_binding()?;
         Ok(lock)
     }
     #[cfg(test)]
@@ -2630,6 +2697,8 @@ impl TwoSlotInitFileLockV1 {
                 Ok(()) => {
                     lock.locked = true;
                     lock.verify()?;
+                    #[cfg(windows)]
+                    lock.establish_durable_binding()?;
                     return Ok(lock);
                 }
                 Err(fs::TryLockError::WouldBlock) => {
@@ -2645,6 +2714,19 @@ impl TwoSlotInitFileLockV1 {
                 Err(fs::TryLockError::Error(error)) => return Err(error),
             }
         }
+    }
+    #[cfg(windows)]
+    fn establish_durable_binding(&self) -> io::Result<()> {
+        if self.durably_establish {
+            // Windows byte-range locks also deny FlushFileBuffers through another handle.
+            // Establish the empty lock and its parent after acquiring that exact lock, and
+            // before any initialization, so a concurrent initializer never flushes across it.
+            self.verify()?;
+            self.handle.sync_all()?;
+            self.root.sync_all()?;
+            self.verify()?;
+        }
+        Ok(())
     }
     #[cfg(test)]
     fn try_acquire_bound(
@@ -2676,9 +2758,16 @@ impl TwoSlotInitFileLockV1 {
         }
     }
     fn verify(&self) -> io::Result<()> {
-        let metadata = self.handle.metadata()?;
+        let metadata = native_metadata(&self.handle)?;
         let path = self.root.display_path.join(&self.name);
         validate_file_metadata(&path, &metadata, 0, true)?;
+        #[cfg(windows)]
+        if platform::private_storage_acl_snapshot(&self.handle, &path)? != self.private_acl {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "governance two-slot init lock owner SID or DACL changed",
+            ));
+        }
         if metadata.len() != 0 || file_identity(&metadata)? != self.identity {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -2686,7 +2775,15 @@ impl TwoSlotInitFileLockV1 {
             ));
         }
         self.root
-            .verify_file_binding(&self.name, &self.handle, self.identity, 0, true)
+            .verify_file_binding(&self.name, &self.handle, self.identity, 0, true)?;
+        #[cfg(windows)]
+        if platform::private_storage_acl_snapshot(&self.handle, &path)? != self.private_acl {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "governance two-slot init lock owner SID or DACL changed during revalidation",
+            ));
+        }
+        Ok(())
     }
     fn release(mut self) -> io::Result<()> {
         let verification = self.verify();
@@ -2817,6 +2914,11 @@ impl TwoSlotStoreV1 {
         let os_lock = TwoSlotOsLock::acquire(&self.slots[0].handle)?;
         verify_two_slot_headers(self)?;
         let result = operation(self);
+        #[cfg(windows)]
+        let result = result.and_then(|value| {
+            verify_two_slot_headers(self)?;
+            Ok(value)
+        });
         let unlock = os_lock.release();
         drop(process_guard);
         match (result, unlock) {
@@ -2844,6 +2946,11 @@ impl TwoSlotStoreV1 {
         let os_lock = TwoSlotOsLock::try_acquire(&self.slots[0].handle)?;
         verify_two_slot_headers(self)?;
         let result = operation(self);
+        #[cfg(windows)]
+        let result = result.and_then(|value| {
+            verify_two_slot_headers(self)?;
+            Ok(value)
+        });
         let unlock = os_lock.release();
         drop(process_guard);
         match (result, unlock) {
@@ -3186,7 +3293,7 @@ fn two_slot_stage_inventory(
         }
         seen[slot_id] = true;
         let handle = platform::open_read_write_file(&directory.handle, &name)?;
-        let metadata = handle.metadata()?;
+        let metadata = native_metadata(&handle)?;
         let path = directory.display_path.join(&name);
         validate_file_metadata(&path, &metadata, max_bytes, true)?;
         let identity = file_identity(&metadata)?;
@@ -3489,8 +3596,10 @@ where
     let handle = platform::create_file(&directory.handle, name)?;
     let path = directory.display_path.join(name);
     let max_bytes = two_slot_file_byte_limit(layout)?;
-    let before = handle.metadata()?;
+    let before = native_metadata(&handle)?;
     validate_file_metadata(&path, &before, max_bytes, true)?;
+    #[cfg(windows)]
+    let private_acl = platform::private_storage_acl_snapshot(&handle, &path)?;
     if before.len() != 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -3500,8 +3609,15 @@ where
     let identity = file_identity(&before)?;
     directory.verify_file_binding(name, &handle, identity, max_bytes, true)?;
     after_step(labels[0])?;
+    #[cfg(windows)]
+    if platform::private_storage_acl_snapshot(&handle, &path)? != private_acl {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "new governance slot owner SID or DACL changed before sizing",
+        ));
+    }
     handle.set_len(layout.slot_file_bytes)?;
-    let after = handle.metadata()?;
+    let after = native_metadata(&handle)?;
     validate_file_metadata(&path, &after, max_bytes, true)?;
     if after.len() != layout.slot_file_bytes || file_identity(&after)? != identity {
         return Err(io::Error::new(
@@ -3511,10 +3627,19 @@ where
     }
     directory.verify_file_binding(name, &handle, identity, max_bytes, true)?;
     after_step(labels[1])?;
+    #[cfg(windows)]
+    if platform::private_storage_acl_snapshot(&handle, &path)? != private_acl {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "new governance slot owner SID or DACL changed while sizing",
+        ));
+    }
     Ok(TwoSlotFileV1 {
         handle: Arc::new(handle),
         identity,
         name: name.to_os_string(),
+        #[cfg(windows)]
+        private_acl,
     })
 }
 fn write_two_slot_record_unlocked<Hook>(
@@ -3822,7 +3947,7 @@ fn open_existing_read_only_two_slot_store_v1(
     root.verify()?;
     let init_lock_name = two_slot_init_lock_name(&config);
     let init_lock = platform::open_file(&root.handle, &init_lock_name, false)?;
-    let init_lock_metadata = init_lock.metadata()?;
+    let init_lock_metadata = native_metadata(&init_lock)?;
     let init_lock_path = root.display_path.join(&init_lock_name);
     validate_file_metadata(&init_lock_path, &init_lock_metadata, 0, true)?;
     if init_lock_metadata.len() != 0 {
@@ -3831,12 +3956,21 @@ fn open_existing_read_only_two_slot_store_v1(
             "governance two-slot init lock must remain an empty fixed file",
         ));
     }
+    #[cfg(windows)]
+    let init_lock_acl = platform::private_storage_acl_snapshot(&init_lock, &init_lock_path)?;
     let init_lock_identity = file_identity(&init_lock_metadata)?;
     root.verify_file_binding(&init_lock_name, &init_lock, init_lock_identity, 0, true)?;
     let directory = root.open_directory(OsStr::new(&config.store_name))?;
     let store = open_existing_two_slot_store(directory, config, init_lock_identity)?;
     let _ = store.load()?;
     root.verify_file_binding(&init_lock_name, &init_lock, init_lock_identity, 0, true)?;
+    #[cfg(windows)]
+    if platform::private_storage_acl_snapshot(&init_lock, &init_lock_path)? != init_lock_acl {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "read-only governance init lock owner SID or DACL changed",
+        ));
+    }
     root.verify()?;
     Ok(store)
 }

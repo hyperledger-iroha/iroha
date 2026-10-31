@@ -67,7 +67,13 @@ impl NativeContextRead {
     /// # Errors
     /// The original directory/root relationship changed or its identity could not be inspected.
     pub fn recheck_namespace(&self) -> Result<(), NativeContextArchiveError> {
-        self.archive.recheck_namespace()
+        self.archive.recheck_namespace()?;
+        #[cfg(windows)]
+        if let Some(original) = &self.read.file {
+            original.revalidate()?;
+            self.archive.recheck_namespace()?;
+        }
+        Ok(())
     }
 }
 
@@ -91,7 +97,7 @@ pub(super) fn to_completion(
 /// Shared one-shot and retained-read implementation. The selection cannot change between polls.
 pub(super) struct RecordRead {
     name: RecordName,
-    file: Option<File>,
+    file: Option<ArchiveFile>,
     length: Option<usize>,
     bytes: Option<ChargedBuffer<u8>>,
     // A packed context record is rebuilt into `bytes`; its pieces' descriptors stay pinned here.

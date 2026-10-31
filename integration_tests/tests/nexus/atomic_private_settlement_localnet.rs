@@ -3345,6 +3345,7 @@ fn smoke_diagnostic_partial_and_interrupted_sinks_preserve_complete_record() {
 
 #[cfg(feature = "atomic-private-settlement-smoke")]
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg(unix)]
 enum N3SettlementExperimentV1 {
     HappyDay,
     RestartRecovery,
@@ -3352,6 +3353,7 @@ enum N3SettlementExperimentV1 {
 }
 
 #[cfg(feature = "atomic-private-settlement-smoke")]
+#[cfg(unix)]
 fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Result<()> {
     let _diagnostics = SmokeDiagnosticScopeV1::start();
     let (bound, request_sha) = read_bound_real_process_request()?;
@@ -4040,6 +4042,7 @@ fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Resul
 #[cfg(feature = "atomic-private-settlement-smoke")]
 #[test]
 #[ignore = "release-only: starts 16 real validators and generates three native STARK proofs"]
+#[cfg(unix)]
 fn atomic_private_settlement_n3_real_process_smoke() -> Result<()> {
     let handle = thread::Builder::new()
         .name("atomic-private-settlement-n3".to_owned())
@@ -4055,6 +4058,7 @@ fn atomic_private_settlement_n3_real_process_smoke() -> Result<()> {
 #[cfg(feature = "atomic-private-settlement-smoke")]
 #[test]
 #[ignore = "starts 16 real validators and completes a three-dataspace happy-day payment"]
+#[cfg(unix)]
 fn atomic_private_settlement_n3_happy_day() -> Result<()> {
     let handle = thread::Builder::new()
         .name("atomic-private-settlement-n3-happy-day".to_owned())
@@ -4070,6 +4074,7 @@ fn atomic_private_settlement_n3_happy_day() -> Result<()> {
 #[cfg(feature = "atomic-private-settlement-smoke")]
 #[test]
 #[ignore = "genuine one-call wallet/prover in fresh SDK processes; restarts all 16 validators"]
+#[cfg(unix)]
 fn atomic_private_settlement_n3_cold_one_call() -> Result<()> {
     let handle = thread::Builder::new()
         .name("atomic-private-settlement-n3-cold".to_owned())
@@ -4798,7 +4803,7 @@ fn genesis_ivm_private_note_defaults_require_no_protocol_policy() {
         .name("atomic-private-settlement-genesis".to_owned())
         .stack_size(TEST_STACK_BYTES)
         .spawn(move || {
-            let network = n3_smoke_builder(shape).build();
+            let network = localnet_builder(shape).build();
             let validated_genesis = network.genesis();
             signed_participant_lane_policy(&network, shape)
                 .expect("signed genesis retains exact native participant committees");

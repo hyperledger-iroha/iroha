@@ -2682,8 +2682,19 @@ fn decode_snapshot_plaintext(
     Ok(file)
 }
 fn sync_dir(path: &Path) -> io::Result<()> {
-    let file = fs::File::open(path)?;
-    file.sync_all()
+    #[cfg(windows)]
+    {
+        // A plain File::open cannot retain a Windows directory for its native
+        // publication barrier. Keep the directory and its ancestors through sync.
+        let directory = iroha_fs::OwnerDirectory::open(path)?;
+        directory.sync()?;
+        directory.revalidate()
+    }
+    #[cfg(not(windows))]
+    {
+        let file = fs::File::open(path)?;
+        file.sync_all()
+    }
 }
 /// Abstraction over the transport used to deliver streaming control frames.
 pub trait StreamingControlTx: Clone + Send + Sync + 'static {
@@ -2877,6 +2888,55 @@ mod tests {
     fn checked_random_ed25519_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked streaming Ed25519 fixture keypair")
+    }
+    #[cfg(windows)]
+    #[test]
+    fn native_snapshot_persistence_and_promotion_sync_directory() {
+        let temp = tempdir().expect("temporary root");
+        let directory = iroha_fs::PrivateDirectory::open_or_create(temp.path().join("snapshots"))
+            .expect("private snapshot directory");
+        let identity = directory.identity().expect("original directory identity");
+        let path = directory.path().join("sessions.norito");
+        let key = SessionKey::new(vec![0x5A; 32]);
+        let handle = StreamingHandle::new()
+            .with_snapshot_encryption_key(&key)
+            .expect("snapshot encryption key");
+        handle
+            .persist_snapshots_to_path(&path)
+            .expect("persist and sync the native directory");
+        let bytes = fs::read(&path).expect("published ciphertext");
+        let encryptor = SymmetricEncryptor::<ChaCha20Poly1305>::new_from_session_key(&key)
+            .expect("snapshot decryptor");
+        let decoded = decode_snapshot_bytes(bytes.clone(), &encryptor).expect("valid snapshot");
+        assert_eq!(decoded.version, SNAPSHOT_VERSION);
+        assert!(decoded.entries.is_empty());
+        let temporary = snapshot_temp_path(&path);
+        assert!(!temporary.exists());
+        fs::rename(&path, &temporary).expect("stage the original ciphertext for recovery");
+        handle
+            .load_snapshots_from_path(&path)
+            .expect("recover and promote the staged snapshot");
+        assert_eq!(fs::read(&path).expect("promoted ciphertext"), bytes);
+        assert!(!temporary.exists());
+        sync_dir(directory.path()).expect("native directory barrier after recovery");
+        assert_eq!(directory.identity().expect("retained directory"), identity);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn native_snapshot_directory_sync_refuses_file_and_missing_path() {
+        let temp = tempdir().expect("temporary root");
+        let directory = iroha_fs::PrivateDirectory::open_or_create(temp.path().join("snapshots"))
+            .expect("private snapshot directory");
+        let path = directory.path().join("ordinary-file");
+        fs::write(&path, b"unchanged").expect("ordinary file");
+        assert!(sync_dir(&path).is_err());
+        assert_eq!(fs::read(&path).expect("unchanged file"), b"unchanged");
+        let missing = directory.path().join("missing");
+        assert!(sync_dir(&missing).is_err());
+        assert!(!missing.exists());
+        directory
+            .revalidate()
+            .expect("original directory remains valid");
     }
     #[test]
     fn snapshot_temp_path_appends_suffix() {

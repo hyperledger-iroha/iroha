@@ -1,6 +1,7 @@
 #[cfg(unix)]
 use crate::fs_flags::set_directory_no_follow_flags;
 use crate::fs_flags::set_no_follow_flag;
+use crate::governance_rooted_fs::{NativeMetadata, named_metadata, native_metadata};
 use crate::{
     FencedPrivacyPublicationDispositionV1, FencedPrivacyPublicationReceiptV1,
     FencedPrivacyPublicationRequestV1, FencedTransparencyHeadAncestryProofV1,
@@ -3341,7 +3342,7 @@ impl FilesystemGovernancePublisher {
 fn acquire_governance_publisher_lock(root: &Path) -> io::Result<File> {
     let lock_path = root.join(GOVERNANCE_PUBLISHER_LOCK_FILE);
     validate_output_path(&lock_path)?;
-    let before_open = match fs::symlink_metadata(&lock_path) {
+    let before_open = match named_metadata(&lock_path) {
         Ok(metadata) => {
             validate_governance_lock_metadata(&lock_path, &metadata)?;
             Some(metadata)
@@ -3353,7 +3354,7 @@ fn acquire_governance_publisher_lock(root: &Path) -> io::Result<File> {
     options.read(true).write(true).create(true);
     set_no_follow_flag(&mut options);
     let file = options.open(&lock_path)?;
-    let opened_metadata = file.metadata()?;
+    let opened_metadata = native_metadata(&file)?;
     validate_governance_lock_metadata(&lock_path, &opened_metadata)?;
     if before_open
         .as_ref()
@@ -3364,7 +3365,7 @@ fn acquire_governance_publisher_lock(root: &Path) -> io::Result<File> {
             lock_path.display()
         )));
     }
-    let after_open = fs::symlink_metadata(&lock_path)?;
+    let after_open = named_metadata(&lock_path)?;
     validate_governance_lock_metadata(&lock_path, &after_open)?;
     if !metadata_identifies_same_file(&opened_metadata, &after_open) {
         return Err(io::Error::other(format!(
@@ -3375,7 +3376,7 @@ fn acquire_governance_publisher_lock(root: &Path) -> io::Result<File> {
     validate_output_path(&lock_path)?;
     match file.try_lock() {
         Ok(()) => {
-            let locked_path_metadata = fs::symlink_metadata(&lock_path)?;
+            let locked_path_metadata = named_metadata(&lock_path)?;
             validate_governance_lock_metadata(&lock_path, &locked_path_metadata)?;
             if !metadata_identifies_same_file(&opened_metadata, &locked_path_metadata) {
                 return Err(io::Error::other(format!(
@@ -3402,7 +3403,7 @@ fn acquire_governance_publisher_lock(root: &Path) -> io::Result<File> {
         )),
     }
 }
-fn validate_governance_lock_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+fn validate_governance_lock_metadata(path: &Path, metadata: &NativeMetadata) -> io::Result<()> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(io::Error::other(format!(
             "governance publisher lock `{}` must be a regular file",
@@ -3437,7 +3438,7 @@ impl GovernanceFilesystemRootGuard {
             io::ErrorKind::Unsupported,
             "Governance DAG filesystem roots are unsupported on this platform",
         ));
-        let root_metadata = fs::symlink_metadata(&lexical_root)?;
+        let root_metadata = named_metadata(&lexical_root)?;
         if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
             return Err(io::Error::other(format!(
                 "governance filesystem root `{}` must be a real directory",
@@ -3473,7 +3474,7 @@ impl GovernanceFilesystemRootGuard {
                 .enumerate()
                 .map(|(position, path)| {
                     let is_root = position == last;
-                    let metadata = fs::symlink_metadata(path)?;
+                    let metadata = named_metadata(path)?;
                     validate_governance_directory_policy(
                         path,
                         &metadata,
@@ -3494,7 +3495,7 @@ impl GovernanceFilesystemRootGuard {
                             ),
                         )
                     })?);
-                    let opened_metadata = handle.metadata()?;
+                    let opened_metadata = native_metadata(&handle)?;
                     validate_governance_directory_policy(
                         path,
                         &opened_metadata,
@@ -3596,12 +3597,10 @@ impl GovernanceFilesystemRootGuard {
         #[cfg(windows)]
         {
             self.rooted_directory.validate_acl()?;
-            let metadata = fs::symlink_metadata(&self.canonical_root)?;
+            let metadata = named_metadata(&self.canonical_root)?;
             if metadata.file_type().is_symlink()
                 || !metadata.is_dir()
                 || metadata.file_attributes() & 0x0000_0400 != 0
-                || metadata.volume_serial_number().is_none()
-                || metadata.file_index().is_none()
             {
                 return Err(io::Error::other(format!(
                     "governance filesystem root `{}` is no longer a stable, non-reparse directory",
@@ -3626,7 +3625,7 @@ fn revalidate_governance_directory_identity(
     pinned_root_owner: u32,
     writer_root: bool,
 ) -> io::Result<()> {
-    let handle_metadata = identity.handle.metadata()?;
+    let handle_metadata = native_metadata(&identity.handle)?;
     validate_governance_directory_policy(
         &identity.path,
         &handle_metadata,
@@ -3646,7 +3645,7 @@ fn revalidate_governance_directory_identity(
             identity.path.display()
         )));
     }
-    let path_metadata = fs::symlink_metadata(&identity.path)?;
+    let path_metadata = named_metadata(&identity.path)?;
     validate_governance_directory_policy(
         &identity.path,
         &path_metadata,
@@ -3670,7 +3669,7 @@ fn revalidate_governance_directory_identity(
 #[cfg(unix)]
 fn validate_governance_directory_policy(
     path: &Path,
-    metadata: &fs::Metadata,
+    metadata: &NativeMetadata,
     is_root: bool,
     effective_uid: u32,
     pinned_root_owner: u32,
@@ -3753,18 +3752,15 @@ fn governance_absolute_lexical_root(root: &Path) -> io::Result<PathBuf> {
     Ok(absolute)
 }
 #[cfg(unix)]
-fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn metadata_identifies_same_file(left: &NativeMetadata, right: &NativeMetadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
 #[cfg(windows)]
-fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
+fn metadata_identifies_same_file(left: &NativeMetadata, right: &NativeMetadata) -> bool {
+    left.identity() == right.identity()
 }
 #[cfg(not(any(unix, windows)))]
-fn metadata_identifies_same_file(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+fn metadata_identifies_same_file(_left: &NativeMetadata, _right: &NativeMetadata) -> bool {
     false
 }
 fn status_label(status: DealSettlementStatusV1) -> &'static str {
@@ -4334,7 +4330,7 @@ fn open_atomic_temp_file(path: &Path) -> io::Result<File> {
             format!("failed to create atomic temp `{}`: {err}", path.display()),
         )
     })?;
-    let metadata = file.metadata().map_err(|err| {
+    let metadata = native_metadata(&file).map_err(|err| {
         io::Error::new(
             err.kind(),
             format!(
@@ -4902,7 +4898,7 @@ fn validate_runtime_handle(
     }
 }
 #[cfg(unix)]
-fn metadata_stable_during_read(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+fn metadata_stable_during_read(before: &NativeMetadata, after: &NativeMetadata) -> bool {
     metadata_identifies_same_file(before, after)
         && before.len() == after.len()
         && before.mtime() == after.mtime()
@@ -4911,7 +4907,7 @@ fn metadata_stable_during_read(before: &fs::Metadata, after: &fs::Metadata) -> b
         && before.ctime_nsec() == after.ctime_nsec()
 }
 #[cfg(not(unix))]
-fn metadata_stable_during_read(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+fn metadata_stable_during_read(before: &NativeMetadata, after: &NativeMetadata) -> bool {
     metadata_identifies_same_file(before, after)
         && before.len() == after.len()
         && before.modified().ok() == after.modified().ok()
@@ -4920,13 +4916,13 @@ fn read_bounded_governance_state_file(path: &Path, max_bytes: usize) -> io::Resu
     let max_bytes_u64 = u64::try_from(max_bytes)
         .map_err(|_| io::Error::other("governance state byte limit exceeds u64"))?;
     validate_output_path(path)?;
-    let before_open = fs::symlink_metadata(path)?;
+    let before_open = named_metadata(path)?;
     validate_governance_state_metadata(path, &before_open)?;
     let mut options = fs::OpenOptions::new();
     options.read(true);
     set_no_follow_flag(&mut options);
     let mut file = options.open(path)?;
-    let opened_metadata = file.metadata()?;
+    let opened_metadata = native_metadata(&file)?;
     validate_governance_state_metadata(path, &opened_metadata)?;
     if !metadata_identifies_same_file(&before_open, &opened_metadata) {
         return Err(io::Error::other(format!(
@@ -4956,14 +4952,14 @@ fn read_bounded_governance_state_file(path: &Path, max_bytes: usize) -> io::Resu
             ),
         ));
     }
-    let after_read_file = file.metadata()?;
+    let after_read_file = native_metadata(&file)?;
     if !metadata_stable_during_read(&opened_metadata, &after_read_file) {
         return Err(io::Error::other(format!(
             "governance state `{}` changed while reading",
             path.display()
         )));
     }
-    let after_read = fs::symlink_metadata(path)?;
+    let after_read = named_metadata(path)?;
     validate_governance_state_metadata(path, &after_read)?;
     if !metadata_identifies_same_file(&opened_metadata, &after_read) {
         return Err(io::Error::other(format!(
@@ -4974,7 +4970,7 @@ fn read_bounded_governance_state_file(path: &Path, max_bytes: usize) -> io::Resu
     validate_output_path(path)?;
     Ok(bytes)
 }
-fn validate_governance_state_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+fn validate_governance_state_metadata(path: &Path, metadata: &NativeMetadata) -> io::Result<()> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(io::Error::other(format!(
             "governance state `{}` must be a regular file",
@@ -9096,7 +9092,7 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
         committed.index_bytes.as_ref(),
     ) else {
         let runtime_root = root.join(GOVERNANCE_RUNTIME_DAG_DIR);
-        if fs::symlink_metadata(&runtime_root).is_ok() {
+        if named_metadata(&runtime_root).is_ok() {
             return Err(GovernancePublishError::other(
                 "governance runtime DAG artifacts exist without their signed index",
             ));
@@ -9340,7 +9336,7 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
     let blocks_dir = root
         .join(GOVERNANCE_RUNTIME_DAG_DIR)
         .join(GOVERNANCE_RUNTIME_DAG_BLOCKS_DIR);
-    let blocks_dir_metadata = fs::symlink_metadata(&blocks_dir)?;
+    let blocks_dir_metadata = named_metadata(&blocks_dir)?;
     if !blocks_dir_metadata.file_type().is_dir() {
         return Err(GovernancePublishError::other(
             "governance runtime DAG blocks path is not a directory",
@@ -9977,7 +9973,7 @@ fn read_runtime_dag_qualification_archive(
     let missing_sidecar = match verify_digest_sidecar(&path, &bytes) {
         Ok(()) => false,
         Err(_error)
-            if fs::symlink_metadata(digest_sidecar_path_for(&path))
+            if named_metadata(digest_sidecar_path_for(&path))
                 .is_err_and(|sidecar_error| sidecar_error.kind() == io::ErrorKind::NotFound) =>
         {
             true
@@ -11767,7 +11763,7 @@ fn validate_runtime_dag_producer_intent_bounds(
             )?;
         }
         let json_path = resolve_index_path(root, &required_runtime_string(entry, "json_path")?)?;
-        let metadata = fs::symlink_metadata(&json_path)?;
+        let metadata = named_metadata(&json_path)?;
         validate_governance_state_metadata(&json_path, &metadata)?;
         let json_len = usize::try_from(metadata.len()).map_err(|_| {
             GovernancePublishError::other(

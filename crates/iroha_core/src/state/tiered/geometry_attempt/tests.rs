@@ -376,3 +376,97 @@ fn retained_attempt_rejects_changed_backend_roots_and_root_identity() {
     assert!(error.to_string().contains("replaced"), "{error:?}");
     assert!(!root.join("lanes").exists());
 }
+
+#[cfg(windows)]
+#[test]
+fn native_created_directory_survives_sync_failure_and_nonempty_rollback_refusal() {
+    let temp = tempfile::tempdir().expect("native temporary directory");
+    let root = fs::canonicalize(temp.path()).unwrap().join("cold");
+    let mut backend = TieredStateBackend::default();
+    backend.reconfigure_without_storage_effects(true, 0, 0, 0, Some(root.clone()), None, 0, 0);
+    let config = configuration("initial");
+    let mut attempt = backend
+        .prepare_lane_geometry_attempt(&config, &config, &[], &[])
+        .unwrap();
+    attempt.faults.remaining = Some(0);
+    let _ = attempt
+        .resume(&mut backend)
+        .expect_err("real creation precedes first barrier failure");
+    assert_eq!(attempt.cursor, 0);
+    assert_eq!(attempt.operations[0].phase, OperationPhase::Changed);
+    let original = match &attempt.operations[0].kind {
+        OperationKind::Create { created, path, .. } => {
+            assert_eq!(path, &root);
+            directory(created).unwrap().original().unwrap()
+        }
+        _ => panic!("first effect creates cold root"),
+    };
+    let identity = original.identity().unwrap();
+    fs::write(root.join("unowned"), b"preserve").unwrap();
+    let _ = attempt
+        .rollback(&mut backend)
+        .expect_err("kernel rejects populated rollback");
+    assert_eq!(attempt.operations[0].phase, OperationPhase::Changed);
+    assert_eq!(fs::read(root.join("unowned")).unwrap(), b"preserve");
+    original.require_at(&root).unwrap();
+    assert_eq!(original.identity().unwrap(), identity);
+    fs::remove_file(root.join("unowned")).unwrap();
+    attempt.faults.remaining = Some(0);
+    let _ = attempt
+        .rollback(&mut backend)
+        .expect_err("empty removal precedes late barrier failure");
+    assert_eq!(attempt.operations[0].phase, OperationPhase::Reversed);
+    assert!(!root.exists());
+    original
+        .require_removed()
+        .expect("same original remains held after namespace removal");
+    assert_eq!(original.identity().unwrap(), identity);
+    attempt
+        .rollback(&mut backend)
+        .expect("only outstanding barrier is retried");
+    assert!(attempt.is_rolled_back());
+    assert_eq!(original.identity().unwrap(), identity);
+}
+
+#[cfg(windows)]
+#[test]
+fn native_unstarted_creation_slot_does_not_poison_retry_or_capture_a_foreign_root() {
+    let temp = tempfile::tempdir().expect("native temporary directory");
+    let root = fs::canonicalize(temp.path()).unwrap().join("cold");
+    let mut backend = TieredStateBackend::default();
+    backend.reconfigure_without_storage_effects(true, 0, 0, 0, Some(root.clone()), None, 0, 0);
+    let config = configuration("initial");
+    let mut attempt = backend
+        .prepare_lane_geometry_attempt(&config, &config, &[], &[])
+        .unwrap();
+    let created = match &attempt.operations[0].kind {
+        OperationKind::Create { created, .. } => Arc::clone(created),
+        _ => panic!("initial create"),
+    };
+    let pending = created.get_or_init(Directory::pending);
+    let parent = match &attempt.operations[0].kind {
+        OperationKind::Create { parent, .. } => parent.authenticate().unwrap().original().unwrap(),
+        _ => unreachable!(),
+    };
+    // Exercise a real exclusive-create refusal using the same pending caller slot.
+    fs::create_dir(&root).unwrap();
+    let mut slot = pending.native.lock().unwrap();
+    parent
+        .create_child_into(&root, &mut slot)
+        .expect_err("occupied root is never adopted");
+    assert!(slot.is_none());
+    drop(slot);
+    let _ = attempt
+        .resume(&mut backend)
+        .expect_err("plan still expects absence");
+    fs::remove_dir(&root).unwrap();
+    attempt
+        .resume(&mut backend)
+        .expect("same unstarted plan retries after absence restored");
+    assert!(attempt.is_applied());
+    assert!(lane_path(&root, &config).is_dir());
+    attempt
+        .rollback(&mut backend)
+        .expect("same created originals reverse in order");
+    assert!(!root.exists());
+}

@@ -9,6 +9,8 @@
 #     --strip-extras --allow-unsafe --output-file python/iroha_python/requirements-ci.lock \
 #     python/iroha_python/requirements-ci.in
 
+# pytest's Windows console dependency must remain pinned in the hashed CI gate.
+colorama==0.4.6 ; sys_platform == "win32"
 blake3==1.0.11
 cryptography==50.0.2
 maturin==1.15.0

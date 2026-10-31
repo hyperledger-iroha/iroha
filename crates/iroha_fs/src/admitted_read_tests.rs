@@ -1,7 +1,9 @@
 //! Original owned record admission, lazy allocation and closed native custody.
 
 use super::*;
-use std::{cell::Cell, fs};
+use std::cell::Cell;
+#[cfg(unix)]
+use std::fs;
 
 fn store() -> (tempfile::TempDir, PrivateDirectory) {
     let root = tempfile::tempdir().unwrap();

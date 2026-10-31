@@ -178,6 +178,7 @@ fn original_sccp_observations(
     })
 }
 
+#[cfg(unix)]
 async fn run_key_change() -> Result<()> {
     init_instruction_registry();
     let pool_size = 7;
@@ -609,6 +610,7 @@ async fn run_key_change() -> Result<()> {
 }
 
 #[test]
+#[cfg(unix)]
 fn actual_native_key_change_rotates_sccp_four_to_seven() -> Result<()> {
     const STACK: usize = 32 * 1024 * 1024;
     let worker = std::thread::Builder::new()

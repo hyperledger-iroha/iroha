@@ -1509,12 +1509,13 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
         if selection.arithmetic_copy {
             let events =
                 value_arithmetic_copy_events_v1(self.next_row, self.arithmetic_operations)?;
-            let sources = p256_value_bus_opened_values_v1(&self.base.base_row_v1(self.next_row)?);
+            let base = P256AggregateAuxRowScratchV1(self.base.base_row_v1(self.next_row)?);
+            let sources = P256AggregateAuxRowScratchV1(p256_value_bus_opened_values_v1(&base.0));
             let mut arithmetic =
                 P256AggregateAuxRowScratchV1([F::ZERO; P256_VALUE_ARITHMETIC_COPY_AUX_WIDTH_V1]);
             self.arithmetic_copy_running = build_compact_arithmetic_copy_aux_row_v1(
                 &events,
-                &sources,
+                &sources.0,
                 self.arithmetic_copy_running,
                 self.arithmetic_copy_terminal,
                 self.arithmetic_copy_challenges,

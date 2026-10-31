@@ -4,6 +4,8 @@ use super::*;
 
 mod borrowed;
 pub use borrowed::{BorrowedPendingPrivateFile, BorrowedSealedPrivateFile};
+mod executable_reader;
+pub use executable_reader::SealedExecutable;
 
 /// Validated private regular-file metadata from one bounded directory scan.
 ///
@@ -79,6 +81,31 @@ pub struct SealedPrivateFile {
     position: u64,
 }
 
+impl OwnerDirectory {
+    /// Create a bounded private file inside this retained owner-controlled directory.
+    ///
+    /// The directory may retain public read access. Only the new file receives private
+    /// access; existing names and directory permissions are never changed. The original
+    /// handle can be sealed and published without reopening its pathname.
+    ///
+    /// # Errors
+    /// Refuses invalid bounds, existing names, unsafe custody and native creation errors.
+    pub fn create_retained_private(
+        &self,
+        name: impl AsRef<OsStr>,
+        maximum: usize,
+    ) -> io::Result<PendingPrivateFile> {
+        let maximum = byte_ceiling(maximum)?;
+        Ok(PendingPrivateFile {
+            inner: self
+                .inner
+                .create_retained_private(checked_name(name.as_ref())?)?,
+            maximum,
+            position: 0,
+        })
+    }
+}
+
 impl PrivateDirectory {
     /// Retain an optional private child, recognizing only its first native open as absence.
     ///
@@ -96,7 +123,7 @@ impl PrivateDirectory {
         self.inner.revalidate()?;
         let result = checked_name(name.as_ref()).and_then(|name| {
             self.inner
-                .open_retained_private_optional(name)
+                .open_retained_optional(name, true)
                 .map(|file| file.map(|inner| RetainedFile { inner }))
         });
         self.inner.revalidate()?;
@@ -136,6 +163,8 @@ impl PrivateDirectory {
     /// current-owner file with private access. Unix incomplete modes contained in `0600`,
     /// including `0000`, are inventory-visible but are not admitted as immutable receipts.
     /// The directory and retained ancestors are checked before and after the entire scan.
+    /// Windows also retains a direct-child native change notification; unchanged directory
+    /// timestamps alone cannot establish that no namespace mutation occurred during callbacks.
     /// Callers hold their operation lock and must not mutate this directory from the visitor;
     /// an error may follow earlier callbacks, whose observations must then be discarded.
     ///
@@ -239,6 +268,55 @@ impl PrivateDirectory {
 }
 
 impl PendingPrivateFile {
+    /// Finish this creator's bounded contents for an original-object no-replace move.
+    ///
+    /// Syncs the same original file, consumes the only writable capability and retains
+    /// its existing private access policy. This does not seal receipts or executables and
+    /// does not change permissions. The returned owner exposes only read, seek and move
+    /// operations. Recovered files cannot acquire this exclusive creator capability.
+    ///
+    /// ```compile_fail
+    /// use iroha_fs::RetainedFile;
+    /// fn upgrade_recovered(file: RetainedFile) { file.finish_private().unwrap(); }
+    /// ```
+    ///
+    /// # Errors
+    /// Refuses excessive length, changed custody, missing exclusive creation authority,
+    /// and synchronization errors. Failure leaves the claimed name for reconciliation.
+    pub fn finish_private(self) -> io::Result<MovableFile> {
+        bounded_length(self.inner.file(), self.maximum)?;
+        let file = MovableFile::from_private_creator(self.inner)?;
+        if file.snapshot()?.local_parts().2 > self.maximum {
+            return Err(invalid("retained file exceeds its original byte ceiling"));
+        }
+        Ok(file)
+    }
+
+    /// Seal this newly created file for private native code loading and original-object moves.
+    ///
+    /// Unix installs exact mode `0500`; Windows installs a protected current-owner-only
+    /// read-and-execute DACL. Ordinary receipt sealing remains strictly read-only. This
+    /// consumes the sole writer and exposes only retained read, seek and no-replace move
+    /// operations. No recovered file can acquire this original creator capability.
+    ///
+    /// ```compile_fail
+    /// use std::io::Write;
+    /// use iroha_fs::PendingPrivateFile;
+    /// fn rewrite_native(writer: PendingPrivateFile) {
+    ///     writer.seal_executable().unwrap().write_all(b"changed").unwrap();
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    /// Refuses excessive length, changed custody, missing creation authority and native
+    /// access-policy or synchronization errors. Failure preserves the claimed name.
+    pub fn seal_executable(self) -> io::Result<MovableFile> {
+        bounded_length(self.inner.file(), self.maximum)?;
+        let inner = self.inner.seal_executable()?;
+        bounded_length(inner.file(), self.maximum)?;
+        MovableFile::from_created(inner)
+    }
+
     /// Consume this writer into strict owner-read-only access with durable bounded contents.
     ///
     /// The exact descriptor and ancestry remain retained privately. Unix sets mode `0400`;
@@ -259,6 +337,18 @@ impl PendingPrivateFile {
 }
 
 impl SealedPrivateFile {
+    /// Transfer this newly created sealed file into an opaque original-object move owner.
+    ///
+    /// The same original descriptor, exact sealed snapshot and ancestors remain retained;
+    /// this never reopens the filename or restores write access. Recovered read-only files
+    /// have no creator publication authority and cannot use this conversion.
+    ///
+    /// # Errors
+    /// Refuses changed custody, missing original creation authority and native errors.
+    pub fn into_movable(self) -> io::Result<MovableFile> {
+        MovableFile::from_created(self.inner)
+    }
+
     /// Read the retained object's stable kernel identity.
     ///
     /// # Errors
@@ -424,11 +514,11 @@ impl io::Read for ScopedSealedPrivateFile<'_> {
     }
 }
 
-fn byte_ceiling(maximum: usize) -> io::Result<u64> {
+pub fn byte_ceiling(maximum: usize) -> io::Result<u64> {
     u64::try_from(maximum).map_err(|_| invalid("private file byte ceiling exceeds native extent"))
 }
 
-fn bounded_length(file: &File, maximum: u64) -> io::Result<u64> {
+pub fn bounded_length(file: &File, maximum: u64) -> io::Result<u64> {
     let length = file.metadata()?.len();
     if length > maximum {
         return Err(invalid(
@@ -438,7 +528,12 @@ fn bounded_length(file: &File, maximum: u64) -> io::Result<u64> {
     Ok(length)
 }
 
-fn seek_target(position: u64, length: u64, maximum: u64, from: io::SeekFrom) -> io::Result<u64> {
+pub fn seek_target(
+    position: u64,
+    length: u64,
+    maximum: u64,
+    from: io::SeekFrom,
+) -> io::Result<u64> {
     let target = match from {
         io::SeekFrom::Start(offset) => Some(offset),
         io::SeekFrom::Current(offset) => position.checked_add_signed(offset),
@@ -497,7 +592,7 @@ impl io::Seek for SealedPrivateFile {
     }
 }
 
-fn bounded_write(
+pub fn bounded_write(
     file: &mut File,
     maximum: u64,
     position: &mut u64,
@@ -527,7 +622,7 @@ fn bounded_read(
     Ok(read)
 }
 
-fn bounded_seek(
+pub fn bounded_seek(
     file: &mut File,
     maximum: u64,
     position: &mut u64,
@@ -546,3 +641,7 @@ fn bounded_seek(
 #[cfg(test)]
 #[path = "private_files/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "private_files/executable_tests.rs"]
+mod executable_tests;

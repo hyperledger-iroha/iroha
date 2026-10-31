@@ -622,6 +622,23 @@ mod tests {
         }
     }
 
+    /// Qualification must execute the actual x86-64 kernels, never the lane model or fallback.
+    #[test]
+    #[ignore = "requires an x86-64 AVX2 runner; run explicitly for hardware qualification"]
+    fn required_avx2_execution() {
+        assert!(
+            cfg!(target_arch = "x86_64"),
+            "AVX2 qualification requires native x86-64 instructions, not the lane model"
+        );
+        assert_eq!(
+            active_backend(),
+            Backend::Avx2,
+            "AVX2 qualification requires the simd feature and an AVX2-capable CPU"
+        );
+        avx2_kernel_sums_and_products_equal_the_scalar_references();
+        avx2_kernel_transform_equals_the_scalar_reference();
+    }
+
     #[test]
     fn mismatched_lengths_use_the_common_prefix_like_the_scalar_reference() {
         let modulus = 30_593_u64;

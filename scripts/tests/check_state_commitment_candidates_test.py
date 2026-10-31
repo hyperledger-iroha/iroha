@@ -667,8 +667,8 @@ class RecordSummaries(unittest.TestCase):
             with mock.patch.object(CHECKER.HARNESS, "read_pinned_run", return_value=verified) as reader:
                 with mock.patch.object(Path, "read_text", side_effect=AssertionError("reopened verified evidence")), \
                      mock.patch.object(Path, "read_bytes", side_effect=AssertionError("reopened verified evidence")):
-                    loaded = CHECKER.load_run(run, pin)
-            reader.assert_called_once_with(run, pin)
+                    loaded = CHECKER.load_run(run, pin, expected_observation_contract='ordinary_native_v1')
+            reader.assert_called_once_with(run, pin, expected_observation_contract='ordinary_native_v1', expected_delivery=None)
         summary = loaded["summary"]
         self.assertEqual(len(loaded["records"]), 1)
         self.assertEqual(summary["test"], "native_blake2b")
@@ -685,21 +685,21 @@ class RecordSummaries(unittest.TestCase):
         refusal = CHECKER.HARNESS.HarnessRefusal("manifest_digest_differs")
         with mock.patch.object(CHECKER.HARNESS, "read_pinned_run", side_effect=refusal) as reader:
             with self.assertRaises(CHECKER.HARNESS.HarnessRefusal) as caught:
-                CHECKER.load_run(Path("untrusted-run"), "a" * 64)
+                CHECKER.load_run(Path("untrusted-run"), "a" * 64, expected_observation_contract='ordinary_native_v1')
         self.assertIs(caught.exception, refusal)
-        reader.assert_called_once_with(Path("untrusted-run"), "a" * 64)
+        reader.assert_called_once_with(Path("untrusted-run"), "a" * 64, expected_observation_contract='ordinary_native_v1', expected_delivery=None)
 
     def test_summary_requires_one_external_pin_per_run_before_reading(self) -> None:
         with mock.patch.object(CHECKER.HARNESS, "read_pinned_run") as reader:
             for runs, pins in [([], []), ([Path("run")], []), ([Path("run")], ["a" * 64, "b" * 64])]:
                 with self.assertRaisesRegex(ValueError, "exactly one external manifest"):
-                    CHECKER.build_summary(runs, REPOSITORY, manifest_sha256=pins)
+                    CHECKER.build_summary(runs, REPOSITORY, manifest_sha256=pins, expected_observation_contract='ordinary_native_v1')
             reader.assert_not_called()
             for pins, message in [([None], "every external manifest"),
                                   (["a" * 64, "a" * 64], "multiple measurements")]:
                 with self.assertRaisesRegex(ValueError, message):
                     CHECKER.build_summary([Path(str(index)) for index in range(len(pins))],
-                                          REPOSITORY, manifest_sha256=pins)
+                                          REPOSITORY, manifest_sha256=pins, expected_observation_contract='ordinary_native_v1')
             reader.assert_not_called()
         tracked = (REPOSITORY / CHECKER.SUMMARY).read_bytes()
         output = StringIO()
@@ -1230,13 +1230,13 @@ class TrackedSummary(unittest.TestCase):
         if not all((REPOSITORY / CHECKER.RAW_ROOT / run / "report.json").is_file() for run in runs):
             self.skipTest("the raw records are untracked and not present in this checkout")
         text = (REPOSITORY / CHECKER.SUMMARY).read_text()
-        self.assertEqual(CHECKER.reproduction_errors(self.tracked, text, REPOSITORY), [])
+        self.assertEqual(CHECKER.reproduction_errors(self.tracked, text, REPOSITORY, expected_observation_contract='ordinary_native_v1'), [])
         # A measured count that nothing in the file contradicts.
         edited = copy.deepcopy(self.tracked)
         edited["native"]["rows"][0]["updates"][0]["compressions_per_change"] += 1.0
         self.assertEqual(CHECKER.check_summary(edited, REPOSITORY), [])
         self.assertEqual(
-            CHECKER.reproduction_errors(edited, CHECKER.render(edited), REPOSITORY),
+            CHECKER.reproduction_errors(edited, CHECKER.render(edited), REPOSITORY, expected_observation_contract='ordinary_native_v1'),
             ["--reproduce: the tracked comparison is not what its cited runs give; first difference in `native`"],
         )
         output = StringIO()
@@ -1805,7 +1805,8 @@ class Refresh(unittest.TestCase):
         self.addCleanup(patch.stop)
 
     @staticmethod
-    def synthetic_reader(run: Path, pin: str) -> dict:
+    def synthetic_reader(run: Path, pin: str, *, expected_observation_contract, expected_delivery) -> dict:
+        assert expected_observation_contract=='ordinary_native_v1' and expected_delivery is None
         report = json.loads((run / "report.json").read_text())
         return {"report": report, "manifest_sha256": pin,
                 "documents": {entry["json"]["path"]: json.loads((run / entry["json"]["path"]).read_text())
@@ -1855,9 +1856,9 @@ class Refresh(unittest.TestCase):
                 self.run_directory(root, "circuit", [CIRCUIT], config),
                 self.run_directory(root, "latency", [LATENCY, GADGET], config),
             ]
-            summary = CHECKER.build_summary(runs, REPOSITORY, manifest_sha256=self.pins(runs))
+            summary = CHECKER.build_summary(runs, REPOSITORY, manifest_sha256=self.pins(runs), expected_observation_contract='ordinary_native_v1')
             again = self.run_directory(root, "native", [NATIVE, SHARED], config, name="run-again")
-            twice = CHECKER.build_summary([*runs, again], REPOSITORY, manifest_sha256=self.pins([*runs, again]))
+            twice = CHECKER.build_summary([*runs, again], REPOSITORY, manifest_sha256=self.pins([*runs, again]), expected_observation_contract='ordinary_native_v1')
         # A second run of a test adds no row: its repetitions join the first run's.
         self.assertEqual(len(twice["native"]["rows"]), 2)
         self.assertEqual(twice["native"]["rows"][0]["cold_build"]["ns_per_entry"]["repetitions"], 10)
@@ -1918,17 +1919,17 @@ class Refresh(unittest.TestCase):
                 self.run_directory(raw, "native", [NATIVE, SHARED], config),
                 self.run_directory(raw, "latency", [LATENCY, GADGET], config),
             ]
-            summary = CHECKER.build_summary(runs, root, manifest_sha256=self.pins(runs))
+            summary = CHECKER.build_summary(runs, root, manifest_sha256=self.pins(runs), expected_observation_contract='ordinary_native_v1')
             text = CHECKER.render(summary)
-            self.assertEqual(CHECKER.reproduction_errors(summary, text, root), [])
+            self.assertEqual(CHECKER.reproduction_errors(summary, text, root, expected_observation_contract='ordinary_native_v1'), [])
             # An edited measured number is found, and so is another rendering.
             edited = copy.deepcopy(summary)
             edited["latency"]["rows"][0]["ns_per_call"]["median"] = 1.0
             self.assertEqual(
-                CHECKER.reproduction_errors(edited, CHECKER.render(edited), root),
+                CHECKER.reproduction_errors(edited, CHECKER.render(edited), root, expected_observation_contract='ordinary_native_v1'),
                 ["--reproduce: the tracked comparison is not what its cited runs give; first difference in `latency`"],
             )
-            self.assertIn("first difference in `its rendering`", CHECKER.reproduction_errors(summary, text + "\n", root)[0])
+            self.assertIn("first difference in `its rendering`", CHECKER.reproduction_errors(summary, text + "\n", root, expected_observation_contract='ordinary_native_v1')[0])
             # Records that no longer build a comparison, and records that are gone.
             broken = json.loads((runs[0] / "child" / "0.json").read_text())
             broken["work_counters"]["entries"] = [
@@ -1936,11 +1937,11 @@ class Refresh(unittest.TestCase):
             ]
             (runs[0] / "child" / "0.json").write_text(json.dumps(broken))
             self.assertIn(
-                "do not build a comparison (state_candidates.native.radix", CHECKER.reproduction_errors(summary, text, root)[0]
+                "do not build a comparison (state_candidates.native.radix", CHECKER.reproduction_errors(summary, text, root, expected_observation_contract='ordinary_native_v1')[0]
             )
             (runs[1] / "report.json").unlink()
             self.assertEqual(
-                CHECKER.reproduction_errors(summary, text, root),
+                CHECKER.reproduction_errors(summary, text, root, expected_observation_contract='ordinary_native_v1'),
                 [f"--reproduce: the raw records of latency are not under {CHECKER.RAW_ROOT}/"],
             )
 
@@ -1948,7 +1949,7 @@ class Refresh(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             stale = self.run_directory(root, "native", [NATIVE], CHECKER.CONFIG_PREFIX + "0" * 16)
-            summary = CHECKER.build_summary([stale], REPOSITORY, manifest_sha256=self.pins([stale]))
+            summary = CHECKER.build_summary([stale], REPOSITORY, manifest_sha256=self.pins([stale]), expected_observation_contract='ordinary_native_v1')
             self.assertTrue(
                 any("are not the ones that were measured" in error for error in CHECKER.check_summary(summary, REPOSITORY))
             )

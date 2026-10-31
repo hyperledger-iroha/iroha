@@ -98,10 +98,11 @@ use iroha::{
         transaction::{Executable, FeePaymentIntent, SignedTransaction},
     },
 };
+use iroha_config::parameters::defaults;
 #[cfg(unix)]
 use iroha_config::{
     base::toml::{MAX_TOML_SOURCE_BYTES, TomlSource},
-    parameters::{actual, defaults},
+    parameters::actual,
 };
 use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
 use iroha_model_base::metadata::Metadata;
@@ -7197,16 +7198,30 @@ fn validate_taira_inrou_canary_source_bundle(bundle: &UnpublishedDeploymentBundl
     }
     Ok(())
 }
+#[cfg(windows)]
+mod taira_stage_windows;
+#[cfg(windows)]
+use taira_stage_windows::{
+    copy_taira_stage_source_file, create_taira_owner_only_directory,
+    create_taira_owner_only_subdirectory, create_taira_stage_member_parent,
+    set_taira_stage_permissions, taira_direct_member_metadata, taira_inrou_source_workspace,
+    taira_inrou_workspace_source_metadata, taira_stage_owned_file_bytes,
+    taira_stage_regular_file_bytes, validate_taira_inrou_workspace_entry,
+    validate_taira_inrou_workspace_members, validate_taira_stage_owned_entry,
+    write_taira_stage_file,
+};
+
 #[cfg(unix)]
 fn set_taira_stage_permissions(path: &Path, mode: u32) -> Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
     fs::set_permissions(path, fs::Permissions::from_mode(mode))
         .wrap_err_with(|| format!("set owner-only permissions on {}", path.display()))
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn set_taira_stage_permissions(_path: &Path, _mode: u32) -> Result<()> {
     Ok(())
 }
+#[cfg(not(windows))]
 fn create_taira_owner_only_directory(path: &Path, description: &str) -> Result<()> {
     if path.as_os_str().is_empty() || path.file_name().is_none() {
         return Err(eyre!("{description} must name one concrete directory"));
@@ -7226,9 +7241,15 @@ fn create_taira_owner_only_directory(path: &Path, description: &str) -> Result<(
     })?;
     set_taira_stage_permissions(path, 0o700)
 }
-fn create_taira_stage_directory(path: &Path) -> Result<()> {
+#[cfg(windows)]
+type TairaCreatedDirectory = iroha_fs::PrivateDirectory;
+#[cfg(not(windows))]
+type TairaCreatedDirectory = ();
+
+fn create_taira_stage_directory(path: &Path) -> Result<TairaCreatedDirectory> {
     create_taira_owner_only_directory(path, "Taira Inrou stage directory")
 }
+#[cfg(not(windows))]
 fn validate_taira_path_ancestors(path: &Path, description: &str) -> Result<()> {
     if path
         .components()
@@ -7268,6 +7289,7 @@ fn validate_taira_path_ancestors(path: &Path, description: &str) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn create_taira_owner_only_subdirectory(path: &Path, description: &str) -> Result<()> {
     let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
@@ -7280,9 +7302,10 @@ fn create_taira_owner_only_subdirectory(path: &Path, description: &str) -> Resul
         .wrap_err_with(|| format!("create {description} {}", path.display()))?;
     set_taira_stage_permissions(path, 0o700)
 }
-fn create_taira_stage_subdirectory(path: &Path) -> Result<()> {
+fn create_taira_stage_subdirectory(path: &Path) -> Result<TairaCreatedDirectory> {
     create_taira_owner_only_subdirectory(path, "Taira Inrou stage directory")
 }
+#[cfg(not(windows))]
 fn create_taira_stage_member_parent(root: &Path, logical_path: &[String]) -> Result<PathBuf> {
     let mut current = root.to_path_buf();
     for component in logical_path
@@ -7317,6 +7340,7 @@ fn create_taira_stage_member_parent(root: &Path, logical_path: &[String]) -> Res
     }
     Ok(current)
 }
+#[cfg(not(windows))]
 fn write_taira_stage_file(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -7343,7 +7367,7 @@ fn open_taira_stage_source(path: &Path) -> io::Result<fs::File> {
     )?;
     Ok(fs::File::from(descriptor))
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn open_taira_stage_source(path: &Path) -> io::Result<fs::File> {
     fs::File::open(path)
 }
@@ -7377,10 +7401,11 @@ fn taira_metadata_identity(metadata: &fs::Metadata) -> TairaFileIdentity {
         nlink: metadata.nlink(),
     }
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn taira_metadata_identity(metadata: &fs::Metadata) -> (u64, Option<SystemTime>) {
     (metadata.len(), metadata.modified().ok())
 }
+#[cfg(not(windows))]
 fn copy_taira_stage_source_file(
     source_path: &Path,
     destination_path: &Path,
@@ -7472,6 +7497,7 @@ fn copy_taira_stage_source_file(
     }
     Ok(copied)
 }
+#[cfg(not(windows))]
 fn taira_stage_regular_file_bytes(
     path: &Path,
     description: &str,
@@ -7570,6 +7596,7 @@ where
         .wrap_err_with(|| format!("decode staged JSON {} as UTF-8", path.display()))?;
     json::from_str(text).wrap_err_with(|| format!("decode staged JSON {}", path.display()))
 }
+#[cfg(not(windows))]
 fn taira_direct_member_metadata(
     root: &Path,
     logical_path: &[String],
@@ -7684,6 +7711,7 @@ fn validate_taira_inrou_rootfs_source_bytes(rootfs_bytes: u64) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn taira_inrou_workspace_source_metadata(path: &Path, description: &str) -> Result<fs::Metadata> {
     validate_taira_path_ancestors(path, description)?;
     let metadata = fs::symlink_metadata(path)
@@ -7699,6 +7727,7 @@ fn taira_inrou_workspace_source_metadata(path: &Path, description: &str) -> Resu
     }
     Ok(metadata)
 }
+#[cfg(not(windows))]
 fn validate_taira_inrou_workspace_entry(
     path: &Path,
     directory: bool,
@@ -7744,6 +7773,7 @@ fn validate_taira_inrou_workspace_entry(
     }
     Ok(metadata)
 }
+#[cfg(not(windows))]
 fn validate_taira_inrou_workspace_members(directory: &Path, expected: &[&str]) -> Result<()> {
     let actual = fs::read_dir(directory)
         .wrap_err_with(|| format!("read Taira Inrou workspace {}", directory.display()))?
@@ -7910,6 +7940,12 @@ pub fn create_taira_inrou_canary_workspace(
             ));
         }
     }
+    #[cfg(windows)]
+    taira_stage_windows::require_distinct_sources([
+        &kernel_metadata,
+        &rootfs_metadata,
+        &initrd_metadata,
+    ])?;
     let guest_total_bytes = taira_stage_guest_total_bytes([
         kernel_metadata.len(),
         rootfs_metadata.len(),
@@ -7918,11 +7954,23 @@ pub fn create_taira_inrou_canary_workspace(
     validate_taira_inrou_rootfs_source_bytes(rootfs_metadata.len())?;
     let (bundle, bundle_payload) = canonical_taira_inrou_canary_deploy_bundle()?;
 
+    #[cfg(windows)]
+    let output_directory =
+        create_taira_owner_only_directory(output_dir, "Taira Inrou workspace directory")?;
+    #[cfg(not(windows))]
     create_taira_owner_only_directory(output_dir, "Taira Inrou workspace directory")?;
     let result = (|| -> Result<TairaInrouWorkspaceReceiptV1> {
         let inrou_dir = output_dir.join("inrou");
         let aarch64_dir = inrou_dir.join("aarch64");
+        #[cfg(windows)]
+        let _inrou_directory =
+            create_taira_owner_only_subdirectory(&inrou_dir, "Taira Inrou workspace directory")?;
+        #[cfg(not(windows))]
         create_taira_owner_only_subdirectory(&inrou_dir, "Taira Inrou workspace directory")?;
+        #[cfg(windows)]
+        let _aarch64_directory =
+            create_taira_owner_only_subdirectory(&aarch64_dir, "Taira Inrou workspace directory")?;
+        #[cfg(not(windows))]
         create_taira_owner_only_subdirectory(&aarch64_dir, "Taira Inrou workspace directory")?;
 
         let container_path = output_dir.join(TAIRA_INROU_WORKSPACE_CONTAINER_FILE_V1);
@@ -7973,6 +8021,13 @@ pub fn create_taira_inrou_canary_workspace(
             guest_total_bytes,
         })
     })();
+    #[cfg(windows)]
+    let result = taira_stage_windows::finish_workspace(
+        &output_directory,
+        [&kernel_metadata, &rootfs_metadata, &initrd_metadata],
+        result,
+    );
+    #[cfg(not(windows))]
     if result.is_err() {
         let _ = fs::remove_dir_all(output_dir);
     }
@@ -8267,6 +8322,7 @@ fn taira_stage_directory_manifest(
         digest_hex,
     })
 }
+#[cfg(not(windows))]
 fn taira_inrou_source_workspace(
     container_path: &Path,
     service_path: &Path,
@@ -8399,15 +8455,32 @@ pub fn stage_taira_inrou_canary_deployment(
             bundle.container.bundle_hash
         ));
     }
+    #[cfg(windows)]
+    let stage_directory = create_taira_stage_directory(stage_dir)?;
+    #[cfg(not(windows))]
     create_taira_stage_directory(stage_dir)?;
+    #[cfg(windows)]
+    let mut source_guards = Vec::new();
     let stage_result = (|| -> Result<TairaInrouStageReceiptV1> {
         let manifests_dir = stage_dir.join("manifests");
         let payloads_dir = stage_dir.join("payloads");
         let guest_payload_dir = stage_dir.join(TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1);
         let discovery_payload_dir = stage_dir.join(TAIRA_INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1);
+        #[cfg(windows)]
+        let _manifests_directory = create_taira_stage_subdirectory(&manifests_dir)?;
+        #[cfg(not(windows))]
         create_taira_stage_subdirectory(&manifests_dir)?;
+        #[cfg(windows)]
+        let _payloads_directory = create_taira_stage_subdirectory(&payloads_dir)?;
+        #[cfg(not(windows))]
         create_taira_stage_subdirectory(&payloads_dir)?;
+        #[cfg(windows)]
+        let _guest_directory = create_taira_stage_subdirectory(&guest_payload_dir)?;
+        #[cfg(not(windows))]
         create_taira_stage_subdirectory(&guest_payload_dir)?;
+        #[cfg(windows)]
+        let _discovery_directory = create_taira_stage_subdirectory(&discovery_payload_dir)?;
+        #[cfg(not(windows))]
         create_taira_stage_subdirectory(&discovery_payload_dir)?;
         let staged_bundle_path = stage_dir.join(TAIRA_INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1);
         write_taira_stage_file(&staged_bundle_path, &bundle_bytes)?;
@@ -8460,7 +8533,13 @@ pub fn stage_taira_inrou_canary_deployment(
                 )
             })
             .collect::<Result<Vec<_>>>()?;
-        let source_sizes = source_metadata.iter().map(fs::Metadata::len);
+        #[cfg(windows)]
+        {
+            source_guards = source_metadata;
+        }
+        #[cfg(windows)]
+        let source_metadata = &source_guards;
+        let source_sizes = source_metadata.iter().map(|metadata| metadata.len());
         taira_stage_guest_total_bytes(source_sizes.clone())?;
         let rootfs_source_bytes = logical_member_paths
             .iter()
@@ -8468,26 +8547,39 @@ pub fn stage_taira_inrou_canary_deployment(
             .find_map(|(logical_path, size)| (logical_path == &rootfs_logical_path).then_some(size))
             .ok_or_else(|| eyre!("Taira rootfs disappeared from the exact guest-image layout"))?;
         validate_taira_inrou_rootfs_source_bytes(rootfs_source_bytes)?;
-        for (logical_path, source_metadata) in logical_member_paths.iter().zip(&source_metadata) {
+        for (logical_path, source_metadata) in
+            logical_member_paths.iter().zip(source_metadata.iter())
+        {
             let member_path = logical_path.join("/");
             let source = inrou_dir.join(&member_path);
             let destination = guest_payload_dir.join(&member_path);
+            #[cfg(windows)]
+            let (parent, parent_directory) =
+                create_taira_stage_member_parent(&guest_payload_dir, logical_path)?;
+            #[cfg(not(windows))]
             let parent = create_taira_stage_member_parent(&guest_payload_dir, logical_path)?;
-            if destination.parent() != Some(parent.as_path()) {
-                return Err(eyre!(
-                    "Taira guest staging destination {} escaped its canonical parent",
-                    destination.display()
-                ));
-            }
-            let copied = copy_taira_stage_source_file(&source, &destination, source_metadata)?;
-            if copied != source_metadata.len() {
-                return Err(eyre!(
-                    "Taira guest-image copy {} wrote {copied} of {} bytes",
-                    destination.display(),
-                    source_metadata.len()
-                ));
-            }
-            set_taira_stage_permissions(&destination, 0o600)?;
+            let copy_result = (|| -> Result<()> {
+                if destination.parent() != Some(parent.as_path()) {
+                    return Err(eyre!(
+                        "Taira guest staging destination {} escaped its canonical parent",
+                        destination.display()
+                    ));
+                }
+                let copied = copy_taira_stage_source_file(&source, &destination, source_metadata)?;
+                if copied != source_metadata.len() {
+                    return Err(eyre!(
+                        "Taira guest-image copy {} wrote {copied} of {} bytes",
+                        destination.display(),
+                        source_metadata.len()
+                    ));
+                }
+                set_taira_stage_permissions(&destination, 0o600)?;
+                Ok(())
+            })();
+            #[cfg(windows)]
+            taira_stage_windows::finish_directory(&parent_directory, copy_result)?;
+            #[cfg(not(windows))]
+            copy_result?;
         }
         let guest_plan = taira_streaming_directory_plan(
             &guest_payload_dir,
@@ -8584,6 +8676,12 @@ pub fn stage_taira_inrou_canary_deployment(
         write_taira_stage_json(&stage_dir.join(TAIRA_INROU_STAGE_RECEIPT_FILE_V1), &receipt)?;
         Ok(receipt)
     })();
+    #[cfg(windows)]
+    let stage_result = taira_stage_windows::finish_sources(&source_guards, stage_result);
+    #[cfg(windows)]
+    let stage_result = taira_stage_windows::finish_directory(&stage_directory, stage_result)
+        .wrap_err("Taira stage verification; a failed native creation may leave private partial output (no pathname cleanup)");
+    #[cfg(not(windows))]
     if stage_result.is_err() {
         let _ = fs::remove_dir_all(stage_dir);
     }
@@ -9721,6 +9819,7 @@ fn validate_taira_stage_layout(
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn validate_taira_stage_owned_entry(path: &Path, directory: bool, description: &str) -> Result<()> {
     let metadata = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("inspect {description} {}", path.display()))?;
@@ -9765,6 +9864,7 @@ fn validate_taira_stage_owned_entry(path: &Path, directory: bool, description: &
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn taira_stage_owned_file_bytes(path: &Path, description: &str, max_bytes: u64) -> Result<Vec<u8>> {
     validate_taira_stage_owned_entry(path, false, description)?;
     let bytes = taira_stage_regular_file_bytes(path, description, max_bytes)?;
@@ -9772,6 +9872,35 @@ fn taira_stage_owned_file_bytes(path: &Path, description: &str, max_bytes: u64) 
     Ok(bytes)
 }
 fn validate_exact_taira_stage_tree(stage_dir: &Path, member_paths: &[String]) -> Result<()> {
+    let mut expected = BTreeMap::<PathBuf, bool>::new();
+    for directory in [
+        PathBuf::from("manifests"),
+        PathBuf::from("payloads"),
+        PathBuf::from(TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1),
+        PathBuf::from(TAIRA_INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1),
+    ] {
+        expected.insert(directory, true);
+    }
+    for file in [
+        TAIRA_INROU_STAGE_RECEIPT_FILE_V1,
+        TAIRA_INROU_STAGE_CONTAINER_FILE_V1,
+        TAIRA_INROU_STAGE_SERVICE_FILE_V1,
+        TAIRA_INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1,
+        TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
+        TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1,
+        TAIRA_INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
+        TAIRA_INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1,
+    ] {
+        expected.insert(PathBuf::from(file), false);
+    }
+    for logical_path in taira_stage_logical_member_paths(member_paths)? {
+        let mut relative = PathBuf::from(TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1);
+        for (index, component) in logical_path.iter().enumerate() {
+            relative.push(component);
+            expected.insert(relative.clone(), index + 1 != logical_path.len());
+        }
+    }
+    #[cfg(not(windows))]
     fn visit(
         stage_dir: &Path,
         relative_dir: &Path,
@@ -9805,36 +9934,16 @@ fn validate_exact_taira_stage_tree(stage_dir: &Path, member_paths: &[String]) ->
         }
         Ok(())
     }
-
-    let mut expected = BTreeMap::<PathBuf, bool>::new();
-    for directory in [
-        PathBuf::from("manifests"),
-        PathBuf::from("payloads"),
-        PathBuf::from(TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1),
-        PathBuf::from(TAIRA_INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1),
-    ] {
-        expected.insert(directory, true);
+    #[cfg(windows)]
+    fn visit(
+        stage_dir: &Path,
+        relative_dir: &Path,
+        expected: &BTreeMap<PathBuf, bool>,
+        seen: &mut BTreeSet<PathBuf>,
+    ) -> Result<()> {
+        let directory = iroha_fs::PrivateDirectory::open(stage_dir.join(relative_dir))?;
+        taira_stage_windows::visit_private_tree(&directory, relative_dir, expected, seen)
     }
-    for file in [
-        TAIRA_INROU_STAGE_RECEIPT_FILE_V1,
-        TAIRA_INROU_STAGE_CONTAINER_FILE_V1,
-        TAIRA_INROU_STAGE_SERVICE_FILE_V1,
-        TAIRA_INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1,
-        TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
-        TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1,
-        TAIRA_INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
-        TAIRA_INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1,
-    ] {
-        expected.insert(PathBuf::from(file), false);
-    }
-    for logical_path in taira_stage_logical_member_paths(member_paths)? {
-        let mut relative = PathBuf::from(TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1);
-        for (index, component) in logical_path.iter().enumerate() {
-            relative.push(component);
-            expected.insert(relative.clone(), index + 1 != logical_path.len());
-        }
-    }
-
     let mut seen = BTreeSet::new();
     visit(stage_dir, Path::new(""), &expected, &mut seen)?;
     if seen.len() != expected.len() {
@@ -9999,6 +10108,20 @@ fn load_and_verify_taira_stage_directory_manifest(
     Ok(built)
 }
 fn load_verified_taira_inrou_stage(
+    stage_dir: &Path,
+    key_pair: &KeyPair,
+    expected_mode: MutationMode,
+) -> Result<VerifiedTairaInrouStage> {
+    #[cfg(windows)]
+    let directory = iroha_fs::PrivateDirectory::open(stage_dir)
+        .wrap_err("retain private Taira Inrou stage root")?;
+    let result = load_verified_taira_inrou_stage_contents(stage_dir, key_pair, expected_mode);
+    #[cfg(windows)]
+    let result = taira_stage_windows::finish_directory(&directory, result);
+    result
+}
+
+fn load_verified_taira_inrou_stage_contents(
     stage_dir: &Path,
     key_pair: &KeyPair,
     expected_mode: MutationMode,
@@ -15828,12 +15951,26 @@ fn read_inrou_preseed_qualification_file(path: &Path) -> Result<Vec<u8>> {
             path.display()
         ));
     }
-    validate_taira_stage_owned_entry(path, false, "Inrou preseed qualification")?;
-    taira_stage_owned_file_bytes(
-        path,
-        "Inrou preseed qualification",
-        INROU_PRESEED_RECEIPT_MAX_BYTES,
-    )
+    #[cfg(windows)]
+    {
+        let maximum = usize::try_from(INROU_PRESEED_RECEIPT_MAX_BYTES)
+            .wrap_err("Inrou preseed qualification bound exceeds usize")?;
+        let mut bytes = iroha_fs::read_private(path, maximum)
+            .wrap_err("failed to read Inrou preseed qualification with native private custody")?;
+        if bytes.is_empty() {
+            return Err(eyre!("Inrou preseed qualification must be nonempty"));
+        }
+        Ok(std::mem::take(&mut *bytes))
+    }
+    #[cfg(not(windows))]
+    {
+        validate_taira_stage_owned_entry(path, false, "Inrou preseed qualification")?;
+        taira_stage_owned_file_bytes(
+            path,
+            "Inrou preseed qualification",
+            INROU_PRESEED_RECEIPT_MAX_BYTES,
+        )
+    }
 }
 
 fn load_inrou_preseed_qualification(
@@ -15853,6 +15990,11 @@ fn load_inrou_preseed_qualification(
             "HttpService + Inrou publication requires the exact durable --inrou-preseed-receipt produced by the separate offline preseed command"
         )
     })?;
+    // Preserve the supplied Windows route so native custody can refuse relative names,
+    // traversal and reparse ancestry before any canonicalization hides that evidence.
+    #[cfg(windows)]
+    let path = path.to_path_buf();
+    #[cfg(not(windows))]
     let path = fs::canonicalize(path).wrap_err_with(|| {
         format!(
             "failed to resolve --inrou-preseed-receipt `{}`",
@@ -15964,7 +16106,7 @@ fn write_inrou_preseed_qualification_file(
             )
             .wrap_err("recover immutable Inrou qualification without replacement")?;
             #[cfg(not(unix))]
-            return Err("Inrou qualification crash recovery requires Unix".into());
+            return Err(eyre!("Inrou qualification crash recovery requires Unix"));
         }
         fs::File::open(parent)
             .and_then(|directory| directory.sync_all())
@@ -16002,7 +16144,7 @@ fn write_inrou_preseed_qualification_file(
         )
     })?;
     #[cfg(not(unix))]
-    return Err("Inrou qualification installation requires Unix".into());
+    return Err(eyre!("Inrou qualification installation requires Unix"));
     fs::File::open(parent)
         .and_then(|directory| directory.sync_all())
         .wrap_err("synchronize Inrou qualification output directory")?;

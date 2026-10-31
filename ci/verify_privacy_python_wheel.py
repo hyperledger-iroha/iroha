@@ -259,6 +259,53 @@ def _canonical_directory(path: Path, label: str) -> Path:
     return resolved
 
 
+def _open_regular_reader(path: Path, flags: int) -> int:
+    """Open raw input while allowing an original Windows mover to remain retained.
+
+    Sharing deletion grants no deletion authority. The native delivery owner keeps
+    its exclusive original handle; this reader still verifies before/after metadata
+    and the named identity. Reparse points are opened themselves and then refused.
+    """
+    if os.name != "nt":
+        return os.open(path, flags)
+
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                       ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    create.restype = wintypes.HANDLE
+    close = kernel.CloseHandle
+    close.argtypes = (wintypes.HANDLE,)
+    close.restype = wintypes.BOOL
+    information = kernel.GetFileInformationByHandleEx
+    information.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD)
+    information.restype = wintypes.BOOL
+
+    class AttributeTag(ctypes.Structure):
+        _fields_ = [("attributes", wintypes.DWORD), ("reparse_tag", wintypes.DWORD)]
+
+    # GENERIC_READ, SHARE_READ|WRITE|DELETE, OPEN_EXISTING, OPEN_REPARSE_POINT.
+    handle = create(str(path), 0x80000000, 0x7, None, 3, 0x00200000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        tag = AttributeTag()
+        if not information(handle, 9, ctypes.byref(tag), ctypes.sizeof(tag)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if tag.attributes & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT.
+            raise OSError("native input must not be a reparse point")
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT)
+        handle = None  # The CRT descriptor now owns this exact native handle.
+        return descriptor
+    finally:
+        if handle is not None:
+            close(handle)
+
+
 def _read_stable_regular_file(
     path: Path,
     *,
@@ -280,9 +327,10 @@ def _read_stable_regular_file(
     if canonical_path != path:
         _fail(f"{label} must have no symbolic-link path components")
 
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_BINARY", 0))
     try:
-        descriptor = os.open(canonical_path, flags)
+        descriptor = _open_regular_reader(canonical_path, flags)
     except OSError as error:
         _fail(f"unable to open {label}: {error}")
     try:

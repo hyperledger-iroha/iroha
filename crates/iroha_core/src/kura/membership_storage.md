@@ -17,11 +17,17 @@ writes may be short or fail, including ENOSPC. No missing bytes become logical
 membership absence. Only the caller's authenticated record/root checks can
 establish membership.
 
-The original Kura root lock and descriptor-relative create/open checks bind the
-single file. Every I/O checks the original descriptor and namespace entry;
-substitutions and extra links fail. There is no pathname reopen. This boundary
-currently supports Unix except ESP-IDF; other platforms return `Unsupported`
-instead of selecting a different storage implementation.
+The original Kura root lock and retained native directory bind the single file.
+Every I/O checks the original descriptor and namespace entry; substitutions and
+extra links fail. There is no data-descriptor reopen. Unix except ESP-IDF uses
+descriptor-relative creation and positioned I/O. Windows retains the original
+parent chain, uses exclusive protected current-user file creation, compares the
+complete native identity and single-link private snapshot, and performs native
+positioned reads and writes on that same handle. Windows sharing fences prevent
+renaming the live original or its parents. The creator installs the descriptor
+in the segment control before any fallible post-create validation or durability
+operation; failed creation retains its original handle and reservation. Other
+platforms return `Unsupported` instead of selecting another storage owner.
 
 One active append owns the writable interval. The caller installs its exact
 pending frame before I/O. The range additionally retains a bounded native-write

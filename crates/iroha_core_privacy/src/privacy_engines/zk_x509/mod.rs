@@ -69,6 +69,7 @@ pub(crate) mod rfc5280_stark;
 pub(crate) mod sha256_air;
 pub(crate) mod sha256_word_air;
 pub(crate) mod sha_call_bus_stark;
+mod sha_residue_output;
 pub(crate) mod sha_word_stark;
 pub(crate) mod stark;
 pub(crate) mod verifier_profile;

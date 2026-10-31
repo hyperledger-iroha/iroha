@@ -7926,6 +7926,22 @@ mod evidence_list_query_contract_tests {
             panic!("SCCP DATA")
         };
         material.offenders.clear();
+        // SCCP §4.9 step 7 retains forgery DATA even when no signer is slashable.
+        let empty_original = record.encode();
+        let empty_projection = evidence_to_json(&record).expect("empty offender list is valid");
+        assert_eq!(
+            empty_projection["value"]["record"]["offenders"]
+                .as_array()
+                .map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(record.encode(), empty_original);
+        let RecordedEvidenceV1::SccpForgery(material) = &mut record.evidence else {
+            panic!("SCCP DATA")
+        };
+        // Match attribution so only the malformed zero start height causes refusal.
+        material.start_height = 0;
+        record.attribution.height = 0;
         assert!(matches!(
             evidence_to_json(&record),
             Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(

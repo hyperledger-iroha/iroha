@@ -2,6 +2,7 @@
 
 use super::*;
 use iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath;
+use iroha_fs::ProcessStdio as Stdio;
 use std::{
     fs::Permissions,
     os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
@@ -320,7 +321,7 @@ impl NetworkPeer {
             .write(true)
             .mode(0o600)
             .open(&stderr_path)?;
-        let mut command = tokio::process::Command::new(&binary);
+        let mut command = binary.command()?;
         command
             .arg("--catalog")
             .arg(&configured.catalog_path)
@@ -333,7 +334,7 @@ impl NetworkPeer {
             .stderr(Stdio::from(stderr))
             .kill_on_drop(true);
         let mut child = command
-            .spawn()
+            .spawn_async()
             .wrap_err("spawn disposable runtime-provider broker")?;
         let mut stdin = child
             .stdin

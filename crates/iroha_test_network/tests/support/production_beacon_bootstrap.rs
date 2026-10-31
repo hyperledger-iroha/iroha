@@ -22,32 +22,29 @@ use iroha_data_model::{
     sumeragi::finality::{NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits},
     transaction::TransactionEntrypoint,
 };
+use iroha_fs::ProcessStdio as Stdio;
 use iroha_model_base::topology::{DataSpaceId, LaneId};
 use iroha_test_network::{
-    DisposableGenesisConfigSeat, DisposableGenesisDkgOutput, NativeGenesisProvisioningBundle,
-    Program, ReleasePrebuiltBinary, revalidate_release_prebuilt_binary,
-    run_disposable_genesis_dkg_from_configs,
+    BinaryKind, DisposableGenesisConfigSeat, DisposableGenesisDkgOutput,
+    NativeGenesisProvisioningBundle, Program, ResolvedAsyncChild as Child,
+    ResolvedCommand as Command, ResolvedProgram, resolve_development_binary,
+    resolve_release_prebuilt_binary, run_disposable_genesis_dkg_from_configs,
 };
 use irohad::{
     IrohaRuntimeProviderBindingsV1,
     external_software_signer::encode_consensus_threshold_credential_bundle_v1,
 };
 use std::{
-    collections::BTreeSet,
     fs::File,
     io::{Read as _, Seek as _, Write as _},
     os::{
-        fd::{AsRawFd, RawFd},
+        fd::{AsFd, BorrowedFd, RawFd},
         unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     },
     path::{Component, PathBuf},
-    process::Stdio,
     sync::{Arc, Mutex as StdMutex},
 };
-use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt as _, AsyncWriteExt},
-    process::{Child, Command},
-};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt as _, AsyncWriteExt};
 use zeroize::Zeroizing;
 
 #[path = "production_beacon_canary_receipt.rs"]
@@ -134,7 +131,7 @@ fn runtime_workspace() -> Result<tempfile::TempDir> {
     validate_runtime_root(workspace.path())?;
     Ok(workspace)
 }
-fn binary(variable: &str, kind: ReleasePrebuiltBinary) -> Result<PathBuf> {
+fn binary(variable: &str, kind: BinaryKind) -> Result<ResolvedProgram> {
     let path = std::env::var_os(variable)
         .map(PathBuf::from)
         .ok_or_else(|| eyre!("{variable} must name the exact prebuilt binary"))?;
@@ -142,39 +139,20 @@ fn binary(variable: &str, kind: ReleasePrebuiltBinary) -> Result<PathBuf> {
         path.is_absolute() && path.is_file(),
         "prebuilt executable is absent"
     );
-    revalidate_release_prebuilt_binary(kind, &path)?;
-    Ok(path)
+    if let Some(program) = resolve_release_prebuilt_binary(kind)? {
+        ensure!(
+            program.diagnostic_path()?.as_os_str() == path.as_os_str(),
+            "explicit prebuilt executable differs from the retained release selection"
+        );
+        Ok(program)
+    } else {
+        resolve_development_binary(&path)
+    }
 }
 
-/// Descriptor duplication is confined to the child between fork and exec.
-#[allow(unsafe_code)]
-fn inherit(command: &mut Command, descriptors: &[(RawFd, RawFd)]) -> Result<()> {
-    let mut targets = BTreeSet::new();
-    ensure!(
-        descriptors.iter().all(|(source, target)| *source >= 3
-            && *target >= 3
-            && source != target
-            && targets.insert(*target)),
-        "invalid inherited descriptor map"
-    );
-    ensure!(
-        descriptors
-            .iter()
-            .all(|(source, _)| !targets.contains(source)),
-        "descriptor mapping would overwrite a source"
-    );
-    let descriptors = descriptors.to_vec();
-    // SAFETY: the closure only invokes async-signal-safe libc descriptor calls.
-    unsafe {
-        command.pre_exec(move || {
-            for &(source, target) in &descriptors {
-                if nix::libc::dup2(source, target) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
-            Ok(())
-        });
-    }
+/// Retain original input descriptors through the canonical child launch boundary.
+fn inherit(command: &mut Command, descriptors: &[(BorrowedFd<'_>, RawFd)]) -> Result<()> {
+    command.inherit_descriptors(descriptors)?;
     Ok(())
 }
 fn consumed_copy(source: &Path, target: &Path, maximum: u64) -> Result<ConsumedCopy> {
@@ -300,18 +278,18 @@ fn native_one_shot_copies_retire_without_consuming_the_retained_source() {
     assert_eq!(fs::read(&credential_source).unwrap(), [0x53; 1024]);
     assert_eq!(fs::read(&source).unwrap(), [0x71; 32]);
 }
-fn command(binary: &Path, directory: &Path) -> Command {
-    let mut command = Command::new(binary);
+fn command(binary: &ResolvedProgram, directory: &Path) -> Result<Command> {
+    let mut command = binary.command()?;
     command
         .env_clear()
         .current_dir(directory)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .kill_on_drop(true);
-    command
+    Ok(command)
 }
-async fn run(mut command: Command, deadline: Instant) -> Result<Vec<u8>> {
-    let output = timeout_at(deadline, command.spawn()?.wait_with_output())
+async fn run(command: Command, deadline: Instant) -> Result<Vec<u8>> {
+    let output = timeout_at(deadline, command.spawn_async()?.wait_with_output())
         .await
         .wrap_err("native fixture child exceeded its fixed deadline")??;
     ensure!(
@@ -536,7 +514,7 @@ impl Peers {
 // Only the fixture's first launch owns the assertion that its freshly generated keys never
 // signed. A later launch must preserve that distinction even if safety files were lost.
 fn configure_consensus_boot(
-    command: &mut Command,
+    command: &mut iroha_release_bundle::execution::CommandOptions<'_>,
     records_dir: &Path,
     installation_log: &Path,
     first_launch: bool,
@@ -559,26 +537,56 @@ fn production_beacon_fresh_key_assertion_is_only_for_the_original_launch() -> Re
     let directory = tempfile::tempdir()?;
     let records = directory.path().join("sumeragi-records");
     let log = directory.path().join("sumeragi-installation.log");
-    let mut first = Command::new("iroha3d");
-    configure_consensus_boot(&mut first, &records, &log, true)?;
+    let mut first = iroha_fs::ProcessCommand::new(std::env::current_exe()?)?;
+    configure_consensus_boot(
+        &mut iroha_release_bundle::execution::CommandOptions::new(&mut first),
+        &records,
+        &log,
+        true,
+    )?;
     assert_eq!(
-        first.as_std().get_args().collect::<Vec<_>>(),
+        first.get_args().collect::<Vec<_>>(),
         ["--sumeragi-assert-fresh-key"]
     );
-    let mut restart = Command::new("iroha3d");
-    configure_consensus_boot(&mut restart, &records, &log, false)?;
-    assert_eq!(restart.as_std().get_args().count(), 0);
+    let mut restart = iroha_fs::ProcessCommand::new(std::env::current_exe()?)?;
+    configure_consensus_boot(
+        &mut iroha_release_bundle::execution::CommandOptions::new(&mut restart),
+        &records,
+        &log,
+        false,
+    )?;
+    assert_eq!(restart.get_args().count(), 0);
     fs::create_dir(&records)?;
-    assert!(configure_consensus_boot(&mut Command::new("iroha3d"), &records, &log, true).is_err());
+    assert!(
+        configure_consensus_boot(
+            &mut iroha_release_bundle::execution::CommandOptions::new(
+                &mut iroha_fs::ProcessCommand::new(std::env::current_exe()?)?
+            ),
+            &records,
+            &log,
+            true
+        )
+        .is_err()
+    );
     fs::remove_dir(&records)?;
     fs::write(&log, b"retained installation")?;
-    assert!(configure_consensus_boot(&mut Command::new("iroha3d"), &records, &log, true).is_err());
+    assert!(
+        configure_consensus_boot(
+            &mut iroha_release_bundle::execution::CommandOptions::new(
+                &mut iroha_fs::ProcessCommand::new(std::env::current_exe()?)?
+            ),
+            &records,
+            &log,
+            true
+        )
+        .is_err()
+    );
     Ok(())
 }
 
 fn spawn_peers(
     directory: &Path,
-    daemon: &Path,
+    daemon: &ResolvedProgram,
     roster: &[iroha_model_base::peer::PeerId],
     run_number: u16,
 ) -> Result<Peers> {
@@ -593,7 +601,7 @@ fn spawn_peers(
             .position(|peer| peer == &native.common.peer.id)
             .ok_or_else(|| eyre!("peer is outside signed genesis roster"))?
             + 1;
-        let mut child = command(daemon, directory);
+        let mut child = command(daemon, directory)?;
         child
             .arg("--sora")
             .arg("--config")
@@ -606,13 +614,17 @@ fn spawn_peers(
                 &directory.join(format!("peer{index}-run{run_number}-stderr.log")),
                 &[],
             )?);
-        configure_consensus_boot(
-            &mut child,
-            &native.sumeragi.records_dir,
-            &native.sumeragi.installation_log,
-            run_number == 1,
-        )?;
-        peers.children.push(child.spawn()?);
+        let mut boot = Ok(());
+        child.configure(|options| {
+            boot = configure_consensus_boot(
+                options,
+                &native.sumeragi.records_dir,
+                &native.sumeragi.installation_log,
+                run_number == 1,
+            );
+        });
+        boot?;
+        peers.children.push(child.spawn_async()?);
     }
     Ok(peers)
 }
@@ -691,7 +703,6 @@ fn idempotency(nonce: &str, kind: &str) -> String {
     hex(&iroha_crypto::sha256(bytes))
 }
 struct Canary<'a> {
-    binary: &'a Path,
     directory: &'a Path,
     config: &'a Path,
     root: String,
@@ -703,6 +714,7 @@ struct Canary<'a> {
 impl Canary<'_> {
     async fn operation(
         &self,
+        binary: &ResolvedProgram,
         operation: &str,
         predecessor: Option<&Path>,
         deadline: Instant,
@@ -715,7 +727,7 @@ impl Canary<'_> {
             operation
         };
         for prepare in [true, false] {
-            let mut child = command(self.binary, self.directory);
+            let mut child = command(binary, self.directory)?;
             child
                 .args(["--machine", "--config"])
                 .arg(self.config)
@@ -779,10 +791,10 @@ impl Canary<'_> {
             } else {
                 None
             };
-            let mut descriptors = vec![(file.as_raw_fd(), 100)];
+            let mut descriptors = vec![(file.as_fd(), 100)];
             if let Some(previous) = &previous {
                 child.args(["--prerequisite-envelope-fd", "101"]);
-                descriptors.push((previous.as_raw_fd(), 101));
+                descriptors.push((previous.as_fd(), 101));
             }
             inherit(&mut child, &descriptors)?;
             let phase = if prepare { "prepare" } else { "submit" };
@@ -948,7 +960,7 @@ fn production_beacon_stock_config_preserves_providers_and_binds_the_broker() -> 
 async fn spawn_provider_broker(
     directory: &Path,
     peer: usize,
-    binary: &Path,
+    binary: &ResolvedProgram,
     catalog: &[u8],
     credentials: &[u8],
 ) -> Result<ProviderBroker> {
@@ -984,7 +996,7 @@ async fn spawn_provider_broker(
     let policy_file = private_file(&policy_path, toml::to_string(&policy)?.as_bytes())?;
     policy_file.set_permissions(fs::Permissions::from_mode(0o400))?;
     policy_file.sync_all()?;
-    let mut child = command(binary, root.path());
+    let mut child = command(binary, root.path())?;
     child
         .arg("--catalog")
         .arg(&catalog_path)
@@ -995,8 +1007,8 @@ async fn spawn_provider_broker(
             &root.path().join("broker-stderr.log"),
             &[],
         )?));
-    inherit(&mut child, &[(signer.file.as_raw_fd(), 198)])?;
-    let mut child = child.spawn()?;
+    inherit(&mut child, &[(signer.file.as_fd(), 198)])?;
+    let mut child = child.spawn_async()?;
     let mut stdin = child
         .stdin
         .take()
@@ -1023,7 +1035,7 @@ async fn spawn_provider_broker(
 
 async fn stage_initial_provider_brokers(
     directory: &Path,
-    binary: &Path,
+    binary: &ResolvedProgram,
 ) -> Result<Vec<ProviderBroker>> {
     let credentials = Zeroizing::new(encode_consensus_threshold_credential_bundle_v1(None)?);
     let mut brokers = Vec::new();
@@ -1044,7 +1056,7 @@ async fn stage_initial_provider_brokers(
 
 async fn stage_provider_brokers(
     directory: &Path,
-    broker_binary: &Path,
+    broker_binary: &ResolvedProgram,
     bundle: &Value,
     dkg: &DisposableGenesisDkgOutput,
     roster: &[iroha_model_base::peer::PeerId],
@@ -1535,7 +1547,7 @@ fn peer_logs(directory: &Path, peer: usize, run: u16) -> [PathBuf; 2] {
 }
 struct Runtime<'a> {
     directory: &'a Path,
-    daemon: &'a Path,
+    daemon: &'a ResolvedProgram,
     roster: &'a [iroha_model_base::peer::PeerId],
     api: u16,
     clients: &'a [iroha::client::Client],
@@ -1912,13 +1924,10 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
     )?;
     init_instruction_registry();
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-    let daemon = binary("TEST_NETWORK_BIN_IROHAD", ReleasePrebuiltBinary::Irohad)?;
-    let launcher = binary(
-        "TEST_NETWORK_BIN_IROHAD_TAIRA",
-        ReleasePrebuiltBinary::IrohadTaira,
-    )?;
-    let cli = binary("TEST_NETWORK_BIN_IROHA", ReleasePrebuiltBinary::Iroha)?;
-    let kagami = binary("KAGAMI_BIN", ReleasePrebuiltBinary::Kagami)?;
+    let daemon = binary("TEST_NETWORK_BIN_IROHAD", BinaryKind::Irohad)?;
+    let launcher = binary("TEST_NETWORK_BIN_IROHAD_TAIRA", BinaryKind::IrohadTaira)?;
+    let cli = binary("TEST_NETWORK_BIN_IROHA", BinaryKind::Iroha)?;
+    let kagami = binary("KAGAMI_BIN", BinaryKind::Kagami)?;
     let broker_binary = Program::IrohadDisposableBroker.resolve_skip_build()?;
     let workspace = runtime_workspace()?;
     let (api, p2p, reservations) = reserve_ports()?;
@@ -1959,7 +1968,7 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
     let launcher_check_deadline = Instant::now() + PHASE_BUDGET;
     let launcher_check = async {
         for peer in 0..4 {
-            let mut check = command(&launcher, directory);
+            let mut check = command(&launcher, directory)?;
             check
                 .args(["--sora", "--config"])
                 .arg(directory.join(format!("peer{peer}.toml")))
@@ -2063,9 +2072,10 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         });
         let authorization = hex(&iroha_crypto::sha256(json::to_vec(&authorization_context)?));
         let expires_ms = u64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis())? + 180_000;
-        let canary = Canary { binary: &cli, directory, config: &fresh, root: format!("http://127.0.0.1:{api}"), nonce, authorization, expires_ms, faucet };
+        let canary = Canary { directory, config: &fresh, root: format!("http://127.0.0.1:{api}"), nonce, authorization, expires_ms, faucet };
         let predecessor = Arc::new(StdMutex::new(None::<PathBuf>));
         let canary_ref = &canary;
+        let cli_ref = &cli;
         let clients_ref = &clients;
         let dkg = run_disposable_genesis_dkg_from_configs(
             signed_genesis,
@@ -2077,6 +2087,7 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
                 let predecessor = Arc::clone(&predecessor);
                 let first_config = directory.join("peer0.toml");
                 let canary = canary_ref;
+                let cli = cli_ref;
                 let clients = clients_ref;
                 async move {
                     let ceremony_deadline = ceremony_deadline.min(Instant::from_std(deadline));
@@ -2092,7 +2103,7 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
                         .map_err(|_| eyre!("beacon canary predecessor lock poisoned"))?
                         .clone();
                     let (envelope, proved_height) = canary
-                        .operation(operation, previous.as_deref(), ceremony_deadline)
+                        .operation(cli, operation, previous.as_deref(), ceremony_deadline)
                         .await?;
                     ensure!(
                         proved_height == expected,
@@ -2142,7 +2153,7 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         // independently proves that a required pulse cannot be omitted.
         wait_for_exact_meshed_height(&clients, install_height, restart).await?;
         let peer_configs = (0..4).map(|index| directory.join(format!("peer{index}.toml"))).collect::<Vec<_>>();
-        let mut doctor = command(&cli, directory);
+        let mut doctor = command(&cli, directory)?;
         doctor.args(["--machine", "taira", "doctor", "--scope", "basic", "--public-root", &format!("http://127.0.0.1:{api}"), "--json"]);
         let doctor_deadline = (Instant::now() + Duration::from_secs(60)).min(restart);
         let doctor_report: Value = json::from_slice(&run(doctor, doctor_deadline).await?)

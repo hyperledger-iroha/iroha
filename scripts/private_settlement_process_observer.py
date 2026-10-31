@@ -88,12 +88,17 @@ class ExecutableImage:
 
 
 def parse_linux_stat(raw: bytes, pid: int) -> dict[str, int]:
-    """Parse kernel stat after the last comm parenthesis, including odd names."""
+    """Parse only the original live kernel states; terminal remains a refusal."""
+    return _parse_linux_stat_states(raw, pid, (b"R",b"S",b"D",b"T",b"t",b"I"))[1]
+
+
+def _parse_linux_stat_states(raw: bytes, pid: int, states: tuple[bytes, ...]) -> tuple[bytes, dict[str, int]]:
+    """Share exact stat parsing while each reader fixes its permitted kernel states."""
     require(type(raw) is bytes and 0 < len(raw) <= MAX_KERNEL_RECORD_BYTES, "invalid proc stat size")
     prefix, separator, suffix = raw.rpartition(b") ")
     require(bool(separator) and prefix.startswith(f"{pid} (".encode()), "proc stat PID/comm differs")
     fields = suffix.split()
-    require(len(fields) >= 22 and fields[0] in (b"R",b"S",b"D",b"T",b"t",b"I"),
+    require(len(fields) >= 22 and fields[0] in states,
             "process exited or has an unsupported kernel state")
     result = {}
     for key, index in (("ppid",1),("pgid",2),("utime",11),("stime",12),("start_ticks",19)):
@@ -105,7 +110,7 @@ def parse_linux_stat(raw: bytes, pid: int) -> dict[str, int]:
     require(1 < pid <= PID_MAX and 0 < result["ppid"] <= PID_MAX
             and 0 < result["pgid"] <= PID_MAX and result["start_ticks"] > 0,
             "invalid proc lifetime or parent/group identity")
-    return result
+    return fields[0], result
 
 
 def parse_linux_rollup(raw: bytes) -> int:
@@ -137,6 +142,36 @@ def kernel_record(directory: int, name: str) -> bytes:
         os.close(fd)
 
 
+class _LinuxSampleReads:
+    """Original live kernel operations; owned terminal classification is separate."""
+
+    def __init__(self, directory: int, pid: int):
+        """Borrow one already-open original proc directory for this sample."""
+        self.directory, self.pid = directory, pid
+        self.cleanup_error = None
+
+    def close_failed(self, initiating: BaseException, cleanup: BaseException) -> BaseException:
+        """Keep an initiating ordinary failure when its original close also fails."""
+        self.cleanup_error = cleanup
+        return initiating
+
+    def stat(self, _stage: str) -> dict[str, int]:
+        """Read the unchanged strict live stat contract."""
+        return parse_linux_stat(kernel_record(self.directory, 'stat'), self.pid)
+
+    def open_executable(self) -> int:
+        """Open the kernel executable reference with the original read policy."""
+        return os.open('exe', os.O_RDONLY | os.O_CLOEXEC, dir_fd=self.directory)
+
+    def executable_path(self, _stage: str) -> str:
+        """Read the kernel executable link without substituting another path."""
+        return os.readlink('exe', dir_fd=self.directory)
+
+    def resident_bytes(self) -> int:
+        """Require the original complete positive smaps_rollup record."""
+        return parse_linux_rollup(kernel_record(self.directory, 'smaps_rollup'))
+
+
 class LinuxProcessReader:
     """Observe an exact kernel proc directory, birth and executable inode."""
 
@@ -160,40 +195,66 @@ class LinuxProcessReader:
         require(type(pid) is int and 1 < pid <= PID_MAX and self.proc >= 0, "invalid PID or closed reader")
         image.validate()
         directory = os.open(str(pid),os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW,dir_fd=self.proc)
+        try:
+            result = self._sample_directory(pid, image, directory, _LinuxSampleReads(directory, pid))
+        except BaseException:
+            # Attempt every original close without replacing the first read or
+            # executable-close failure with a later directory-close failure.
+            try:
+                os.close(directory)
+            except BaseException:
+                pass
+            raise
+        os.close(directory)
+        return result
+
+    def _sample_directory(self, pid: int, image: ExecutableImage, directory: int,
+                          reads: _LinuxSampleReads) -> dict[str, Any]:
+        """Use one canonical live sample algorithm with explicit kernel read sites."""
         executable = -1
         try:
             directory_info = os.fstat(directory)
             require(directory_info.st_uid == os.geteuid(), "process belongs to another effective user")
-            before = parse_linux_stat(kernel_record(directory,'stat'),pid)
+            before = reads.stat('before')
             # /proc/<pid>/exe is deliberately followed: this is the kernel's
             # loaded executable reference, not a user-supplied pathname alias.
-            executable = os.open('exe',os.O_RDONLY|os.O_CLOEXEC,dir_fd=directory)
+            executable = reads.open_executable()
             require(metadata(os.fstat(executable)) == image.identity, "running Linux executable differs")
-            observed_path = os.readlink('exe',dir_fd=directory)
+            observed_path = reads.executable_path('before')
             require(observed_path == str(image.path), "running executable path changed or was deleted")
-            rss = parse_linux_rollup(kernel_record(directory,'smaps_rollup'))
-            after = parse_linux_stat(kernel_record(directory,'stat'),pid)
+            rss = reads.resident_bytes()
+            after = reads.stat('after')
             require(all(before[key]==after[key] for key in ('ppid','pgid','start_ticks'))
                     and after['utime']>=before['utime'] and after['stime']>=before['stime'],
                     "Linux lifetime or CPU clock changed during observation")
             require(metadata(os.fstat(executable)) == image.identity
-                    and os.readlink('exe',dir_fd=directory)==observed_path,
+                    and reads.executable_path('after')==observed_path,
                     "running Linux image changed during observation")
             named = os.stat(str(pid),dir_fd=self.proc,follow_symlinks=False)
             require((named.st_dev,named.st_ino,named.st_uid)
                     ==(directory_info.st_dev,directory_info.st_ino,directory_info.st_uid),
                     "Linux process directory was replaced")
             image.validate()
-            return {'identity':{'pid':pid,'ppid':after['ppid'],'pgid':after['pgid'],
+            result = {'identity':{'pid':pid,'ppid':after['ppid'],'pgid':after['pgid'],
                     'uid':directory_info.st_uid,'birth':{'kind':'linux_proc','boot_id':self.boot_id,
                     'start_ticks':after['start_ticks']},'executable_path':str(image.path),
                     'executable_sha256':image.sha256},
                     'cpu_time_ns':(after['utime']+after['stime'])*(1_000_000_000//self.clock_ticks),
                     'cpu_counter_unit_ns':1_000_000_000//self.clock_ticks,'rss_bytes':rss}
-        finally:
-            if executable>=0:
+        except BaseException as initiating:
+            selected = initiating
+            if executable >= 0:
+                try:
+                    os.close(executable)
+                except BaseException as cleanup:
+                    selected = reads.close_failed(initiating, cleanup)
+            if selected is initiating:
+                raise
+            raise selected
+        else:
+            if executable >= 0:
                 os.close(executable)
-            os.close(directory)
+            return result
 
     def close(self) -> None:
         """Close the proc root once without signaling any process."""

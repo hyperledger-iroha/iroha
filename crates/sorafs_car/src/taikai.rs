@@ -523,6 +523,9 @@ pub fn load_extra_metadata(path: &Path) -> Result<ExtraMetadata> {
         .wrap_err_with(|| format!("failed to parse metadata JSON `{}`", path.display()))
 }
 /// Validate that named Taikai inputs and outputs neither alias nor nest within one another.
+///
+/// Existing Unix and Windows entries are compared by native identity. This preflight does not
+/// reserve their names against subsequent changes.
 pub fn validate_distinct_artifact_paths(paths: &[(&str, &Path)]) -> Result<()> {
     for (index, (left_label, left_path)) in paths.iter().enumerate() {
         for (right_label, right_path) in &paths[index + 1..] {
@@ -554,41 +557,77 @@ fn paths_resolve_to_same_entry(left: &Path, right: &Path) -> Result<bool> {
         return Ok(true);
     }
 
-    let left_metadata = match fs::metadata(left) {
-        Ok(metadata) => Some(metadata),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-        Err(err) => {
-            return Err(eyre!(
-                "failed to inspect artifact path `{}`: {err}",
-                left.display()
-            ));
-        }
-    };
-    let right_metadata = match fs::metadata(right) {
-        Ok(metadata) => Some(metadata),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-        Err(err) => {
-            return Err(eyre!(
-                "failed to inspect artifact path `{}`: {err}",
-                right.display()
-            ));
-        }
-    };
-    let (Some(left_metadata), Some(right_metadata)) = (left_metadata, right_metadata) else {
-        return Ok(false);
-    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Ok(left_metadata.dev() == right_metadata.dev()
-            && left_metadata.ino() == right_metadata.ino())
+        // Follow aliases intentionally: this is an identity comparison, not an input
+        // custody owner. Attribute-only access and full sharing preserve preflight
+        // behavior; both original handles stay live until their identities are read.
+        let open = |path: &Path| -> Result<Option<fs::File>> {
+            match fs::OpenOptions::new()
+                .access_mode(0x80) // FILE_READ_ATTRIBUTES
+                .share_mode(7) // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+                .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS (also admit directories)
+                .open(path)
+            {
+                Ok(file) => Ok(Some(file)),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+                Err(err) => Err(eyre!(
+                    "failed to inspect artifact path `{}`: {err}",
+                    path.display()
+                )),
+            }
+        };
+        let left_file = open(left)?;
+        let right_file = open(right)?;
+        let (Some(left_file), Some(right_file)) = (left_file, right_file) else {
+            return Ok(false);
+        };
+        let left_identity = iroha_fs::FileIdentity::of(&left_file)
+            .wrap_err_with(|| format!("failed to identify artifact path `{}`", left.display()))?;
+        let right_identity = iroha_fs::FileIdentity::of(&right_file)
+            .wrap_err_with(|| format!("failed to identify artifact path `{}`", right.display()))?;
+        Ok(left_identity == right_identity)
     }
-    #[cfg(not(unix))]
+    #[cfg(not(windows))]
     {
-        match (fs::canonicalize(left), fs::canonicalize(right)) {
-            (Ok(left), Ok(right)) => Ok(left == right),
-            _ => Ok(false),
+        let left_metadata = match fs::metadata(left) {
+            Ok(metadata) => Some(metadata),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => {
+                return Err(eyre!(
+                    "failed to inspect artifact path `{}`: {err}",
+                    left.display()
+                ));
+            }
+        };
+        let right_metadata = match fs::metadata(right) {
+            Ok(metadata) => Some(metadata),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => {
+                return Err(eyre!(
+                    "failed to inspect artifact path `{}`: {err}",
+                    right.display()
+                ));
+            }
+        };
+        let (Some(left_metadata), Some(right_metadata)) = (left_metadata, right_metadata) else {
+            return Ok(false);
+        };
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Ok(left_metadata.dev() == right_metadata.dev()
+                && left_metadata.ino() == right_metadata.ino())
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            match (fs::canonicalize(left), fs::canonicalize(right)) {
+                (Ok(left), Ok(right)) => Ok(left == right),
+                _ => Ok(false),
+            }
         }
     }
 }
@@ -1326,6 +1365,75 @@ mod tests {
         assert!(
             !colliding_output.exists(),
             "collision must fail before opening either output"
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn native_bundle_rejects_payload_hardlink_outputs_before_writing() {
+        for alias_is_car in [true, false] {
+            let (_tmp, tmp_path) = canonical_tempdir();
+            let payload = tmp_path.join("segment.bin");
+            let car_out = tmp_path.join("segment.car");
+            let envelope_out = tmp_path.join("segment.to");
+            let original = b"preserve original hard-linked Taikai payload";
+            fs::write(&payload, original).expect("write payload");
+            let (alias, absent_output) = if alias_is_car {
+                (&car_out, &envelope_out)
+            } else {
+                (&envelope_out, &car_out)
+            };
+            fs::hard_link(&payload, alias).expect("create real native hardlink");
+            let request = minimal_bundle_request(&payload, &car_out, &envelope_out);
+
+            let err = bundle_segment(&request).expect_err("reject payload hardlink output");
+
+            assert!(
+                err.to_string().contains("must use distinct paths"),
+                "unexpected error: {err}"
+            );
+            assert_eq!(fs::read(&payload).expect("read original payload"), original);
+            assert_eq!(fs::read(alias).expect("read output alias"), original);
+            assert!(
+                !absent_output.exists(),
+                "must reject before another output is written"
+            );
+            assert_eq!(
+                fs::read_dir(&tmp_path).expect("list fixture").count(),
+                2,
+                "preflight must not stage any output"
+            );
+        }
+    }
+    #[cfg(windows)]
+    #[test]
+    fn native_distinct_artifact_paths_allow_same_content_files() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let left = tmp_path.join("left.bin");
+        let right = tmp_path.join("right.bin");
+        let bytes = b"identical bytes do not establish native identity";
+        fs::write(&left, bytes).expect("write left file");
+        fs::write(&right, bytes).expect("write right file");
+
+        assert!(!paths_resolve_to_same_entry(&left, &right).expect("compare native identities"));
+        validate_distinct_artifact_paths(&[("left", &left), ("right", &right)])
+            .expect("distinct same-content files remain admissible");
+        assert_eq!(fs::read(left).expect("read left"), bytes);
+        assert_eq!(fs::read(right).expect("read right"), bytes);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn native_distinct_artifact_paths_allow_missing_outputs() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let parent = tmp_path.join("not-created");
+        let left = parent.join("left.car");
+        let right = parent.join("right.to");
+
+        assert!(!paths_resolve_to_same_entry(&left, &right).expect("compare missing outputs"));
+        validate_distinct_artifact_paths(&[("CAR output", &left), ("envelope output", &right)])
+            .expect("distinct missing outputs remain admissible");
+        assert!(
+            !parent.exists(),
+            "identity preflight must not create output parents"
         );
     }
     #[test]

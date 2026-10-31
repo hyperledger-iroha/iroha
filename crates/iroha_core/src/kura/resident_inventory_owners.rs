@@ -88,6 +88,10 @@ impl Kura {
         let queues = pipeline
             .checked_add(proofs)
             .ok_or(Unavailable::Arithmetic)?;
+        #[cfg(windows)]
+        let queues = queues
+            .checked_add(exact(&self.native_pipeline_publication.lock())?)
+            .ok_or(Unavailable::Arithmetic)?;
         let usage = |resident_associations| Usage {
             resident_associations,
             ..Usage::default()
@@ -125,3 +129,18 @@ macro_rules! flat_resident_owner {
 flat_resident_owner!(VecDeque<PipelineRecoverySidecar>, ResidentQueue);
 flat_resident_owner!(VecDeque<QueuedFastpqProofSnapshot>, ResidentQueue);
 flat_resident_owner!(BTreeMap<LaneId,LaneStorageEntry>, ResidentFrontier);
+
+#[cfg(windows)]
+impl ResidentOwner for Option<native_sidecar_transaction::NativeSidecarTransaction> {
+    const FAMILY: resource_inventory::Family = resource_inventory::Family::ResidentQueue;
+
+    fn resident_associations(&self) -> std::result::Result<u64, resource_inventory::Unavailable> {
+        // One persistent retry record. Its bounded payload and fixed original/path
+        // owner allocations remain RSS, like the existing queued payload internals.
+        Ok(u64::from(self.is_some()))
+    }
+
+    fn resident_complete(&self) -> bool {
+        true
+    }
+}

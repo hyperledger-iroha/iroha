@@ -416,6 +416,10 @@ comparison and after the decoder's private limits, layout/context guards and
 admission observer have retired. This avoids repeated large by-value return
 slots without a new heap owner or wire layout. Consumer work retains the caller's
 original ambient context and returns its own semantic result independently.
+Length-prefixed record fields likewise decode into their own typed slot, avoiding
+an additional full-value return through the generic field wrapper. The parent
+offset advances only after complete canonical field validation; rejected decoded
+values are dropped by that same slot, without adding allocation charges.
 
 Canonical artifact admission uses `decode_canonical_for_admission` for the complete
 single decode and exact canonical-byte comparison. Its opaque result distinguishes

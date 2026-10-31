@@ -1,9 +1,9 @@
 //! Production CLI for constructing and verifying SoraFS provider advertisements.
 use ed25519_dalek::VerifyingKey;
 use iroha_crypto::sha256;
+use iroha_fs::{FileMetadata, RetainedFile};
 use norito::json::{Map, Value, to_string_pretty};
 use sorafs_car::chunker_registry;
-use sorafs_car::set_no_follow_flag;
 use sorafs_manifest::{
     AdvertEndpoint, AvailabilityTier, CapabilityTlv, CapabilityType, EndpointKind,
     EndpointMetadata, EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ProviderAdvertBuildError,
@@ -12,10 +12,10 @@ use sorafs_manifest::{
     decode_provider_advert_v1, provider_advert::ProviderCapabilitySoranetPqV1,
 };
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::{
     env,
-    fs::{self, OpenOptions},
+    fs,
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
     process,
@@ -1439,17 +1439,12 @@ fn read_trusted_regular_file(
     exact_bytes: Option<u64>,
 ) -> Result<Vec<u8>, String> {
     let direct_path = trusted_direct_path(path, label)?;
-    let before = fs::symlink_metadata(&direct_path)
+    let before = FileMetadata::symlink_metadata(&direct_path)
         .map_err(|err| format!("failed to inspect {label}: {err}"))?;
     validate_trusted_input_metadata(label, &before, maximum_bytes)?;
-    let mut options = OpenOptions::new();
-    options.read(true);
-    set_no_follow_flag(&mut options);
-    let mut file = options
-        .open(&direct_path)
+    let mut file = RetainedFile::open_regular(&direct_path)
         .map_err(|err| format!("failed to open {label}: {err}"))?;
-    let opened = file
-        .metadata()
+    let opened = FileMetadata::of(file.file())
         .map_err(|err| format!("failed to inspect open {label}: {err}"))?;
     validate_trusted_input_metadata(label, &opened, maximum_bytes)?;
     if !trusted_metadata_matches(&before, &opened) {
@@ -1458,15 +1453,20 @@ fn read_trusted_regular_file(
     let capacity =
         usize::try_from(opened.len()).map_err(|_| format!("{label} exceeds host size limits"))?;
     let mut bytes = Vec::with_capacity(capacity);
-    Read::by_ref(&mut file)
+    Read::by_ref(file.file_mut())
         .take(maximum_bytes.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|err| format!("failed to read {label}: {err}"))?;
-    let after = fs::symlink_metadata(&direct_path)
+    let after_file = FileMetadata::of(file.file())
+        .map_err(|err| format!("failed to re-inspect open {label}: {err}"))?;
+    let after = FileMetadata::symlink_metadata(&direct_path)
         .map_err(|err| format!("failed to re-inspect {label}: {err}"))?;
     validate_trusted_input_metadata(label, &after, maximum_bytes)?;
-    trusted_direct_path(path, label)?;
+    file.revalidate()
+        .map_err(|err| format!("{label} custody changed while being read: {err}"))?;
     if bytes.len() as u64 != opened.len()
+        || !trusted_metadata_matches(&opened, &after_file)
+        || !trusted_metadata_matches(&after_file, &after)
         || !trusted_metadata_matches(&opened, &after)
         || !trusted_metadata_matches(&before, &after)
     {
@@ -1519,7 +1519,7 @@ fn validate_direct_parent_path(path: &Path, label: &str) -> Result<(), String> {
 }
 fn validate_trusted_input_metadata(
     label: &str,
-    metadata: &fs::Metadata,
+    metadata: &FileMetadata,
     maximum_bytes: u64,
 ) -> Result<(), String> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -1528,11 +1528,11 @@ fn validate_trusted_input_metadata(
     if metadata.len() == 0 || metadata.len() > maximum_bytes {
         return Err(format!("{label} size is outside the supported range"));
     }
+    if metadata.links() != 1 {
+        return Err(format!("{label} must have exactly one hard link"));
+    }
     #[cfg(unix)]
     {
-        if metadata.nlink() != 1 {
-            return Err(format!("{label} must have exactly one hard link"));
-        }
         if metadata.permissions().mode() & 0o022 != 0 {
             return Err(format!("{label} must not be group- or world-writable"));
         }
@@ -1540,7 +1540,7 @@ fn validate_trusted_input_metadata(
     Ok(())
 }
 #[cfg(unix)]
-fn trusted_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn trusted_metadata_matches(left: &FileMetadata, right: &FileMetadata) -> bool {
     left.dev() == right.dev()
         && left.ino() == right.ino()
         && left.len() == right.len()
@@ -1550,8 +1550,11 @@ fn trusted_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime_nsec() == right.ctime_nsec()
 }
 #[cfg(not(unix))]
-fn trusted_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.len() == right.len() && left.modified().ok() == right.modified().ok()
+fn trusted_metadata_matches(left: &FileMetadata, right: &FileMetadata) -> bool {
+    left.identity() == right.identity()
+        && left.links() == right.links()
+        && left.len() == right.len()
+        && left.modified().ok() == right.modified().ok()
 }
 fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if path == Path::new("-") {
@@ -1559,9 +1562,11 @@ fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
     }
     let output_path = trusted_output_path(path, "binary output")?;
     let mut file = open_output_file(&output_path, "binary output")?;
-    file.write_all(bytes)
+    file.file_mut()
+        .write_all(bytes)
         .map_err(|err| format!("failed to write {path:?}: {err}"))?;
-    file.sync_all()
+    file.file()
+        .sync_all()
         .map_err(|err| format!("failed to sync {path:?}: {err}"))?;
     validate_open_output_identity(&output_path, &file, "binary output")
 }
@@ -1574,33 +1579,12 @@ fn write_text(path: &Path, text: &str) -> Result<bool, String> {
     }
     write_bytes(path, text.as_bytes()).map(|_| false)
 }
-fn open_output_file(path: &Path, label: &str) -> Result<fs::File, String> {
+fn open_output_file(path: &Path, label: &str) -> Result<RetainedFile, String> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
     validate_output_path(path)?;
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    set_no_follow_flag(&mut options);
-    let file = options
-        .open(path)
-        .map_err(|err| format!("failed to open {label} {path:?}: {err}"))?;
-    let metadata = file
-        .metadata()
-        .map_err(|err| format!("failed to inspect {label} {path:?} after open: {err}"))?;
-    if !metadata.is_file() {
-        return Err(format!(
-            "failed to write {label} {path:?}: output must be a regular file"
-        ));
-    }
-    #[cfg(unix)]
-    if metadata.nlink() != 1 {
-        return Err(format!(
-            "failed to write {label} {path:?}: output must have exactly one hard link"
-        ));
-    }
-    Ok(file)
+    RetainedFile::create_new_private(path)
+        .map_err(|err| format!("failed to create retained {label} {path:?}: {err}"))
 }
 fn trusted_output_path(path: &Path, label: &str) -> Result<PathBuf, String> {
     let current_dir =
@@ -1612,12 +1596,15 @@ fn trusted_output_path(path: &Path, label: &str) -> Result<PathBuf, String> {
     validate_direct_parent_path(&direct_path, label)?;
     Ok(direct_path)
 }
-fn validate_open_output_identity(path: &Path, file: &fs::File, label: &str) -> Result<(), String> {
+fn validate_open_output_identity(
+    path: &Path,
+    file: &RetainedFile,
+    label: &str,
+) -> Result<(), String> {
     validate_direct_parent_path(path, label)?;
-    let opened = file
-        .metadata()
+    let opened = FileMetadata::of(file.file())
         .map_err(|err| format!("failed to inspect open {label} {path:?}: {err}"))?;
-    let linked = fs::symlink_metadata(path)
+    let linked = FileMetadata::symlink_metadata(path)
         .map_err(|err| format!("failed to re-inspect {label} {path:?}: {err}"))?;
     if linked.file_type().is_symlink()
         || !linked.is_file()
@@ -1625,11 +1612,11 @@ fn validate_open_output_identity(path: &Path, file: &fs::File, label: &str) -> R
     {
         return Err(format!("{label} {path:?} changed while being written"));
     }
-    #[cfg(unix)]
-    if opened.nlink() != 1 || linked.nlink() != 1 {
+    if opened.links() != 1 || linked.links() != 1 {
         return Err(format!("{label} {path:?} must have exactly one hard link"));
     }
-    Ok(())
+    file.revalidate()
+        .map_err(|err| format!("{label} custody changed while writing: {err}"))
 }
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent()
@@ -1757,6 +1744,15 @@ mod tests {
         write_bytes(&output_path, b"provider-advert").expect("write bytes");
         assert_eq!(
             fs::read(&output_path).expect("read output"),
+            b"provider-advert"
+        );
+        let retained = RetainedFile::open_private(&output_path).expect("private output custody");
+        validate_open_output_identity(&output_path, &retained, "test output")
+            .expect("retained output identity");
+        drop(retained);
+        assert_eq!(
+            read_trusted_regular_file(&output_path, "test output", 15, Some(15))
+                .expect("read bounded retained output"),
             b"provider-advert"
         );
     }
@@ -2168,7 +2164,6 @@ mod tests {
             );
         }
     }
-    #[cfg(unix)]
     #[test]
     fn trusted_input_rejects_hardlinks() {
         let temp = tempdir().expect("tempdir");
@@ -2189,23 +2184,21 @@ mod tests {
             "unexpected hard-link error: {err}"
         );
     }
-    #[cfg(unix)]
     #[test]
     fn trusted_metadata_detects_path_replacement() {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("provider.pub");
         let displaced = temp.path().join("provider.displaced");
         fs::write(&path, [0xA5; ED25519_PUBLIC_KEY_BYTES]).expect("write original");
-        let before = fs::symlink_metadata(&path).expect("inspect original");
+        let before = FileMetadata::symlink_metadata(&path).expect("inspect original");
         fs::rename(&path, &displaced).expect("displace original");
         fs::write(&path, [0xA5; ED25519_PUBLIC_KEY_BYTES]).expect("write replacement");
-        let after = fs::symlink_metadata(&path).expect("inspect replacement");
+        let after = FileMetadata::symlink_metadata(&path).expect("inspect replacement");
         assert!(
             !trusted_metadata_matches(&before, &after),
             "same-sized path replacement must not retain trusted identity"
         );
     }
-    #[cfg(unix)]
     #[test]
     fn write_bytes_rejects_existing_hardlinked_output_without_mutation() {
         let temp = tempdir().expect("tempdir");

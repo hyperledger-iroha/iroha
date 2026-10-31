@@ -24,6 +24,8 @@ from types import SimpleNamespace
 REPOSITORY = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY / "scripts"))
 import zk_resource_harness as harness
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from zk_resource_harness_native_fixture import NormalPublicationFixture
 
 FIXTURES = REPOSITORY / "crates" / "iroha_measurement" / "fixtures"
 DESCRIPTOR = harness.load_descriptor()
@@ -80,7 +82,7 @@ def fixture_repository(directory):
     return repository.resolve()
 
 
-def run_harness(arguments, stdin=None):
+def run_harness(arguments, stdin=None, *, on_refusal=None):
     """Invoke the CLI in-process; return (exit status, parsed stdout line, stderr)."""
     parsed = harness.parser().parse_args(arguments)
     if stdin is not None:
@@ -90,6 +92,8 @@ def run_harness(arguments, stdin=None):
         try:
             status = parsed.handler(parsed)
         except harness.HarnessRefusal as refusal:
+            if on_refusal is not None:
+                on_refusal(refusal, out.getvalue())
             return 2, {"refused": str(refusal)}, err.getvalue()
     lines = [json.loads(line) for line in out.getvalue().splitlines() if line]
     return status, (lines[-1] if lines else None), err.getvalue()
@@ -421,15 +425,263 @@ class IdentityTests(unittest.TestCase):
         self.assertFalse(harness._is_hex(None, (40,)))
 
 
+class ReadOnlyGitTests(unittest.TestCase):
+    """Real Git reads preserve the caller's index and ignore ambient redirection."""
+
+    def fresh_index(self, repository):
+        """Use real Git plumbing to create an index without cached worktree stats."""
+        git(repository, "read-tree", "--empty")
+        git(repository, "read-tree", "HEAD")
+        index = repository / ".git" / "index"
+        raw = index.read_bytes()
+        self.assertEqual(raw[:8], b"DIRC\x00\x00\x00\x02")
+        # The first real entry has no ctime/mtime/device/inode cache yet.
+        self.assertEqual(raw[12:36], bytes(24))
+        return index
+
+    def index_snapshot(self, index):
+        """Retain complete bytes, inode, mode and metadata, excluding access time."""
+        info = index.stat()
+        return (index.read_bytes(), info.st_dev, info.st_ino, info.st_mode,
+                info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+    def clean_environment(self):
+        """Keep caller process settings while removing only fixture Git overrides."""
+        return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+    def expected_dirty(self, repository, untracked):
+        """Derive the established dirty digest independently from genuine Git diff."""
+        diff = subprocess.run(
+            ["git", "-C", str(repository), "diff", "HEAD", "--binary", "--no-ext-diff", "--no-color"],
+            env=dict(self.clean_environment(), GIT_OPTIONAL_LOCKS="0"),
+            capture_output=True, check=True,
+        ).stdout
+        digest = hashlib.sha256(harness.DIRTY_DOMAIN)
+        digest.update(diff)
+        for name in sorted(untracked):
+            digest.update(b"\0untracked\0" + name.encode() + b"\0")
+            digest.update(hashlib.sha256((repository / name).read_bytes()).hexdigest().encode())
+        return digest.hexdigest()
+
+    def test_clean_status_and_source_state_preserve_fresh_index(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict(os.environ, self.clean_environment(), clear=True):
+            repository = fixture_repository(directory)
+            index = self.fresh_index(repository)
+            before = self.index_snapshot(index)
+            status = harness._git(repository, "status", "--porcelain=v1", "-z")
+            self.assertEqual((status.returncode, status.stdout), (0, b""))
+            self.assertEqual(self.index_snapshot(index), before)
+            state = harness.source_state(repository)
+            self.assertEqual(state, {"source_commit": git(repository, "rev-parse", "HEAD").decode(),
+                                     "source_dirty": False, "source_dirty_digest": None})
+            self.assertEqual(self.index_snapshot(index), before)
+
+    def test_dirty_tracked_and_untracked_digest_preserves_fresh_index(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict(os.environ, self.clean_environment(), clear=True):
+            repository = fixture_repository(directory)
+            (repository / "source.txt").write_bytes(b"different tracked source\n")
+            (repository / "new.txt").write_bytes(b"untracked source\n")
+            expected = self.expected_dirty(repository, ["new.txt"])
+            index = self.fresh_index(repository)
+            before = self.index_snapshot(index)
+            status = harness._git(repository, "status", "--porcelain=v1", "-z")
+            self.assertEqual((status.returncode, status.stdout), (0, b" M source.txt\0?? new.txt\0"))
+            state = harness.source_state(repository)
+            self.assertEqual(state["source_dirty_digest"], expected)
+            self.assertTrue(state["source_dirty"])
+            self.assertEqual(self.index_snapshot(index), before)
+
+    def test_ambient_redirect_trace_and_config_do_not_change_dirty_source(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict(os.environ, self.clean_environment(), clear=True):
+            root = Path(directory)
+            repository = fixture_repository(root)
+            alternate_parent = root / "alternate"; alternate_parent.mkdir()
+            alternate = fixture_repository(alternate_parent)
+            (repository / "source.txt").write_bytes(b"selected dirty source\n")
+            (repository / "new.txt").write_bytes(b"selected untracked source\n")
+            expected = self.expected_dirty(repository, ["new.txt"])
+            index = self.fresh_index(repository)
+            alternate_index = self.fresh_index(alternate)
+            before = self.index_snapshot(index)
+            other_before = self.index_snapshot(alternate_index)
+            excludes = root / "excludes"; excludes.write_text("new.txt\n")
+            trace = root / "trace"
+            overrides = {
+                "GIT_DIR": str(alternate / ".git"), "GIT_WORK_TREE": str(alternate),
+                "GIT_COMMON_DIR": str(alternate / ".git"), "GIT_INDEX_FILE": str(alternate_index),
+                "GIT_OBJECT_DIRECTORY": str(alternate / ".git/objects"),
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(alternate / ".git/objects"),
+                "GIT_OPTIONAL_LOCKS": "1", "GIT_TRACE": str(trace),
+                "GIT_TRACE2_EVENT": str(trace), "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "core.excludesFile", "GIT_CONFIG_VALUE_0": str(excludes),
+                "GIT_NAMESPACE": "unrelated", "GIT_LITERAL_PATHSPECS": "1",
+            }
+            with mock.patch.dict(os.environ, overrides):
+                ambient = dict(os.environ)
+                state = harness.source_state(repository)
+                self.assertTrue(state["source_dirty"])
+                self.assertEqual(state["source_dirty_digest"], expected)
+                self.assertEqual(os.environ, ambient)
+            self.assertFalse(trace.exists())
+            self.assertEqual(self.index_snapshot(index), before)
+            self.assertEqual(self.index_snapshot(alternate_index), other_before)
+
+    def test_ambient_valid_repository_cannot_rescue_invalid_caller_root(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict(os.environ, self.clean_environment(), clear=True):
+            root = Path(directory); repository = fixture_repository(root)
+            invalid = root / "not-a-repository"; invalid.mkdir()
+            index = self.fresh_index(repository); before = self.index_snapshot(index)
+            with mock.patch.dict(os.environ, {"GIT_DIR": str(repository / ".git"),
+                                              "GIT_WORK_TREE": str(repository)}):
+                with self.assertRaisesRegex(harness.HarnessRefusal, "no resolvable HEAD"):
+                    harness.source_state(invalid)
+            self.assertEqual(self.index_snapshot(index), before)
+
+    def test_tracked_refusal_and_ignored_admission_preserve_index(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict(os.environ, self.clean_environment(), clear=True):
+            repository = fixture_repository(directory)
+            index = self.fresh_index(repository); before = self.index_snapshot(index)
+            harness.source_state(repository)
+            with self.assertRaisesRegex(harness.HarnessRefusal, "output root contains tracked files"):
+                harness.ensure_untracked_root(repository, repository / "tracked")
+            self.assertEqual(harness.ensure_untracked_root(repository, repository / "generated/runs"),
+                             repository / "generated/runs")
+            self.assertEqual(self.index_snapshot(index), before)
+
+
+class GitEnvironmentRegistryTests(unittest.TestCase):
+    """A pure Git policy must not preinstall any retained custody owner."""
+
+    @staticmethod
+    def registry():
+        import linux_observer_delivery as delivery
+        import pipeline_registry
+        return pipeline_registry.ReviewedRegistry(
+            Path(delivery.__file__).parent, delivery.REVIEWED_MODULES)
+
+    def test_harness_import_then_real_registry_entry_needs_no_child_or_native_load(self):
+        import ctypes
+        name = "compute_workspace_source_manifest"
+        self.assertNotIn(name, sys.modules)
+        with mock.patch.object(subprocess, "Popen", side_effect=AssertionError("child forbidden")) as child, \
+                mock.patch.object(ctypes, "CDLL", side_effect=AssertionError("native load forbidden")) as library:
+            with self.registry() as registry:
+                self.assertIs(sys.modules[name], registry.modules[name])
+                registry.keeper.revalidate()
+            child.assert_not_called()
+            library.assert_not_called()
+        self.assertNotIn(name, sys.modules)
+
+    def test_local_environment_matches_registry_owned_canonical_sanitizer(self):
+        import ctypes
+        with mock.patch.object(subprocess, "Popen", side_effect=AssertionError("child forbidden")) as child, \
+                mock.patch.object(ctypes, "CDLL", side_effect=AssertionError("native load forbidden")) as library:
+            with self.registry() as registry:
+                canonical = registry.modules["compute_workspace_source_manifest"]
+                for environment in ({}, {"PATH": "/usr/bin:/bin", "HOME": "/fixture", "KEEP": "ordinary",
+                                         "GIT_DIR": "/wrong", "GIT_INDEX_FILE": "/wrong-index",
+                                         "GIT_TRACE": "/unwanted", "GIT_UNKNOWN_FUTURE": "redirect",
+                                         "GIT_OPTIONAL_LOCKS": "1", "GIT_CONFIG_COUNT": "900"}):
+                    with self.subTest(environment=environment), mock.patch.dict(os.environ, environment, clear=True):
+                        before = dict(os.environ)
+                        self.assertEqual(harness._git_read_only_environment(),
+                                         canonical._git_read_only_environment())
+                        self.assertEqual(os.environ, before)
+            child.assert_not_called()
+            library.assert_not_called()
+        self.assertNotIn("compute_workspace_source_manifest", sys.modules)
+
+    def test_preinstalled_canonical_owner_is_still_refused(self):
+        import ctypes
+        foreign = object()
+        with mock.patch.dict(sys.modules, {"compute_workspace_source_manifest": foreign}), \
+                mock.patch.object(subprocess, "Popen", side_effect=AssertionError("child forbidden")) as child, \
+                mock.patch.object(ctypes, "CDLL", side_effect=AssertionError("native load forbidden")) as library:
+            with self.assertRaisesRegex(RuntimeError, "already installed outside this reviewed registry"):
+                with self.registry():
+                    self.fail("foreign custody owner was admitted")
+            self.assertIs(sys.modules["compute_workspace_source_manifest"], foreign)
+            child.assert_not_called()
+            library.assert_not_called()
+
+
 class NativeRunTests(unittest.TestCase):
     """End to end with a real native child whose lifetime the test controls."""
 
+    publication_fixture = None
+
     def setUp(self):
+        if sys.platform.startswith("linux") and not isinstance(
+                self.publication_fixture, NormalPublicationFixture):
+            raise RuntimeError("NativeRunTests requires explicit normal-publisher inputs on Linux")
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.repository = fixture_repository(self.directory.name)
         self.root = Path(self.directory.name) / "runs"
         self.fed = None
+
+    def run_harness(self, arguments, stdin=None):
+        """Pass independent public pins; retain failed-invocation facts without granting manifest trust."""
+        if self.publication_fixture is not None:
+            import linux_observer_delivery as delivery
+            arguments = self.publication_fixture.arguments(arguments)
+            self.last_owned = None
+            self.last_public_error = None
+            self.last_public_stdout = None
+            self.last_run_directories_before = set(self.root.iterdir()) if self.root.exists() else set()
+            original_factory = delivery.ObserverDelivery.factory
+
+            def factory(module_owner, *values, **keywords):
+                """The real factory registers its owner before this test observes it."""
+                result = original_factory(module_owner, *values, **keywords)
+                self.last_owned = result
+                return result
+
+            def refusal(error, stdout):
+                """Keep the actual first-cause object and absence of a public acknowledgement."""
+                self.last_public_error = error
+                self.last_public_stdout = stdout
+
+            with mock.patch.object(delivery.ObserverDelivery, "factory", factory):
+                return run_harness(arguments, stdin=stdin, on_refusal=refusal)
+        elif arguments[0] == "salvage":
+            arguments = [arguments[0], "--require-observation-contract", "ordinary_native_v1",
+                         *arguments[1:]]
+        return run_harness(arguments, stdin=stdin)
+
+    def _owned_refusal_report(self, result, first):
+        """Inspect a task-owned failed diagnostic, never synthesize an accepted manifest pin."""
+        status, line, _ = result
+        self.assertEqual(status, 2)
+        self.assertEqual(set(line), {"refused"})
+        self.assertEqual(self.last_public_stdout, "")
+        self.assertIs(self.last_public_error.__cause__, first)
+        owner = self.last_owned
+        self.assertIsNotNone(owner)
+        self.assertIs(owner.first, first)
+        self.assertIs(owner.module_owner.first, first)
+        self.assertTrue(owner.closed and owner.native.closed and owner.module_owner.closed)
+        self.assertEqual(owner.waited[0], owner.child.pid)
+        self.assertEqual(owner.child.returncode, 0)
+        created = set(self.root.iterdir()) - self.last_run_directories_before
+        self.assertEqual(len(created), 1)
+        run = next(iter(created))
+        report = json.loads((run / "report.json").read_text())
+        self.assertEqual(report["verdict"], "rejected")
+        self.assertEqual(report["observation_contract"], "linux_owned_root_group_v1")
+        self.assertTrue(report["reasons"])
+        return run, report
+
+    def observation_requirement(self):
+        """Keep replay requirements independent of the just-produced report."""
+        if self.publication_fixture is not None:
+            return self.publication_fixture.requirement()
+        return {"expected_observation_contract": "ordinary_native_v1"}
 
     def record_for(self, context, pid, change=None):
         record = copy.deepcopy(GOLDEN)
@@ -446,6 +698,90 @@ class NativeRunTests(unittest.TestCase):
         return record
 
     def run_tee(self, change=None, hold_seconds=0.45, timeout="30", emit=True, extra=(),
+                files=("phase-tree.json",)):
+        """Use a fixture-only live-sample rendezvous after original child ownership."""
+        if self.publication_fixture is None:
+            return self._run_tee_ordinary(change, hold_seconds, timeout, emit, extra, files)
+        import linux_root_observer_abi as abi
+        import linux_owned_process_lifetime as lifetime
+        read_end, write_end = os.pipe()
+        released = threading.Event()
+        state = {"started": False, "initial": False, "error": None}
+        spawned = {}
+        real_popen = lifetime.OriginalLifetime.popen
+        real_install = lifetime.OriginalLifetime.install
+        real_capture = abi.NativeObservation.capture_initial
+        self.fed = None
+
+        def capture(owner, argv, **keywords):
+            environment = keywords.get("env") or {}
+            variable = DESCRIPTOR["harness_output_dir_env"]
+            if variable in environment:
+                spawned["child"] = Path(environment[variable])
+            # No fallible fixture step follows successful Popen before the
+            # production owner receives that exact original. The real Popen
+            # class stays intact for the native binding type check.
+            return real_popen(owner, argv, **keywords)
+
+        def feed():
+            try:
+                if not released.wait(20):
+                    raise RuntimeError("fixture initial-sample rendezvous was not reached")
+                if emit and "pid" in spawned:
+                    context = json.loads((spawned["child"] / "context.json").read_text())
+                    record = self.record_for(context, spawned["pid"], change)
+                    self.fed = json.dumps(record).encode()
+                    view = memoryview(self.fed)
+                    while view:
+                        view = view[os.write(write_end, view):]
+                if hold_seconds is not None:
+                    time.sleep(hold_seconds)
+            except BaseException as error:
+                state["error"] = error
+            finally:
+                if hold_seconds is not None:
+                    os.close(write_end)
+
+        feeder = threading.Thread(target=feed)
+
+        def install(owner, child, timeout_ms):
+            real_install(owner, child, timeout_ms)
+            spawned["pid"] = child.pid
+            # The original is installed before this fallible thread start.
+            feeder.start()
+            state["started"] = True
+
+        def initial(native):
+            try:
+                result = real_capture(native)
+                state["initial"] = True
+                return result
+            finally:
+                released.set()
+
+        try:
+            with mock.patch.object(lifetime.OriginalLifetime, "popen", capture), \
+                    mock.patch.object(lifetime.OriginalLifetime, "install", install), \
+                    mock.patch.object(abi.NativeObservation, "capture_initial", initial), \
+                    os.fdopen(read_end, "rb") as stdin:
+                result = self.run_harness(
+                    ["run", "--repository", str(self.repository), *SCOPE,
+                     "--output-root", str(self.root), "--interval-ms", "50",
+                     "--timeout-seconds", timeout, *extra, "--", str(TEE),
+                     *("{output_dir}/" + name for name in files)], stdin=stdin)
+        finally:
+            released.set()
+            if state["started"]:
+                feeder.join(25)
+                self.assertFalse(feeder.is_alive(), "fixture feeder did not terminate")
+            if hold_seconds is None or not state["started"]:
+                os.close(write_end)
+        if state["error"] is not None:
+            raise state["error"]
+        self.initial_fixture_sample = state["initial"]
+        return result
+
+    def _run_tee_ordinary(self, change=None, hold_seconds=0.45, timeout="30", emit=True, extra=(),
                 files=("phase-tree.json",)):
         """Run `tee {output_dir}/<file>...`, feeding it one record on stdin."""
         read_end, write_end = os.pipe()
@@ -485,7 +821,7 @@ class NativeRunTests(unittest.TestCase):
         try:
             with mock.patch.object(harness.subprocess, "Popen", side_effect=capture), \
                     os.fdopen(read_end, "rb") as stdin:
-                result = run_harness(
+                result = self.run_harness(
                     ["run", "--repository", str(self.repository), *SCOPE, "--output-root", str(self.root),
                      "--interval-ms", "50", "--timeout-seconds", timeout, *extra, "--",
                      str(TEE), *("{output_dir}/" + name for name in files)], stdin=stdin)
@@ -624,13 +960,93 @@ class NativeRunTests(unittest.TestCase):
         # The report names the place of the unknown key, never its text.
         self.assertNotIn(b"witness", (run / "report.json").read_bytes())
 
-    def fail(self, *extra):
-        return run_harness(["run", "--repository", str(self.repository), *SCOPE, "--output-root", str(self.root),
+    def _run_after_live_input(self, arguments, payload):
+        """Feed bounded runtime-only stdin after the actual owned Linux live sample."""
+        import linux_root_observer_abi as abi
+        import linux_owned_process_lifetime as lifetime
+        self.assertIsNotNone(self.publication_fixture)
+        self.assertIsInstance(payload, bytes)
+        read_end = write_end = None
+        state = {"writer": None, "sampled": False, "close_error": None}
+        real_initial = abi.NativeObservation.capture_initial
+        real_cleanup = lifetime.OriginalLifetime.cleanup
+
+        def close_writer():
+            """Release EOF once; no inherited extra writer can hold the real CAT open."""
+            descriptor = state["writer"]
+            if descriptor is not None:
+                state["writer"] = None
+                os.close(descriptor)
+
+        def initial(native):
+            """Neither a delay nor an invented sample can release this fixture input."""
+            first = None
+            try:
+                result = real_initial(native)
+                self.assertIsNotNone(native._initial_raw)
+                self.assertFalse(state["sampled"])
+                state["sampled"] = True
+                if payload:
+                    self.assertEqual(os.write(write_end, payload), len(payload))
+                return result
+            except BaseException as error:
+                first = error
+                raise
+            finally:
+                try:
+                    close_writer()
+                except BaseException as error:
+                    state["close_error"] = error
+                    if first is None:
+                        raise
+
+        def cleanup(owner, *arguments, **keywords):
+            """Release fixture input before production cleanup even on pre-sample setup errors."""
+            try:
+                close_writer()
+            except BaseException as error:
+                state["close_error"] = error
+                owner.retain('outer_run', error)
+            return real_cleanup(owner, *arguments, **keywords)
+
+        stdin = None
+        try:
+            read_end, write_end = os.pipe()
+            state["writer"] = write_end
+            stdin = os.fdopen(read_end, "rb")
+            os.set_inheritable(write_end, False)
+            os.set_blocking(write_end, False)
+            self.assertLessEqual(len(payload), os.fpathconf(write_end, "PC_PIPE_BUF"))
+            with mock.patch.object(abi.NativeObservation, "capture_initial", initial), \
+                    mock.patch.object(lifetime.OriginalLifetime, "cleanup", cleanup):
+                result = self.run_harness(arguments, stdin=stdin)
+        finally:
+            try:
+                close_writer()
+            finally:
+                if stdin is not None:
+                    stdin.close()
+                elif read_end is not None:
+                    os.close(read_end)
+        self.assertIsNone(state["close_error"])
+        self.assertTrue(state["sampled"])
+        self.initial_fixture_sample = True
+        return result
+
+    def run_failed_command(self, *extra):
+        if self.publication_fixture is not None:
+            # Native-only '-' makes this actual CAT wait for admitted stdin EOF;
+            # ordinary platforms keep the original absent-file argv below.
+            return self._run_after_live_input(
+                ["run", "--repository", str(self.repository), *SCOPE, "--output-root", str(self.root),
+                 "--interval-ms", "50", "--timeout-seconds", "30", *extra, "--", str(CAT), "-",
+                 str(Path(self.directory.name) / "absent-input")], b"")
+        return self.run_harness(["run", "--repository", str(self.repository), *SCOPE, "--output-root", str(self.root),
                             "--interval-ms", "50", "--timeout-seconds", "30", *extra, "--",
                             str(CAT), str(Path(self.directory.name) / "absent-input")])
 
     def test_failed_commands_are_recorded_and_earlier_failures_are_never_erased(self):
-        status, line, _ = self.fail()
+        status, line, _ = self.run_failed_command()
         self.assertEqual((status, line["verdict"]), (1, "rejected"))
         self.assertEqual(line["reasons"], ["command_exit:1", "no_record_emitted"])
         first, report = self.report(line)
@@ -646,7 +1062,7 @@ class NativeRunTests(unittest.TestCase):
         self.assertFalse((first / "stderr.log").exists())
         snapshot = {path: (first / path).read_bytes() for path in ("report.json", "manifest.json")}
         # Later runs, failing or succeeding, leave the earlier failure untouched.
-        second = Path(self.fail()[1]["run_directory"])
+        second = Path(self.run_failed_command()[1]["run_directory"])
         accepted = Path(self.run_tee()[1]["run_directory"])
         self.assertEqual(len({first, second, accepted}), 3)
         self.assertEqual({path: (first / path).read_bytes() for path in snapshot}, snapshot)
@@ -660,7 +1076,23 @@ class NativeRunTests(unittest.TestCase):
         markers = (b"MARKER_STDOUT_4e9314", b"MARKER_ARGV_77aa01", b"0xDEADBEEF", b"secret.txt")
 
         def run(*extra):
-            return run_harness(["run", "--repository", str(self.repository), *SCOPE, "--output-root",
+            if self.publication_fixture is not None:
+                # This task-owned runtime alias is not a source/artifact input.
+                # CAT keeps exactly the original two argv operands. Its fd0 read
+                # end exists before exec, so queued bytes survive a later open.
+                printed = secret.read_bytes()
+                secret.unlink()
+                try:
+                    secret.symlink_to("/dev/stdin")
+                    return self._run_after_live_input(
+                        ["run", "--repository", str(self.repository), *SCOPE, "--output-root", str(self.root),
+                         "--interval-ms", "50", "--timeout-seconds", "30", *extra, "--",
+                         str(CAT), str(secret), str(absent)], printed)
+                finally:
+                    if secret.is_symlink():
+                        secret.unlink()
+                    secret.write_bytes(printed)
+            return self.run_harness(["run", "--repository", str(self.repository), *SCOPE, "--output-root",
                                 str(self.root), "--interval-ms", "50", "--timeout-seconds", "30", *extra, "--",
                                 str(CAT), str(secret), str(absent)])
 
@@ -758,35 +1190,116 @@ class NativeRunTests(unittest.TestCase):
             self.assertEqual(sampled["state"], "not_sampled")
             self.assertIn(sampled["reason"], ("exited_before_first_sample", "exited_before_second_sample"))
             self.assertLess(sampled["observations"], 2)
+        if self.publication_fixture is not None:
+            self.assertTrue(self.initial_fixture_sample)
+            self.assertIsNotNone(self.last_owned.native._initial_raw)
+            self.assertTrue(self.last_owned.joined and self.last_owned.native.closed)
         # The kernel's totals for the child are exact without any sample.
         self.assertGreater(report["process"]["peak_rss_bytes"], 4096)
         self.assertEqual(report["process"]["peak_rss_source"], "kernel_child_rusage")
         self.assertEqual(report["process"]["exit"], {"kind": "exited", "code": 0})
 
-    def test_a_running_image_other_than_the_pinned_executable_is_an_identity_failure(self):
+    def _owned_sampling_failure_controls(self):
+        """Require genuine initial/periodic failure triggers, original first cause and closed ownership."""
+        import linux_owned_process_observer as owned_reader
+        import linux_root_observer_abi as abi
+        original = owned_reader.OwnedLinuxProcessReader.sample
         differs = harness.observer.ProcessObservationError("running Mach-O image differs")
-        with mock.patch.object(harness.observer.ProcessScope, "observe", side_effect=differs):
-            status, line, _ = self.run_tee(hold_seconds=0.3)
-        self.assertEqual(status, 1)
-        self.assertEqual(line["reasons"], ["process_observation_failed:executable_image_differs"])
-        _, report = self.report(line)
-        self.assertEqual(report["process"]["sampled"],
-                         {"state": "failed", "reason": "executable_image_differs"})
-        # Another observer failure while the process stays alive is reported
-        # under its own fixed reason, not as an early exit.
+        first_calls = []
+
+        def first_failure(reader, pid, image):
+            self.assertIsNone(reader._admission_raw)
+            first_calls.append((reader, pid))
+            raise differs
+
+        with mock.patch.object(owned_reader.OwnedLinuxProcessReader, "sample", first_failure):
+            result = self.run_tee(hold_seconds=0.3)
+        _, report = self._owned_refusal_report(result, differs)
+        self.assertEqual(len(first_calls), 1)
+        self.assertEqual(first_calls[0][1], self.last_owned.child.pid)
+        self.assertFalse(self.initial_fixture_sample)
+        self.assertIsNone(self.last_owned.native._initial_raw)
+        self.assertTrue(harness._image_differs(differs))
+        self.assertEqual(report["process"]["sampled"]["state"], "failed")
+        self.assertTrue(any(fact["stage"] == "baseline" and fact["type"] == type(differs).__module__ + "." + type(differs).__qualname__
+                            for fact in report["process"]["sampled"]["observation_exceptions"]))
+        # No initial sample exists, so the original reap cannot join a complete
+        # admission. This is deliberately distinct from the ordinary reader's
+        # executable_image_differs summary; no evidence is manufactured.
+        self.assertFalse(self.last_owned.joined)
+        self.assertEqual(report["process"]["sampled"]["reason"], "linux_owned_evidence_invalid")
+        self.assertEqual(report["process"]["sampled"]["observation_exceptions"], [
+            harness._observer_exception_fact("baseline", differs),
+            {"stage": "native_reap_join", "type": abi.Refusal.__module__ + "." + abi.Refusal.__qualname__, "errno": None},
+            {"stage": "linux_owned_evidence", "type": type(differs).__module__ + "." + type(differs).__qualname__, "errno": None},
+        ])
+        self.assertEqual(report["reasons"], [
+            "process_observation_failed:linux_owned_evidence_invalid",
+            "linux_owned_evidence_invalid",
+            "process_observation_exception:" + type(differs).__module__ + "." + type(differs).__qualname__ + ":None",
+            "process_observation_exception:" + abi.Refusal.__module__ + "." + abi.Refusal.__qualname__ + ":None",
+        ])
         other = harness.observer.ProcessObservationError("native process accounting unavailable")
-        real = harness.observer.ProcessScope.observe
         calls = []
 
-        def baseline_then_fail(scope):
-            calls.append(scope)
-            if len(calls) == 1:
-                return real(scope)
-            raise other
+        def after_initial(reader, pid, image):
+            calls.append(reader._admission_raw is not None)
+            if reader._admission_raw is not None:
+                raise other
+            return original(reader, pid, image)
 
-        with mock.patch.object(harness.observer.ProcessScope, "observe", baseline_then_fail):
-            status, line, _ = self.run_tee(hold_seconds=0.4)
-        self.assertEqual(line["reasons"], ["process_observation_failed:process_observation_failed"])
+        with mock.patch.object(owned_reader.OwnedLinuxProcessReader, "sample", after_initial):
+            result = self.run_tee(hold_seconds=0.4)
+        _, report = self._owned_refusal_report(result, other)
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertEqual(calls[0], False)
+        self.assertTrue(all(calls[1:]))
+        self.assertTrue(self.initial_fixture_sample)
+        self.assertIsNotNone(self.last_owned.native._initial_raw)
+        self.assertFalse(harness._image_differs(other))
+        self.assertEqual(report["process"]["sampled"]["state"], "failed")
+        self.assertTrue(any(fact["stage"] == "sample" and fact["type"] == type(other).__module__ + "." + type(other).__qualname__
+                            for fact in report["process"]["sampled"]["observation_exceptions"]))
+        # A complete initial admission and lifecycle do not waive a later
+        # ordinary sampler error. Replay must also reject the failed sample.
+        self.assertTrue(self.last_owned.joined)
+        self.assertEqual(report["process"]["sampled"]["reason"], "linux_owned_observation_failed")
+        self.assertEqual(report["process"]["sampled"]["observation_exceptions"], [
+            harness._observer_exception_fact("sample", other),
+        ])
+        self.assertEqual(report["reasons"], [
+            "process_observation_failed:linux_owned_observation_failed",
+            "linux_owned_evidence_invalid",
+            "process_observation_exception:" + type(other).__module__ + "." + type(other).__qualname__ + ":None",
+        ])
+
+    def test_a_running_image_other_than_the_pinned_executable_is_an_identity_failure(self):
+        if self.publication_fixture is not None:
+            self._owned_sampling_failure_controls()
+        else:
+            differs = harness.observer.ProcessObservationError("running Mach-O image differs")
+            with mock.patch.object(harness.observer.ProcessScope, "observe", side_effect=differs):
+                status, line, _ = self.run_tee(hold_seconds=0.3)
+            self.assertEqual(status, 1)
+            self.assertEqual(line["reasons"], ["process_observation_failed:executable_image_differs"])
+            _, report = self.report(line)
+            self.assertEqual(report["process"]["sampled"],
+                             {"state": "failed", "reason": "executable_image_differs"})
+            # Another observer failure while the process stays alive is reported
+            # under its own fixed reason, not as an early exit.
+            other = harness.observer.ProcessObservationError("native process accounting unavailable")
+            real = harness.observer.ProcessScope.observe
+            calls = []
+
+            def baseline_then_fail(scope):
+                calls.append(scope)
+                if len(calls) == 1:
+                    return real(scope)
+                raise other
+
+            with mock.patch.object(harness.observer.ProcessScope, "observe", baseline_then_fail):
+                status, line, _ = self.run_tee(hold_seconds=0.4)
+            self.assertEqual(line["reasons"], ["process_observation_failed:process_observation_failed"])
         # The pinned executable must still be the same file after the run.
         real_observe, real_validate = harness.observe_child, harness.observer.ExecutableImage.validate
         observed = []
@@ -796,15 +1309,26 @@ class NativeRunTests(unittest.TestCase):
             observed.append(result["pid"])
             return result
 
+        late_failures = []
+
         def validate(image):
-            if observed:
-                raise harness.observer.ProcessObservationError("pinned executable changed")
+            if observed and (self.publication_fixture is None or not late_failures):
+                error = harness.observer.ProcessObservationError("pinned executable changed")
+                late_failures.append(error)
+                raise error
             return real_validate(image)
 
         with mock.patch.object(harness, "observe_child", observe), \
                 mock.patch.object(harness.observer.ExecutableImage, "validate", validate):
             status, line, _ = self.run_tee(hold_seconds=0.2)
         self.assertEqual((status, line["reasons"]), (1, ["executable_changed_during_run"]))
+        if self.publication_fixture is not None:
+            self.assertEqual(len(late_failures), 1)
+            self.assertTrue(self.initial_fixture_sample)
+            self.assertTrue(self.last_owned.closed and self.last_owned.native.closed)
+            self.assertTrue(self.last_owned.joined)
+            self.assertEqual(self.last_owned.waited[0], self.last_owned.child.pid)
+            self.assertEqual(self.last_owned.child.returncode, 0)
 
     def test_timeout_kills_only_the_child_and_retains_the_run(self):
         status, line, _ = self.run_tee(hold_seconds=None, timeout="1")
@@ -845,8 +1369,9 @@ class NativeRunTests(unittest.TestCase):
         self.assertEqual((status, line["reasons"]), (1, ["record_rejected:0"]))
 
     def test_a_record_must_observe_exactly_the_limit_the_harness_applied(self):
-        # The platform's refusal is replaced by a success, as on Linux; the
-        # cross-check itself needs no particular kernel.
+        # These five policy cross-checks model successful application and an
+        # unavailable kernel observation. Actual 8GiB kernel enforcement has
+        # its separate unchanged test above; this no-op is not such evidence.
         applied = mock.patch.object(harness, "_limit_address_space", lambda limit: (lambda: None))
         request = ("--address-space-limit-bytes", str(self.LIMIT))
         cases = (
@@ -857,7 +1382,7 @@ class NativeRunTests(unittest.TestCase):
             (self.observed_limit(self.LIMIT, self.LIMIT, True), []),
         )
         for change, expected in cases:
-            with applied:
+            with applied, mock.patch.object(harness, "kernel_address_space_limit", return_value=None):
                 status, line, _ = self.run_tee(change=change, hold_seconds=0.2, extra=request)
             _, report = self.report(line)
             self.assertEqual(report["records"][0]["findings"], expected)
@@ -947,18 +1472,29 @@ class NativeRunTests(unittest.TestCase):
         self.assertEqual((status, line["verdict"], line["manifest_sha256"]), (1, "rejected", None))
         run = Path(line["run_directory"])
         self.assertEqual(json.loads((run / "harness_failure.json").read_text()),
-                         {"schema": "iroha.measurement.harness_failure.v1", "reason": "OSError"})
+                         {"schema": "iroha.measurement.harness_failure.v1", "reason": "OSError",
+                          "observation_exceptions": []})
         self.assertFalse((run / "report.json").exists() or (run / "manifest.json").exists())
         # The record the command wrote is still retained.
         self.assertTrue((run / "child" / "phase-tree.json").is_file())
         scope = harness.build_context(DESCRIPTOR, self.repository, harness.sha256_file(TEE)[0],
                                       "test+tee", "defaults", "reference/unit-test-host", "warm")
-        self.assertEqual(harness.salvage_reasons(run, scope), ["manifest_digest_required"])
+        self.assertEqual(harness.salvage_reasons(run, scope, **self.observation_requirement()), ["manifest_digest_required"])
         # A failure inside the run itself is a retained, rejected report.
-        with mock.patch.object(harness, "collect_records", side_effect=RuntimeError("judge failed")):
-            status, line, _ = self.run_tee(hold_seconds=0.2)
-        self.assertEqual((status, line["reasons"]), (1, ["harness_failure:RuntimeError"]))
-        self.assertEqual(self.report(line)[1]["verdict"], "rejected")
+        first = RuntimeError("judge failed")
+        with mock.patch.object(harness, "collect_records", side_effect=first):
+            result = self.run_tee(hold_seconds=0.2)
+        if self.publication_fixture is not None:
+            _, report = self._owned_refusal_report(result, first)
+            self.assertTrue(self.initial_fixture_sample)
+            self.assertIn("harness_failure:RuntimeError", report["reasons"])
+            self.assertEqual(set(report["reasons"]), {
+                "harness_failure:RuntimeError", "process_observation_exception:builtins.RuntimeError:None"})
+            self.assertEqual(report["verdict"], "rejected")
+        else:
+            status, line, _ = result
+            self.assertEqual((status, line["reasons"]), (1, ["harness_failure:RuntimeError"]))
+            self.assertEqual(self.report(line)[1]["verdict"], "rejected")
 
     def test_refusals_precede_any_run_directory(self):
         base = ["run", "--repository", str(self.repository), *SCOPE, "--output-root", str(self.root)]
@@ -978,12 +1514,49 @@ class NativeRunTests(unittest.TestCase):
             ["run", "--repository", str(self.repository), "--hardware", "unbound", "--profile", "p",
              "--config", "c", "--cache-policy", "cold", "--output-root", str(self.root), "--", str(CAT)],
         ):
-            status, line, _ = run_harness(arguments)
+            reached = []
+            original_run = harness.run_command
+
+            def run_checked(*values, **keywords):
+                try:
+                    return original_run(*values, **keywords)
+                except harness.HarnessRefusal as error:
+                    reached.append(error)
+                    raise
+
+            with mock.patch.object(harness, "run_command", run_checked), \
+                    mock.patch.object(harness, "new_run_directory", side_effect=AssertionError("prelaunch allocated run")) as allocated:
+                status, line, _ = self.run_harness(arguments)
             self.assertEqual(status, 2, arguments)
             self.assertIn("refused", line)
+            self.assertEqual(len(reached), 1)
+            allocated.assert_not_called()
+            if self.publication_fixture is not None:
+                self.assertIs(self.last_public_error.__cause__, reached[0])
+                self.assertIsNone(self.last_owned)
+                self.assertEqual(self.last_public_stdout, "")
         self.assertFalse(self.root.exists())
-        self.assertEqual(harness.main(["run", *SCOPE, "--output-root", str(REPOSITORY / "scripts"), "--",
-                                       str(CAT)]), 2)
+        if self.publication_fixture is not None:
+            direct = self.publication_fixture.arguments(
+                ["run", *SCOPE, "--output-root", str(REPOSITORY / "scripts"), "--", str(CAT)])
+            refused = []
+            original_root = harness.ensure_untracked_root
+
+            def tracked_root(*values, **keywords):
+                try:
+                    return original_root(*values, **keywords)
+                except harness.HarnessRefusal as error:
+                    refused.append(error)
+                    raise
+
+            with mock.patch.object(harness, "ensure_untracked_root", tracked_root), \
+                    mock.patch.object(harness, "new_run_directory", side_effect=AssertionError("tracked run allocated")) as allocated:
+                self.assertEqual(harness.main(direct), 2)
+            allocated.assert_not_called()
+            self.assertEqual([str(error) for error in refused], ["output root contains tracked files"])
+        else:
+            self.assertEqual(harness.main(["run", *SCOPE, "--output-root", str(REPOSITORY / "scripts"), "--",
+                                           str(CAT)]), 2)
 
     def salvage_scope(self):
         return ["salvage", "--repository", str(self.repository), *SCOPE, "--executable", str(TEE)]
@@ -994,50 +1567,50 @@ class NativeRunTests(unittest.TestCase):
         run = Path(line["run_directory"])
         scope = [*self.salvage_scope(), "--manifest-sha256", line["manifest_sha256"]]
         before = {path: os.stat(path).st_mtime_ns for path in run.rglob("*")}
-        result = run_harness([*scope, str(run)])
+        result = self.run_harness([*scope, str(run)])
         self.assertEqual(result[0], 0)
         self.assertEqual(result[1]["reasons"], [])
         self.assertEqual(result[1]["manifest_binding"], "external_sha256")
         self.assertEqual(result[1]["original_requirements"], result[1]["consumer_requirements"])
-        consumer = run_harness([*scope, "--require-thermal-state", str(run)])[1]
+        consumer = self.run_harness([*scope, "--require-thermal-state", str(run)])[1]
         self.assertFalse(consumer["salvageable"])
         self.assertIn("consumer_requirement_not_established:thermal_state", consumer["reasons"])
         self.assertFalse(consumer["original_requirements"]["thermal_state"])
         self.assertTrue(consumer["consumer_requirements"]["thermal_state"])
         self.assertEqual({path: os.stat(path).st_mtime_ns for path in run.rglob("*")}, before)
         other = [*scope[:3], "--hardware", "another/host", *scope[5:]]
-        self.assertEqual(run_harness([*other, str(run)])[1]["reasons"],
+        self.assertEqual(self.run_harness([*other, str(run)])[1]["reasons"],
                          ["record_scope_differs:0:hardware", "scope_differs:hardware"])
         other_executable = [str(CAT) if value == str(TEE) else value for value in scope]
-        self.assertEqual(run_harness([*other_executable, str(run)])[1]["reasons"],
+        self.assertEqual(self.run_harness([*other_executable, str(run)])[1]["reasons"],
                          ["record_scope_differs:0:artifact", "scope_differs:artifact"])
         (self.repository / "source.txt").write_text("changed after the run\n")
-        self.assertEqual(run_harness([*scope, str(run)])[1]["reasons"],
+        self.assertEqual(self.run_harness([*scope, str(run)])[1]["reasons"],
                          ["record_scope_differs:0:source_dirty", "record_scope_differs:0:source_dirty_digest",
                           "scope_differs:source_dirty", "scope_differs:source_dirty_digest"])
         (self.repository / "source.txt").write_text("tracked\n")
-        self.assertEqual(run_harness([*scope, str(run)])[0], 0)
+        self.assertEqual(self.run_harness([*scope, str(run)])[0], 0)
         copied = Path(self.directory.name) / "copied"
         shutil.copytree(run, copied)
         with open(copied / "child" / "context.json", "ab") as stream:
             stream.write(b"edited")
         (copied / "extra.txt").write_text("added")
         os.unlink(copied / "observations" / "baseline.json")
-        findings = run_harness([*scope, str(copied)])[1]["reasons"]
+        findings = self.run_harness([*scope, str(copied)])[1]["reasons"]
         for prefix in ("evidence_changed:", "evidence_missing:", "unexpected_evidence_entry:"):
             self.assertTrue(any(reason.startswith(prefix) for reason in findings))
         self.assertNotIn("extra.txt", str(findings))
         rejected_line = self.run_tee(change=lambda record: record.update(schema="other"),
                                      hold_seconds=0.2)[1]
         rejected = Path(rejected_line["run_directory"])
-        self.assertEqual(run_harness([*self.salvage_scope(), "--manifest-sha256",
+        self.assertEqual(self.run_harness([*self.salvage_scope(), "--manifest-sha256",
                                       rejected_line["manifest_sha256"], str(rejected)])[1]["reasons"],
                          ["run_was_rejected"])
-        self.assertEqual(harness.salvage_reasons(run, {}), ["manifest_digest_required"])
-        self.assertEqual(harness.salvage_reasons(run, {}, "bad"), ["manifest_digest_invalid"])
-        self.assertEqual(run_harness([*self.salvage_scope(), "--manifest-sha256", "0" * 64,
+        self.assertEqual(harness.salvage_reasons(run, {}, **self.observation_requirement()), ["manifest_digest_required"])
+        self.assertEqual(harness.salvage_reasons(run, {}, "bad", **self.observation_requirement()), ["manifest_digest_invalid"])
+        self.assertEqual(self.run_harness([*self.salvage_scope(), "--manifest-sha256", "0" * 64,
                                       str(run)])[1]["reasons"], ["manifest_digest_differs"])
-        self.assertEqual(run_harness([*self.salvage_scope(), "--manifest-sha256", "not-a-digest",
+        self.assertEqual(self.run_harness([*self.salvage_scope(), "--manifest-sha256", "not-a-digest",
                                       str(run)])[0], 2)
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             harness.parser().parse_args([*self.salvage_scope(), str(run)])
@@ -1068,7 +1641,7 @@ class NativeRunTests(unittest.TestCase):
             if "--manifest-sha256" not in arguments:
                 arguments = (*arguments[:-1], "--manifest-sha256",
                              harness.sha256_file(Path(arguments[-1]) / "manifest.json")[0], arguments[-1])
-            return run_harness(list(arguments))[1]["reasons"]
+            return self.run_harness(list(arguments))[1]["reasons"]
         rejected = Path(self.run_tee(change=lambda record: record.update(schema="other"),
                                      hold_seconds=0.2)[1]["run_directory"])
         self.assertEqual(reasons(*scope, str(rejected)), ["run_was_rejected"])
@@ -1122,6 +1695,11 @@ class NativeRunTests(unittest.TestCase):
                                                     lambda manifest: manifest.update(classification="other")))),
                          ["manifest_digest_differs"])
         # Malformed manifests and reports are named, never interpreted.
+        accepted_manifest = json.loads((accepted / "manifest.json").read_text())
+        bound_paths = [row["path"] for row in accepted_manifest["files"]]
+        self.assertEqual(bound_paths, sorted(bound_paths))
+        self.assertEqual(bound_paths.count("report.json"), 1)
+        report_index = bound_paths.index("report.json")
         for name, change, expected in (
             ("manifest.json", lambda manifest: manifest.update(files="none"), ["manifest_malformed"]),
             ("manifest.json", lambda manifest: manifest.update(context="none"), ["manifest_malformed"]),
@@ -1134,7 +1712,7 @@ class NativeRunTests(unittest.TestCase):
              ["manifest_malformed"]),
             ("manifest.json", lambda manifest: manifest.update(
                 files=[row for row in manifest["files"] if row["path"] != "report.json"]),
-             ["evidence_added:3", "report_not_bound"]),
+             [f"evidence_added:{report_index}", "report_not_bound"]),
             ("report.json", lambda report: report.pop("host"), ["report_malformed"]),
             ("report.json", lambda report: report.update(reasons=[1]), ["report_malformed"]),
             ("report.json", lambda report: report.update(requirements={}), ["report_requirements_invalid"]),
@@ -1157,6 +1735,29 @@ class ObservationExitRaceTests(unittest.TestCase):
         patcher = mock.patch.object(harness, "_owned_child_monitor", return_value=None)
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_exit_during_sampling_sleep_is_reaped_before_a_live_observation(self):
+        usage = SimpleNamespace(ru_utime=1.0, ru_stime=1.0, ru_maxrss=1024)
+        child = SimpleNamespace(pid=424242, returncode=None)
+        reader = mock.Mock()
+        scope = SimpleNamespace(initial={}, observe=mock.Mock(
+            side_effect=AssertionError("an exited child has no live process sample")))
+        journal = SimpleNamespace(append=mock.Mock(), flush=mock.Mock(), failed=False, count=1)
+        with mock.patch.object(harness.observer, "native_reader", return_value=reader), \
+                mock.patch.object(harness.observer, "ProcessScope", return_value=scope), \
+                mock.patch.object(harness.observer, "ResourceObservationJournal", return_value=journal), \
+                mock.patch.object(harness.os, "getpgid", return_value=1), \
+                mock.patch.object(harness.time, "sleep"), \
+                mock.patch.object(harness, "_try_reap", side_effect=[None, (0, usage)]) as reaped:
+            result = harness.observe_child(child, mock.Mock(), mock.Mock(), 100, 10000)
+        self.assertEqual(result["sampled"], {"state": "not_sampled",
+                                           "reason": "exited_before_second_sample", "observations": 1})
+        self.assertEqual(result["exit"], {"kind": "exited", "code": 0})
+        self.assertFalse(result["timed_out"])
+        self.assertEqual(reaped.call_count, 2)
+        scope.observe.assert_not_called()
+        journal.flush.assert_called_once()
+        reader.close.assert_called_once()
 
     def test_immediate_reap_establishes_an_actual_exit_race(self):
         usage = SimpleNamespace(ru_utime=1.0, ru_stime=1.0, ru_maxrss=1024)
@@ -1232,6 +1833,7 @@ class PinnedEvidenceTests(unittest.TestCase):
         entries, orphans, reasons = harness.collect_records(DESCRIPTOR, run, context, process, requirements)
         stream = {"bytes": 0, "sha256": hashlib.sha256(b"").hexdigest(), "complete": True, "tail": None}
         report = {"schema": harness.REPORT_SCHEMA, "context": context,
+                  "observation_contract": "ordinary_native_v1",
                   "command": {"arguments": None}, "host": {},
                   "limits": {"classification": "local_scheduling", "requested_address_space_bytes": limit,
                              "timeout_ms": 10000, "sampling_interval_ms": 100, "output_tail_bytes": 0},
@@ -1250,10 +1852,10 @@ class PinnedEvidenceTests(unittest.TestCase):
     def test_mandatory_pin_refuses_before_open_and_safe_reader_returns_bound_documents(self):
         run, pin, report = self.fixture()
         with mock.patch.object(harness, "_EvidenceDirectory", side_effect=AssertionError("must not open")):
-            self.assertEqual(harness.salvage_reasons(run, {}), ["manifest_digest_required"])
+            self.assertEqual(harness.salvage_reasons(run, {}, expected_observation_contract='ordinary_native_v1'), ["manifest_digest_required"])
             for invalid in (True, 42, "x" * 64, "1" * 63, "A" * 64):
-                self.assertEqual(harness.salvage_reasons(run, {}, invalid), ["manifest_digest_invalid"])
-        result = harness.read_pinned_run(run, pin)
+                self.assertEqual(harness.salvage_reasons(run, {}, invalid, expected_observation_contract='ordinary_native_v1'), ["manifest_digest_invalid"])
+        result = harness.read_pinned_run(run, pin, expected_observation_contract='ordinary_native_v1')
         self.assertEqual(result["report"], report)
         self.assertEqual(result["manifest_sha256"], pin)
         self.assertEqual(set(result["documents"]), {"child/record.json"})
@@ -1278,7 +1880,7 @@ class PinnedEvidenceTests(unittest.TestCase):
                 if row["path"] == "report.json":
                     row["sha256"], row["bytes"] = harness.sha256_file(run / "report.json")
             (run / "manifest.json").write_bytes(harness.control.canonical(manifest))
-            self.assertEqual(harness.salvage_reasons(run, {}, original_pin), ["manifest_digest_differs"])
+            self.assertEqual(harness.salvage_reasons(run, {}, original_pin, expected_observation_contract='ordinary_native_v1'), ["manifest_digest_differs"])
 
     def test_consumer_requirements_must_have_been_established_by_original_contract(self):
         run, pin, _ = self.fixture()
@@ -1288,28 +1890,37 @@ class PinnedEvidenceTests(unittest.TestCase):
             (dict(self.requirements, address_space_limit_bytes=1 << 35), "address_space_limit_bytes"),
         ):
             self.assertIn("consumer_requirement_not_established:" + field,
-                          harness.salvage_reasons(run, {}, pin, consumer))
+                          harness.salvage_reasons(run, {}, pin, consumer, expected_observation_contract='ordinary_native_v1'))
         original = dict(self.requirements, thermal_state=True, max_undivided_phase_ppm=600_000,
                         address_space_limit_bytes=1 << 35)
         run, pin, _ = self.fixture(original)
         for consumer in (original, dict(original, thermal_state=False, max_undivided_phase_ppm=700_000),
                          self.requirements):
-            result = harness.read_pinned_run(run, pin, consumer_requirements=consumer)
+            result = harness.read_pinned_run(run, pin, consumer_requirements=consumer, expected_observation_contract='ordinary_native_v1')
             self.assertEqual(result["original_requirements"], original)
             self.assertEqual(result["consumer_requirements"], consumer)
         for requested in (1 << 34, 1 << 36):
             self.assertIn("consumer_requirement_not_established:address_space_limit_bytes",
-                          harness.salvage_reasons(run, {}, pin, dict(original, address_space_limit_bytes=requested)))
+                          harness.salvage_reasons(run, {}, pin, dict(original, address_space_limit_bytes=requested), expected_observation_contract='ordinary_native_v1'))
         self.assertIn("consumer_requirement_not_established:max_undivided_phase_ppm",
-                      harness.salvage_reasons(run, {}, pin, dict(original, max_undivided_phase_ppm=599_999)))
+                      harness.salvage_reasons(run, {}, pin, dict(original, max_undivided_phase_ppm=599_999), expected_observation_contract='ordinary_native_v1'))
 
     def test_weaker_consumer_never_rescues_rejected_original_evidence(self):
         original = dict(self.requirements, max_undivided_phase_ppm=599_999)
         run, pin, report = self.fixture(original)
         self.assertEqual(report["verdict"], "rejected")
-        self.assertIn("run_was_rejected", harness.salvage_reasons(run, {}, pin, self.requirements))
+        self.assertIn("run_was_rejected", harness.salvage_reasons(run, {}, pin, self.requirements, expected_observation_contract='ordinary_native_v1'))
         with self.assertRaises(harness.HarnessRefusal):
-            harness.read_pinned_run(run, pin, consumer_requirements=self.requirements)
+            harness.read_pinned_run(run, pin, consumer_requirements=self.requirements, expected_observation_contract='ordinary_native_v1')
+
+    def test_report_observation_contract_is_mandatory_and_closed(self):
+        for value in (None, True, [], "unknown"):
+            run, pin, _ = self.fixture(report_change=lambda report, value=value:
+                                      report.update(observation_contract=value))
+            inspected = harness._inspect_pinned_run(run, {}, pin, expected_observation_contract='ordinary_native_v1')
+            self.assertIn("report_malformed", inspected["reasons"])
+        run, pin, _ = self.fixture(report_change=lambda report: report.pop("observation_contract"))
+        self.assertIn("report_malformed", harness._inspect_pinned_run(run, {}, pin, expected_observation_contract='ordinary_native_v1')["reasons"])
 
     def test_requirement_schema_checks_classification_types_and_ranges(self):
         invalid = [dict(self.requirements, **change) for change in (
@@ -1323,10 +1934,10 @@ class PinnedEvidenceTests(unittest.TestCase):
         for requirements in invalid:
             with self.assertRaises(harness.HarnessRefusal):
                 harness.validate_requirements(requirements)
-            self.assertEqual(harness.salvage_reasons(run, {}, pin, requirements),
+            self.assertEqual(harness.salvage_reasons(run, {}, pin, requirements, expected_observation_contract='ordinary_native_v1'),
                              ["consumer_requirements_invalid"])
             malformed, malformed_pin, _ = self.fixture(report_change=lambda report: report.update(requirements=requirements))
-            self.assertIn("report_requirements_invalid", harness.salvage_reasons(malformed, {}, malformed_pin))
+            self.assertIn("report_requirements_invalid", harness.salvage_reasons(malformed, {}, malformed_pin, expected_observation_contract='ordinary_native_v1'))
 
     def test_requested_applied_and_kernel_limit_observations_must_match(self):
         original = dict(self.requirements, address_space_limit_bytes=1 << 35)
@@ -1338,7 +1949,7 @@ class PinnedEvidenceTests(unittest.TestCase):
             lambda report: report["process"]["address_space"].update(kernel_observed={"soft_limit_bytes": 1, "hard_limit_bytes": 1}),
         ):
             run, pin, _ = self.fixture(original, report_change=change)
-            self.assertIn("report_requirement_observations_differ", harness.salvage_reasons(run, {}, pin))
+            self.assertIn("report_requirement_observations_differ", harness.salvage_reasons(run, {}, pin, expected_observation_contract='ordinary_native_v1'))
 
     def test_report_limits_are_closed_typed_and_missing_optional_value_still_refuses(self):
         for change in (
@@ -1350,7 +1961,7 @@ class PinnedEvidenceTests(unittest.TestCase):
             lambda report: report["limits"].update(output_tail_bytes=65537),
         ):
             run, pin, _ = self.fixture(report_change=change)
-            self.assertIn("report_requirement_observations_differ", harness.salvage_reasons(run, {}, pin))
+            self.assertIn("report_requirement_observations_differ", harness.salvage_reasons(run, {}, pin, expected_observation_contract='ordinary_native_v1'))
 
     def test_unknown_child_output_is_rejected_retained_and_not_promoted(self):
         secret_name = "private-looking-sentinel-928374.bin"
@@ -1365,7 +1976,7 @@ class PinnedEvidenceTests(unittest.TestCase):
             self.assertNotIn(name, str(report["reasons"]))
             manifest = json.loads((run / "manifest.json").read_bytes())
             self.assertNotIn("child/" + name, {row["path"] for row in manifest["files"]})
-            self.assertTrue(harness.salvage_reasons(run, {}, pin))
+            self.assertTrue(harness.salvage_reasons(run, {}, pin, expected_observation_contract='ordinary_native_v1'))
 
     def test_unsafe_files_refuse_without_following_or_blocking(self):
         creators = (
@@ -1386,7 +1997,7 @@ class PinnedEvidenceTests(unittest.TestCase):
                     return real_open(path, *args, **kwargs)
                 with mock.patch.object(harness.os, "open", side_effect=refuse_unsafe_open):
                     run, pin, report = self.fixture(child_change=lambda run: creator(run / "child" / name, outside))
-                    self.assertTrue(harness.salvage_reasons(run, {}, pin))
+                    self.assertTrue(harness.salvage_reasons(run, {}, pin, expected_observation_contract='ordinary_native_v1'))
                 self.assertEqual(report["verdict"], "rejected")
                 self.assertTrue(any(reason.startswith("unsafe_or_oversize_evidence:") for reason in report["reasons"]))
                 self.assertEqual(outside.read_bytes(), b"PUBLIC TEST SENTINEL")
@@ -1406,7 +2017,7 @@ class PinnedEvidenceTests(unittest.TestCase):
                 replaced.append(True)
             return raw
         with mock.patch.object(harness.os, "read", side_effect=replace_after_read):
-            self.assertTrue(harness.salvage_reasons(run, {}, pin))
+            self.assertTrue(harness.salvage_reasons(run, {}, pin, expected_observation_contract='ordinary_native_v1'))
         self.assertEqual(replaced, [True])
 
     def test_consumer_receives_captured_bytes_even_if_path_changes_after_read(self):
@@ -1419,10 +2030,10 @@ class PinnedEvidenceTests(unittest.TestCase):
                 (run / name).write_bytes(b"{untrusted later replacement")
             return result
         with mock.patch.object(harness._EvidenceDirectory, "_read", change_after_complete_read):
-            result = harness.read_pinned_run(run, pin)
+            result = harness.read_pinned_run(run, pin, expected_observation_contract='ordinary_native_v1')
         self.assertEqual(result["documents"]["child/record.json"], original)
         self.assertNotEqual((run / "child/record.json").read_bytes(), harness.control.canonical(original))
-        self.assertTrue(harness.salvage_reasons(run, {}, pin))
+        self.assertTrue(harness.salvage_reasons(run, {}, pin, expected_observation_contract='ordinary_native_v1'))
 
     def test_parent_replacement_and_permissions_refuse_without_modifying_inputs(self):
         for change in (
@@ -1432,12 +2043,12 @@ class PinnedEvidenceTests(unittest.TestCase):
             run, pin, _ = self.fixture()
             change(run)
             before = {path: path.lstat().st_mode for path in run.rglob("*")}
-            self.assertTrue(harness.salvage_reasons(run, {}, pin))
+            self.assertTrue(harness.salvage_reasons(run, {}, pin, expected_observation_contract='ordinary_native_v1'))
             self.assertEqual({path: path.lstat().st_mode for path in run.rglob("*")}, before)
         run, pin, _ = self.fixture()
         os.rename(run / "child", run / "moved")
         (run / "child").symlink_to(run / "moved", target_is_directory=True)
-        self.assertTrue(harness.salvage_reasons(run, {}, pin))
+        self.assertTrue(harness.salvage_reasons(run, {}, pin, expected_observation_contract='ordinary_native_v1'))
 
     def test_output_stream_failure_is_reproduced_without_runtime_only_exception(self):
         def incomplete(report):
@@ -1445,7 +2056,7 @@ class PinnedEvidenceTests(unittest.TestCase):
             report["reasons"] = ["output_stream_not_closed:stdout"]
             report["verdict"] = "rejected"
         run, pin, _ = self.fixture(report_change=incomplete)
-        self.assertEqual(harness.salvage_reasons(run, {}, pin), ["run_was_rejected"])
+        self.assertEqual(harness.salvage_reasons(run, {}, pin, expected_observation_contract='ordinary_native_v1'), ["run_was_rejected"])
 
 
 class StaticSafetyTests(unittest.TestCase):
@@ -1472,7 +2083,12 @@ class StaticSafetyTests(unittest.TestCase):
         # one function that is reached only after the command's deadline.
         self.assertEqual(self.source.count("os.kill("), 1)
         self.assertEqual(self.source.count("signal.SIGKILL"), 1)
-        self.assertEqual(self.source.count("_kill_own_child("), 2)
+        # The original deadline plus owned setup/unwind cleanup all use the
+        # same root-only signal function. Owned callers defer reap until native
+        # finish; neither receives a second signal implementation.
+        self.assertEqual(self.source.count("_kill_own_child("), 5)
+        self.assertEqual(self.source.count("lambda pid: _kill_own_child(pid, reap=False)"), 3)
+        self.assertIn("reaped = _kill_own_child(child.pid, reap=owned is None)", self.source)
         self.assertNotIn("os.environ[", self.source)
         self.assertNotIn("os.getenv", self.source)
         # The command's output goes to pipes that are hashed, never to a file.
@@ -1492,6 +2108,59 @@ class StaticSafetyTests(unittest.TestCase):
         for word in ("run", "validate", "salvage"):
             self.assertIn(word, out.getvalue())
 
+
+class ObservationExceptionRetentionTests(unittest.TestCase):
+    """Keep original failure facts across cleanup and reap without accepting lost image continuity."""
+
+    def run_failure(self, error, after_baseline=True, close_error=None):
+        usage = SimpleNamespace(ru_utime=1.0, ru_stime=1.0, ru_maxrss=1024)
+        child = SimpleNamespace(pid=424242, returncode=None)
+        reader = mock.Mock()
+        reader.close.side_effect = close_error
+        scope = SimpleNamespace(initial={}, observe=mock.Mock(side_effect=error))
+        journal = SimpleNamespace(append=mock.Mock(), failed=False, failure_reason=None, count=1)
+        with mock.patch.object(harness.observer, 'native_reader', return_value=reader), mock.patch.object(harness.observer, 'ProcessScope', return_value=scope, side_effect=None if after_baseline else error), mock.patch.object(harness.observer, 'ResourceObservationJournal', return_value=journal), mock.patch.object(harness.os, 'getpgid', return_value=1), mock.patch.object(harness.time, 'sleep'), mock.patch.object(harness, '_try_reap', side_effect=[None, None, (0, usage)] if after_baseline else [None, (0, usage)]):
+            result = harness.observe_child(child, mock.Mock(), mock.Mock(), 100, 10000)
+        self.assertEqual(result['sampled']['state'], 'failed')
+        self.assertEqual(result['exit'], {'kind': 'exited', 'code': 0})
+        reader.close.assert_called_once()
+        return result
+
+    def test_linux_missing_proc_does_not_become_authenticated_exit(self):
+        error = FileNotFoundError(2, 'private exception payload', '/private/witness/path')
+        result = self.run_failure(error)
+        self.assertEqual(result['sampled']['reason'], 'process_observation_failed')
+        self.assertEqual(result['sampled']['observation_exceptions'], [{'stage': 'sample', 'type': 'builtins.FileNotFoundError', 'errno': 2}])
+        self.assertNotIn('private', json.dumps(result))
+
+    def test_original_type_survives_reader_cleanup_failure(self):
+        original = harness.observer.ProcessObservationError('running Linux image changed during observation')
+        result = self.run_failure(original, close_error=PermissionError(13, 'private cleanup payload'))
+        self.assertEqual(result['sampled']['reason'], 'executable_image_differs')
+        self.assertEqual(result['sampled']['observation_exceptions'], [{'stage': 'sample', 'type': 'private_settlement_process_observer.ProcessObservationError', 'errno': None}, {'stage': 'reader_close', 'type': 'builtins.PermissionError', 'errno': 13}])
+
+    def test_baseline_failure_keeps_original_type_before_later_reap(self):
+        result = self.run_failure(ValueError('private baseline payload'), False, PermissionError(13, 'private cleanup payload'))
+        self.assertEqual(result['sampled']['observation_exceptions'][0], {'stage': 'baseline', 'type': 'builtins.ValueError', 'errno': None})
+        self.assertEqual(len(result['sampled']['observation_exceptions']), 2)
+
+    def test_original_type_survives_a_later_reap_exception_in_outer_report_sink(self):
+        original = FileNotFoundError(2, 'private sample payload')
+        later = ChildProcessError(10, 'private reap payload')
+        reader = mock.Mock()
+        child = SimpleNamespace(pid=424242, returncode=None)
+        scope = SimpleNamespace(initial={}, observe=mock.Mock(side_effect=original))
+        journal = SimpleNamespace(append=mock.Mock(), failed=False, failure_reason=None, count=1)
+        reasons = []
+        with mock.patch.object(harness.observer, 'native_reader', return_value=reader), mock.patch.object(harness.observer, 'ProcessScope', return_value=scope), mock.patch.object(harness.observer, 'ResourceObservationJournal', return_value=journal), mock.patch.object(harness.os, 'getpgid', return_value=1), mock.patch.object(harness.time, 'sleep'), mock.patch.object(harness, '_try_reap', side_effect=[None, None, later, later]):
+            with self.assertRaises(ChildProcessError):
+                harness.observe_child(child, mock.Mock(), mock.Mock(), 100, 10000, exception_reasons=reasons)
+        self.assertEqual(reasons, ['process_observation_exception:builtins.FileNotFoundError:2'])
+        self.assertIn('process_observation_exception:', harness.RUNTIME_ONLY_REASONS)
+
+    def test_running_image_mismatch_remains_rejected(self):
+        result = self.run_failure(harness.observer.ProcessObservationError('running Linux executable differs'))
+        self.assertEqual(result['sampled']['reason'], 'executable_image_differs')
 
 if __name__ == "__main__":
     unittest.main()

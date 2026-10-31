@@ -11,6 +11,7 @@ color-eyre = { workspace = true }
 humantime = { workspace = true }
 iroha = { workspace = true }
 iroha_config = { workspace = true }
+iroha_fs = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
 iroha_primitives = { workspace = true }

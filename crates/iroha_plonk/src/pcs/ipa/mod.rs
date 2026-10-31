@@ -366,7 +366,7 @@ pub fn fold_evaluation<F: Field>(x: F, challenges: &[F]) -> F {
 
 /// Scalar reference for the optimized evaluation tests.
 #[cfg(test)]
-fn inner_product<F: Field>(a: &[F], b: &[F]) -> F {
+pub(crate) fn inner_product<F: Field>(a: &[F], b: &[F]) -> F {
     a.iter().zip(b).fold(F::ZERO, |acc, (x, y)| acc + *x * y)
 }
 

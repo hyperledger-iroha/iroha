@@ -3,8 +3,10 @@
 //! Production mutations are resolved component-by-component below a retained directory handle. The
 //! primitives back Governance DAG stores and the inert Musubi provider-attestation journal store.
 //! Linux and macOS use the `*at` family. Windows uses `NtCreateFile` for root-directory-relative
-//! opens and `SetFileInformationByHandle` for rename/disposition. Other targets fail closed because
-//! they are not V1 native release targets.
+//! opens, `NtSetInformationFile` for rooted rename and `SetFileInformationByHandle` for disposition. Other targets fail closed because
+//! they are not V1 native release targets. Windows mutable stores require NTFS: mutable handles
+//! use write-through requests, file bytes are flushed, and directory ordering advances retained
+//! directory metadata on the same write-through handle.
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
@@ -23,6 +25,16 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
+pub(crate) fn sync_directory(file: &File) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        platform::sync_directory(file)
+    }
+    #[cfg(not(windows))]
+    {
+        file.sync_all()
+    }
+}
 #[cfg(unix)]
 unsafe extern "C" {
     fn geteuid() -> std::os::raw::c_uint;
@@ -471,9 +483,31 @@ pub(super) struct FileIdentity {
     #[cfg(unix)]
     inode: u64,
     #[cfg(windows)]
-    volume_serial_number: u32,
+    native: iroha_fs::FileIdentity,
+}
+#[cfg(not(windows))]
+pub(crate) type NativeMetadata = fs::Metadata;
+#[cfg(windows)]
+pub(crate) type NativeMetadata = iroha_fs::FileMetadata;
+pub(crate) fn native_metadata(handle: &File) -> io::Result<NativeMetadata> {
     #[cfg(windows)]
-    file_index: u64,
+    {
+        iroha_fs::FileMetadata::of(handle)
+    }
+    #[cfg(not(windows))]
+    {
+        handle.metadata()
+    }
+}
+pub(crate) fn named_metadata(path: impl AsRef<Path>) -> io::Result<NativeMetadata> {
+    #[cfg(windows)]
+    {
+        iroha_fs::FileMetadata::symlink_metadata(path)
+    }
+    #[cfg(not(windows))]
+    {
+        fs::symlink_metadata(path)
+    }
 }
 include!("governance_rooted_fs/two_slot_store.rs");
 fn verify_expected_file(
@@ -510,7 +544,7 @@ fn validate_component(name: &OsStr) -> io::Result<()> {
     }
     platform::validate_component(name)
 }
-fn validate_directory_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+fn validate_directory_metadata(path: &Path, metadata: &NativeMetadata) -> io::Result<()> {
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(io::Error::other(format!(
             "governance directory `{}` must be a real directory",
@@ -528,7 +562,7 @@ fn validate_directory_metadata(path: &Path, metadata: &fs::Metadata) -> io::Resu
     let _ = file_identity(metadata)?;
     Ok(())
 }
-fn validate_regular_file_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+fn validate_regular_file_metadata(path: &Path, metadata: &NativeMetadata) -> io::Result<()> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(io::Error::other(format!(
             "governance state `{}` must be a regular file",
@@ -543,7 +577,7 @@ fn validate_regular_file_metadata(path: &Path, metadata: &fs::Metadata) -> io::R
         )));
     }
     #[cfg(windows)]
-    if metadata.number_of_links() != Some(1) {
+    if metadata.links() != 1 {
         return Err(io::Error::other(format!(
             "governance state `{}` must have exactly one hard link",
             path.display()
@@ -553,7 +587,10 @@ fn validate_regular_file_metadata(path: &Path, metadata: &fs::Metadata) -> io::R
     let _ = file_identity(metadata)?;
     Ok(())
 }
-fn validate_private_regular_file_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+fn validate_private_regular_file_metadata(
+    path: &Path,
+    metadata: &NativeMetadata,
+) -> io::Result<()> {
     validate_regular_file_metadata(path, metadata)?;
     #[cfg(unix)]
     {
@@ -572,7 +609,7 @@ fn validate_private_regular_file_metadata(path: &Path, metadata: &fs::Metadata) 
 }
 fn validate_file_metadata(
     path: &Path,
-    metadata: &fs::Metadata,
+    metadata: &NativeMetadata,
     max_bytes: usize,
     private: bool,
 ) -> io::Result<()> {
@@ -594,7 +631,7 @@ fn validate_file_metadata(
     }
     Ok(())
 }
-fn file_identity(metadata: &fs::Metadata) -> io::Result<FileIdentity> {
+fn file_identity(metadata: &NativeMetadata) -> io::Result<FileIdentity> {
     #[cfg(unix)]
     {
         Ok(FileIdentity {
@@ -605,12 +642,7 @@ fn file_identity(metadata: &fs::Metadata) -> io::Result<FileIdentity> {
     #[cfg(windows)]
     {
         Ok(FileIdentity {
-            volume_serial_number: metadata.volume_serial_number().ok_or_else(|| {
-                io::Error::other("Windows governance object lacks a volume serial number")
-            })?,
-            file_index: metadata
-                .file_index()
-                .ok_or_else(|| io::Error::other("Windows governance object lacks a file index"))?,
+            native: metadata.identity(),
         })
     }
     #[cfg(not(any(unix, windows)))]
@@ -620,7 +652,7 @@ fn file_identity(metadata: &fs::Metadata) -> io::Result<FileIdentity> {
     }
 }
 #[cfg(unix)]
-fn metadata_stable_during_read(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+fn metadata_stable_during_read(before: &NativeMetadata, after: &NativeMetadata) -> bool {
     file_identity(before).ok() == file_identity(after).ok()
         && before.len() == after.len()
         && before.mtime() == after.mtime()
@@ -629,14 +661,14 @@ fn metadata_stable_during_read(before: &fs::Metadata, after: &fs::Metadata) -> b
         && before.ctime_nsec() == after.ctime_nsec()
 }
 #[cfg(windows)]
-fn metadata_stable_during_read(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+fn metadata_stable_during_read(before: &NativeMetadata, after: &NativeMetadata) -> bool {
     file_identity(before).ok() == file_identity(after).ok()
         && before.len() == after.len()
         && before.last_write_time() == after.last_write_time()
         && before.creation_time() == after.creation_time()
 }
 #[cfg(not(any(unix, windows)))]
-fn metadata_stable_during_read(_before: &fs::Metadata, _after: &fs::Metadata) -> bool {
+fn metadata_stable_during_read(_before: &NativeMetadata, _after: &NativeMetadata) -> bool {
     false
 }
 /// Return whether a name claims the legacy atomic-temporary namespace for
@@ -704,7 +736,7 @@ pub(super) fn is_atomic_retained_candidate_for(name: &str, target: &str) -> bool
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod platform {
-    use super::{FileIdentity, RootedDirectory, file_identity};
+    use super::{FileIdentity, NativeMetadata, RootedDirectory, file_identity, native_metadata};
     #[cfg(target_os = "macos")]
     use std::os::raw::c_void;
     use std::{
@@ -799,7 +831,7 @@ mod platform {
         }
         Ok(())
     }
-    pub(super) fn validate_non_reparse(_metadata: &fs::Metadata) -> io::Result<()> {
+    pub(super) fn validate_non_reparse(_metadata: &NativeMetadata) -> io::Result<()> {
         Ok(())
     }
     pub(super) fn validate_directory_acl(handle: &File, path: &Path) -> io::Result<()> {
@@ -1217,7 +1249,7 @@ mod platform {
         name: &OsStr,
         expected: Option<FileIdentity>,
     ) -> io::Result<()> {
-        let actual = file_identity(&file.metadata()?)?;
+        let actual = file_identity(&native_metadata(&file)?)?;
         if expected.is_some_and(|expected| expected != actual) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -1225,7 +1257,7 @@ mod platform {
             ));
         }
         let linked = open_file(parent, name, false)?;
-        let linked_identity = file_identity(&linked.metadata()?)?;
+        let linked_identity = file_identity(&native_metadata(&linked)?)?;
         if linked_identity != actual {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -1247,7 +1279,7 @@ mod platform {
         name: &OsStr,
         expected: Option<FileIdentity>,
     ) -> io::Result<()> {
-        let actual = file_identity(&directory.metadata()?)?;
+        let actual = file_identity(&native_metadata(&directory)?)?;
         if expected.is_some_and(|expected| expected != actual) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -1255,7 +1287,7 @@ mod platform {
             ));
         }
         let linked = open_directory(parent, name, true)?;
-        let linked_identity = file_identity(&linked.metadata()?)?;
+        let linked_identity = file_identity(&native_metadata(&linked)?)?;
         if linked_identity != actual {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -1334,10 +1366,10 @@ pub(crate) fn rename_path_exclusive(source: &Path, destination: &Path) -> io::Re
             "exclusive qualification rename requires one lexical parent",
         ));
     }
-    let named_parent_before = fs::symlink_metadata(source_parent_path)?;
+    let named_parent_before = named_metadata(source_parent_path)?;
     validate_directory_metadata(source_parent_path, &named_parent_before)?;
     let parent = File::open(source_parent_path)?;
-    let opened_parent = parent.metadata()?;
+    let opened_parent = native_metadata(&parent)?;
     validate_directory_metadata(source_parent_path, &opened_parent)?;
     let parent_identity = file_identity(&opened_parent)?;
     if file_identity(&named_parent_before)? != parent_identity {
@@ -1348,7 +1380,7 @@ pub(crate) fn rename_path_exclusive(source: &Path, destination: &Path) -> io::Re
     }
     platform::rename_exclusive(&parent, source_name, &parent, destination_name)?;
     parent.sync_all()?;
-    let named_parent_after = fs::symlink_metadata(source_parent_path)?;
+    let named_parent_after = named_metadata(source_parent_path)?;
     validate_directory_metadata(source_parent_path, &named_parent_after)?;
     if file_identity(&named_parent_after)? != parent_identity {
         return Err(io::Error::new(
@@ -1369,11 +1401,12 @@ pub(crate) fn rename_path_exclusive(_source: &Path, _destination: &Path) -> io::
 #[cfg(windows)]
 mod platform {
     use super::{
-        FileIdentity, PrivateStorageFileSharing, RootedDirectory, file_identity, windows_dacl,
+        FileIdentity, NativeMetadata, PrivateStorageFileSharing, RootedDirectory, file_identity,
+        named_metadata, native_metadata, windows_dacl,
     };
     use std::{
         ffi::{OsStr, OsString, c_void},
-        fs::{self, File, OpenOptions},
+        fs::{File, OpenOptions},
         io,
         mem::{offset_of, size_of},
         os::windows::{
@@ -1390,6 +1423,7 @@ mod platform {
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_WRITE_THROUGH: u32 = 0x8000_0000;
     const GENERIC_READ: u32 = 0x8000_0000;
     const GENERIC_WRITE: u32 = 0x4000_0000;
     const DELETE_ACCESS: u32 = 0x0001_0000;
@@ -1402,11 +1436,13 @@ mod platform {
     const FILE_CREATE: u32 = 2;
     const FILE_DIRECTORY_FILE: u32 = 0x0000_0001;
     const FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x0000_0020;
+    const FILE_WRITE_THROUGH: u32 = 0x0000_0002;
+    const FILE_BASIC_INFO_CLASS: u32 = 0;
     const FILE_NON_DIRECTORY_FILE: u32 = 0x0000_0040;
     const FILE_OPEN_FOR_BACKUP_INTENT: u32 = 0x0000_4000;
     const FILE_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     const OBJ_CASE_INSENSITIVE: u32 = 0x0000_0040;
-    const FILE_RENAME_INFO_CLASS: u32 = 3;
+    const FILE_RENAME_INFORMATION_CLASS: u32 = 10;
     const FILE_DISPOSITION_INFO_CLASS: u32 = 4;
     const FILE_ID_BOTH_DIRECTORY_INFO_CLASS: u32 = 10;
     const FILE_ID_BOTH_DIRECTORY_RESTART_INFO_CLASS: u32 = 11;
@@ -1434,6 +1470,15 @@ mod platform {
     const FILE_ALL_ACCESS: u32 = 0x001f_01ff;
     const LOCAL_SYSTEM_SID: &[u8] = &[1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0];
     const BUILTIN_ADMINISTRATORS_SID: &[u8] = &[1, 2, 0, 0, 0, 0, 0, 5, 32, 0, 0, 0, 32, 2, 0, 0];
+    #[repr(C)]
+    #[derive(Default)]
+    struct FileBasicInfo {
+        created: i64,
+        accessed: i64,
+        written: i64,
+        changed: i64,
+        attributes: u32,
+    }
     #[repr(C)]
     struct UnicodeString {
         length: u16,
@@ -1490,8 +1535,8 @@ mod platform {
         security_descriptor: Handle,
         inherit_handle: i32,
     }
-    #[derive(Debug, PartialEq, Eq)]
-    struct WindowsDaclSnapshot {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(super) struct WindowsDaclSnapshot {
         control: u16,
         owner_sid: Vec<u8>,
         dacl: Vec<u8>,
@@ -1550,11 +1595,30 @@ mod platform {
             ea_buffer: *mut c_void,
             ea_length: u32,
         ) -> NtStatus;
+        #[link_name = "NtSetInformationFile"]
+        fn nt_set_information_file(
+            file: Handle,
+            io_status_block: *mut IoStatusBlock,
+            information: *const c_void,
+            length: u32,
+            information_class: u32,
+        ) -> NtStatus;
         #[link_name = "RtlNtStatusToDosError"]
         fn rtl_nt_status_to_dos_error(status: NtStatus) -> u32;
     }
     #[link(name = "kernel32")]
     unsafe extern "system" {
+        #[link_name = "GetVolumeInformationByHandleW"]
+        fn get_volume_information_by_handle(
+            file: Handle,
+            volume_name: *mut u16,
+            volume_name_size: u32,
+            volume_serial: *mut u32,
+            maximum_component_length: *mut u32,
+            flags: *mut u32,
+            filesystem_name: *mut u16,
+            filesystem_name_size: u32,
+        ) -> i32;
         #[link_name = "GetFileInformationByHandleEx"]
         fn get_file_information_by_handle_ex(
             file: Handle,
@@ -1590,6 +1654,70 @@ mod platform {
             flags_and_attributes: u32,
             template_file: Handle,
         ) -> Handle;
+    }
+    fn require_ntfs(file: &File) -> io::Result<()> {
+        let mut filesystem = [0_u16; 32];
+        // SAFETY: the retained handle is live and the initialized name buffer is bounded.
+        if unsafe {
+            get_volume_information_by_handle(
+                file.as_raw_handle(),
+                ptr::null_mut(),
+                0,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                filesystem.as_mut_ptr(),
+                u32::try_from(filesystem.len()).expect("filesystem name buffer fits u32"),
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        if filesystem[..5] != [78, 84, 70, 83, 0] {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Windows governance mutable stores require NTFS",
+            ));
+        }
+        Ok(())
+    }
+    pub(super) fn sync_directory(file: &File) -> io::Result<()> {
+        require_ntfs(file)?;
+        let mut basic = FileBasicInfo::default();
+        // SAFETY: the retained handle and repr(C) output buffer remain valid for the call.
+        if unsafe {
+            get_file_information_by_handle_ex(
+                file.as_raw_handle(),
+                FILE_BASIC_INFO_CLASS,
+                ptr::from_mut(&mut basic).cast(),
+                u32::try_from(size_of::<FileBasicInfo>()).expect("FILE_BASIC_INFO fits u32"),
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        // A real metadata update on the write-through handle orders NTFS directory changes.
+        // These local custody timestamps never enter protocol state or consensus inputs.
+        basic.written = basic.written.checked_add(1).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Windows directory timestamp exhausted",
+            )
+        })?;
+        basic.changed = 0;
+        // SAFETY: every writable retained directory has GENERIC_WRITE and FILE_WRITE_THROUGH.
+        if unsafe {
+            set_file_information_by_handle(
+                file.as_raw_handle(),
+                FILE_BASIC_INFO_CLASS,
+                ptr::from_ref(&basic).cast(),
+                u32::try_from(size_of::<FileBasicInfo>()).expect("FILE_BASIC_INFO fits u32"),
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
     #[link(name = "advapi32")]
     unsafe extern "system" {
@@ -1686,7 +1814,7 @@ mod platform {
         }
         Ok(())
     }
-    pub(super) fn validate_non_reparse(metadata: &fs::Metadata) -> io::Result<()> {
+    pub(super) fn validate_non_reparse(metadata: &NativeMetadata) -> io::Result<()> {
         if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
             return Err(io::Error::other(
                 "Windows governance object is backed by a reparse point",
@@ -1698,6 +1826,12 @@ mod platform {
         qualified_directory_dacl_snapshot(handle, path).map(drop)
     }
     pub(super) fn validate_private_storage_acl(handle: &File, path: &Path) -> io::Result<()> {
+        private_storage_acl_snapshot(handle, path).map(drop)
+    }
+    pub(super) fn private_storage_acl_snapshot(
+        handle: &File,
+        path: &Path,
+    ) -> io::Result<WindowsDaclSnapshot> {
         let snapshot = qualified_directory_dacl_snapshot(handle, path)?;
         let current_user_sid = current_process_user_sid()?;
         if snapshot.owner_sid != current_user_sid {
@@ -1718,7 +1852,8 @@ mod platform {
                 ),
             ));
         }
-        let expected = canonical_private_dacl(&current_user_sid, handle.metadata()?.is_dir())?;
+        let expected =
+            canonical_private_dacl(&current_user_sid, native_metadata(&handle)?.is_dir())?;
         if snapshot.dacl != expected {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -1728,7 +1863,7 @@ mod platform {
                 ),
             ));
         }
-        Ok(())
+        Ok(snapshot)
     }
     pub(super) fn protect_private_storage_acl(handle: &File, path: &Path) -> io::Result<()> {
         let snapshot = stable_directory_dacl_snapshot(handle, path)?;
@@ -1746,7 +1881,7 @@ mod platform {
     }
     fn install_private_storage_acl(handle: &File, path: &Path) -> io::Result<()> {
         let current_user_sid = current_process_user_sid()?;
-        let dacl = canonical_private_dacl(&current_user_sid, handle.metadata()?.is_dir())?;
+        let dacl = canonical_private_dacl(&current_user_sid, native_metadata(&handle)?.is_dir())?;
         let mut aligned_dacl = aligned_bytes(&dacl);
         let security_information = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
         // SAFETY: `handle` is live with WRITE_DAC. The aligned ACL buffer is canonical and remains
@@ -2323,7 +2458,7 @@ mod platform {
         options.read(true);
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
         let mut directory = options.open(&volume_root)?;
-        let volume_metadata = directory.metadata()?;
+        let volume_metadata = native_metadata(&directory)?;
         if !volume_metadata.is_dir() {
             return Err(io::Error::other(
                 "Windows governance volume root is not a directory",
@@ -2340,7 +2475,7 @@ mod platform {
             };
             let is_last = position + 1 == components.len() - first_normal;
             directory = open_directory(&directory, name, writable && is_last)?;
-            let metadata = directory.metadata()?;
+            let metadata = native_metadata(&directory)?;
             if !metadata.is_dir() {
                 return Err(io::Error::other(format!(
                     "Windows governance ancestor `{}` is not a directory",
@@ -2353,13 +2488,19 @@ mod platform {
         if first_normal == components.len() && writable {
             let mut writable_options = OpenOptions::new();
             writable_options.read(true).write(true);
-            writable_options
-                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
+            writable_options.custom_flags(
+                FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_WRITE_THROUGH,
+            );
             directory = writable_options.open(&volume_root)?;
         }
-        let linked = fs::symlink_metadata(path)?;
+        if writable {
+            require_ntfs(&directory)?;
+        }
+        let linked = named_metadata(path)?;
         validate_non_reparse(&linked)?;
-        if !linked.is_dir() || file_identity(&linked)? != file_identity(&directory.metadata()?)? {
+        if !linked.is_dir()
+            || file_identity(&linked)? != file_identity(&native_metadata(&directory)?)?
+        {
             return Err(io::Error::other(
                 "Windows governance root changed during component-wise open",
             ));
@@ -2378,22 +2519,24 @@ mod platform {
         disposition: u32,
         options: u32,
     ) -> io::Result<File> {
-        nt_open_relative_with_share(
+        nt_open_relative_with_security(
             parent,
             name,
             desired_access,
             disposition,
             options,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            ptr::null_mut(),
         )
     }
-    fn nt_open_relative_with_share(
+    fn nt_open_relative_with_security(
         parent: &File,
         name: &OsStr,
         desired_access: u32,
         disposition: u32,
         options: u32,
         share_access: u32,
+        security_descriptor: Handle,
     ) -> io::Result<File> {
         validate_component(name)?;
         let mut name_wide = name.encode_wide().collect::<Vec<_>>();
@@ -2418,7 +2561,7 @@ mod platform {
             root_directory: parent.as_raw_handle(),
             object_name: &mut unicode,
             attributes: OBJ_CASE_INSENSITIVE,
-            security_descriptor: ptr::null_mut(),
+            security_descriptor,
             security_quality_of_service: ptr::null_mut(),
         };
         let mut status_block = IoStatusBlock {
@@ -2438,7 +2581,14 @@ mod platform {
                 FILE_ATTRIBUTE_NORMAL,
                 share_access,
                 disposition,
-                options | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT,
+                options
+                    | FILE_SYNCHRONOUS_IO_NONALERT
+                    | FILE_OPEN_REPARSE_POINT
+                    | if desired_access & (GENERIC_WRITE | DELETE_ACCESS) != 0 {
+                        FILE_WRITE_THROUGH
+                    } else {
+                        0
+                    },
                 ptr::null_mut(),
                 0,
             )
@@ -2471,14 +2621,7 @@ mod platform {
         )
     }
     pub(super) fn create_directory(parent: &File, name: &OsStr) -> io::Result<()> {
-        nt_open_relative(
-            parent,
-            name,
-            GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE,
-            FILE_CREATE,
-            FILE_DIRECTORY_FILE | FILE_OPEN_FOR_BACKUP_INTENT,
-        )
-        .map(drop)
+        create_private_relative(parent, name, true).map(drop)
     }
     pub(super) fn open_file(parent: &File, name: &OsStr, delete_access: bool) -> io::Result<File> {
         nt_open_relative(
@@ -2499,13 +2642,27 @@ mod platform {
         )
     }
     pub(super) fn create_file(parent: &File, name: &OsStr) -> io::Result<File> {
-        nt_open_relative(
-            parent,
-            name,
-            GENERIC_READ | GENERIC_WRITE | DELETE_ACCESS | SYNCHRONIZE,
-            FILE_CREATE,
-            FILE_NON_DIRECTORY_FILE,
-        )
+        create_private_relative(parent, name, false)
+    }
+    fn create_private_relative(parent: &File, name: &OsStr, directory: bool) -> io::Result<File> {
+        with_private_security_attributes(directory, |attributes| {
+            // SAFETY: the canonical owner SID, protected DACL and descriptor live
+            // throughout this closure and the synchronous NtCreateFile call.
+            let descriptor = unsafe { (*attributes).security_descriptor };
+            nt_open_relative_with_security(
+                parent,
+                name,
+                GENERIC_READ | GENERIC_WRITE | DELETE_ACCESS | SYNCHRONIZE,
+                FILE_CREATE,
+                if directory {
+                    FILE_DIRECTORY_FILE | FILE_OPEN_FOR_BACKUP_INTENT
+                } else {
+                    FILE_NON_DIRECTORY_FILE
+                },
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                descriptor,
+            )
+        })
     }
     pub(super) fn rename_open_file(
         parent: &File,
@@ -2528,6 +2685,8 @@ mod platform {
         let file_name_offset = offset_of!(FileRenameInfo, file_name);
         let total_bytes = file_name_offset
             .checked_add(usize::try_from(target_byte_len).unwrap_or(usize::MAX))
+            // Win32 inspects a UTF-16 terminator even though FileNameLength excludes it.
+            .and_then(|bytes| bytes.checked_add(size_of::<u16>()))
             .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -2559,20 +2718,25 @@ mod platform {
                 "Windows governance rename buffer exceeds u32",
             )
         })?;
-        // SAFETY: the temporary handle and initialized rename buffer remain
-        // valid for the call.
-        let result = unsafe {
-            set_file_information_by_handle(
+        let mut status_block = IoStatusBlock {
+            status_or_pointer: 0,
+            information: 0,
+        };
+        // SAFETY: the source and destination directory handles stay live. The native
+        // rename consumes the relative name directly without Win32 pathname conversion.
+        let status = unsafe {
+            nt_set_information_file(
                 temporary.as_raw_handle(),
-                FILE_RENAME_INFO_CLASS,
+                &mut status_block,
                 info.cast(),
                 total_bytes,
+                FILE_RENAME_INFORMATION_CLASS,
             )
         };
-        if result != 0 {
-            Ok(())
+        if status < 0 {
+            Err(nt_error(status))
         } else {
-            Err(io::Error::last_os_error())
+            Ok(())
         }
     }
     pub(super) fn remove_open_file(
@@ -2581,7 +2745,7 @@ mod platform {
         _name: &OsStr,
         expected: Option<FileIdentity>,
     ) -> io::Result<()> {
-        let actual = file_identity(&file.metadata()?)?;
+        let actual = file_identity(&native_metadata(&file)?)?;
         if expected.is_some_and(|expected| expected != actual) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -2612,7 +2776,7 @@ mod platform {
         name: &OsStr,
         expected: Option<FileIdentity>,
     ) -> io::Result<()> {
-        let actual = file_identity(&directory.metadata()?)?;
+        let actual = file_identity(&native_metadata(&directory)?)?;
         if expected.is_some_and(|expected| expected != actual) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -2620,7 +2784,7 @@ mod platform {
             ));
         }
         let linked = open_directory(parent, name, true)?;
-        let linked_identity = file_identity(&linked.metadata()?)?;
+        let linked_identity = file_identity(&native_metadata(&linked)?)?;
         if linked_identity != actual {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -2939,7 +3103,7 @@ mod platform {
 }
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 mod platform {
-    use super::{FileIdentity, RootedDirectory};
+    use super::{FileIdentity, NativeMetadata, RootedDirectory};
     use std::{
         ffi::{OsStr, OsString},
         fs::{self, File},
@@ -2957,7 +3121,7 @@ mod platform {
     pub(super) fn validate_component(_name: &OsStr) -> io::Result<()> {
         Err(unsupported())
     }
-    pub(super) fn validate_non_reparse(_metadata: &fs::Metadata) -> io::Result<()> {
+    pub(super) fn validate_non_reparse(_metadata: &NativeMetadata) -> io::Result<()> {
         Err(unsupported())
     }
     pub(super) fn validate_directory_acl(
@@ -3021,3 +3185,6 @@ mod platform {
     }
 }
 include!("governance_rooted_fs/tests.rs");
+#[cfg(all(test, windows))]
+#[path = "governance_rooted_fs/windows_two_slot_tests.rs"]
+mod windows_two_slot_tests;

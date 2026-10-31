@@ -1760,9 +1760,10 @@ EVALUATION_PHASES = (
 TAPE_SETUP_PHASES = ("profile", "key_generation", "client_input", "machine_setup", "open", "release")
 
 
-def read_run(run_dir: Path, manifest_sha256: str) -> tuple[dict, dict]:
+def read_run(run_dir: Path, manifest_sha256: str, *, expected_observation_contract, expected_delivery=None) -> tuple[dict, dict]:
     """Return measured block and host from one pinned, verified byte snapshot."""
-    verified = HARNESS.read_pinned_run(run_dir, manifest_sha256)
+    verified = HARNESS.read_pinned_run(run_dir, manifest_sha256,
+        expected_observation_contract=expected_observation_contract, expected_delivery=expected_delivery)
     report = verified["report"]
     records = [entry["json"]["path"] for entry in report["records"]
                if Path(entry["json"]["path"]).name.startswith("bgv-")]
@@ -2564,7 +2565,8 @@ def summary_frame(runs: list, host: dict, root: Path = ROOT) -> dict:
     }
 
 
-def build_summary(run_dirs: list, *, manifest_sha256: list[str]) -> dict:
+def build_summary(run_dirs: list, *, manifest_sha256: list[str],
+                  expected_observation_contract, expected_delivery=None) -> dict:
     """Build only from unique external pins and their verified run documents."""
     if not run_dirs or len(run_dirs) != len(manifest_sha256):
         raise ValueError("exactly one external manifest SHA-256 is required per run directory")
@@ -2576,7 +2578,8 @@ def build_summary(run_dirs: list, *, manifest_sha256: list[str]) -> dict:
     runs = []
     hosts = []
     for run_dir, pin in zip(run_dirs, manifest_sha256):
-        block, host = read_run(run_dir, pin)
+        block, host = read_run(run_dir, pin, expected_observation_contract=expected_observation_contract,
+                               expected_delivery=expected_delivery)
         runs.append(block)
         hosts.append(host)
     runs.sort(key=lambda run: (run["config"], run["run"]["run_directory"]))
@@ -3526,6 +3529,7 @@ def main(argv: list) -> int:
     parser.add_argument("--plan", action="store_true", help="print noise plans, tape plans and sanity numbers")
     parser.add_argument("--tables", action="store_true", help="print the Markdown tables the specifications embed")
     parser.add_argument("--summary", default=str(ROOT / SUMMARY_PATH), help="summary file to check")
+    HARNESS.observation_contract.add_consumer_arguments(parser,required=False)
     arguments = parser.parse_args(argv)
     if bool(arguments.build) != bool(arguments.manifest_sha256):
         parser.error("--build requires --manifest-sha256; pins are only valid with --build")
@@ -3541,8 +3545,10 @@ def main(argv: list) -> int:
     if arguments.build or arguments.rederive:
         if arguments.build:
             try:
+                expected_contract,expected_delivery=HARNESS.observation_contract.arguments(arguments)
                 summary = build_summary([Path(item) for item in arguments.build],
-                                        manifest_sha256=arguments.manifest_sha256)
+                                        manifest_sha256=arguments.manifest_sha256,
+                                        expected_observation_contract=expected_contract, expected_delivery=expected_delivery)
             except (HARNESS.HarnessRefusal, ValueError) as error:
                 print(str(error), file=sys.stderr)
                 return 1

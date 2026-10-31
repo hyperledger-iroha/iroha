@@ -1,0 +1,21 @@
+[package]
+name = "iroha_native_source_delivery"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Retained native filesystem transaction for Python source delivery"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+iroha_fs.workspace = true
+norito = { workspace = true, default-features = false, features = ["json"] }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+hex = { workspace = true, features = ["alloc"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

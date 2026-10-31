@@ -134,6 +134,8 @@ fn journal_inventory_scope_preserves_actual_leaf_lock_decode_work_and_budgets() 
 fn journal_inventory_scope_keeps_native_precedence_fresh_bytes_and_original_retry() {
     use std::{fs, os::unix::fs::PermissionsExt as _};
     let root = tempfile::tempdir().unwrap();
+    // This test deliberately admits the parent with private-directory policy; a
+    // generic temporary directory can inherit 0755 from the process umask.
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let created = Journal::create_preparation(
         &root.path().join("journal"),

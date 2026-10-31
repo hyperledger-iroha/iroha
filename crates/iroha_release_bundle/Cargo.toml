@@ -1,0 +1,27 @@
+[package]
+name = "iroha_release_bundle"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Retained native publication and admission of Iroha release executable bundles"
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+tokio = ["dep:tokio"]
+
+[dependencies]
+iroha_fs.workspace = true
+norito = { workspace = true, default-features = false, features = ["json"] }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+hex = { workspace = true, features = ["alloc"] }
+tokio = { workspace = true, optional = true, features = ["process", "io-util", "macros"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }

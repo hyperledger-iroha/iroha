@@ -12,9 +12,9 @@
 //!   `0x02 ‖ rlp(…)` bytes, the signing hash, and QR-friendly uppercase-hex parts in the QR
 //!   alphanumeric character set. A signature returned by the signer is attached with
 //!   [`Eip1559TransactionV1::with_signature`], which checks its form and the recovered sender.
-//! - The owner-only key-file loader: external keys come only from regular, non-symlink files of
-//!   mode `0600` or stricter owned by the current user, holding the 32-byte secret as hex. Keys
-//!   are never read from argv or environment variables.
+//! - The native private key-file loader: single-link regular files hold a 32-byte hex secret.
+//!   Unix requires owner-only modes; Windows requires protected current-owner access control.
+//!   Original file identity and ancestry stay retained. Keys never come from argv or environment.
 
 use core::fmt;
 use std::path::Path;
@@ -865,7 +865,7 @@ pub enum KeyFileError {
     Symlink,
     /// The path is not a regular file.
     NotRegularFile,
-    /// Group or other permission bits are set (mode `0600` or stricter is required).
+    /// The Unix file mode is neither `0400` nor `0600`.
     Permissions {
         /// The permission bits of the file mode (`mode & 0o7777`).
         mode: u16,
@@ -882,8 +882,8 @@ pub enum KeyFileError {
     InvalidSecret,
     /// The file could not be opened or read.
     Io(std::io::ErrorKind),
-    /// Owner-only files cannot be checked on this platform.
-    Unsupported,
+    /// Native custody is unsafe, including inherited Windows access or multiple hard links.
+    UnsafeCustody,
 }
 
 impl fmt::Display for KeyFileError {
@@ -893,7 +893,7 @@ impl fmt::Display for KeyFileError {
             Self::NotRegularFile => formatter.write_str("the key file must be a regular file"),
             Self::Permissions { mode } => write!(
                 formatter,
-                "the key file mode {mode:o} grants group or other access; use 0600"
+                "the key file mode {mode:o} is unsafe; use 0400 or 0600"
             ),
             Self::NotOwner => formatter.write_str("the key file must be owned by the current user"),
             Self::Replaced => formatter.write_str("the key file was replaced while it was opened"),
@@ -905,8 +905,8 @@ impl fmt::Display for KeyFileError {
                 formatter.write_str("the key file secret is not a valid secp256k1 scalar")
             }
             Self::Io(kind) => write!(formatter, "the key file cannot be read: {kind}"),
-            Self::Unsupported => {
-                formatter.write_str("owner-only key files require Unix permissions")
+            Self::UnsafeCustody => {
+                formatter.write_str("the key file requires native private current-owner custody")
             }
         }
     }
@@ -976,8 +976,9 @@ impl EvmSigningKey {
         Self::from_secret(*parse_key_file_secret(bytes)?)
     }
 
-    /// Load an owner-only key file: a regular, non-symlink file of mode `0600` or stricter
-    /// owned by the current user.
+    /// Load a single-link regular key file under retained native current-owner custody.
+    /// Unix requires mode `0400` or `0600`; Windows requires protected owner-only access.
+    /// Symbolic links, reparse points and changing original files are refused.
     ///
     /// # Errors
     ///
@@ -1003,59 +1004,49 @@ impl EvmSigningKey {
     }
 }
 
-#[cfg(unix)]
 fn read_owner_only_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, KeyFileError> {
-    use std::{
-        fs::{self, File},
-        io::Read as _,
-        os::unix::fs::MetadataExt as _,
-    };
-
-    use rustix::fs::{Mode, OFlags};
+    use std::io::Read as _;
 
     let io = |error: std::io::Error| KeyFileError::Io(error.kind());
-    let check = |metadata: &fs::Metadata| -> Result<(), KeyFileError> {
-        if metadata.file_type().is_symlink() {
-            return Err(KeyFileError::Symlink);
-        }
-        if !metadata.is_file() {
-            return Err(KeyFileError::NotRegularFile);
-        }
-        if metadata.mode() & 0o077 != 0 {
+    let before = iroha_fs::FileMetadata::symlink_metadata(path).map_err(io)?;
+    if before.file_type().is_symlink() {
+        return Err(KeyFileError::Symlink);
+    }
+    if !before.is_file() {
+        return Err(KeyFileError::NotRegularFile);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if !matches!(before.mode() & 0o7777, 0o400 | 0o600) {
             return Err(KeyFileError::Permissions {
-                mode: u16::try_from(metadata.mode() & 0o7777).unwrap_or(u16::MAX),
+                mode: u16::try_from(before.mode() & 0o7777).unwrap_or(u16::MAX),
             });
         }
-        if metadata.uid() != rustix::process::geteuid().as_raw() {
+        if before.uid() != rustix::process::geteuid().as_raw() {
             return Err(KeyFileError::NotOwner);
         }
-        Ok(())
-    };
-    let before = fs::symlink_metadata(path).map_err(io)?;
-    check(&before)?;
-    let descriptor = rustix::fs::open(
-        path,
-        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
-        Mode::empty(),
-    )
-    .map_err(|error| {
-        if error == rustix::io::Errno::LOOP {
-            KeyFileError::Symlink
+    }
+    if before.len() > MAX_KEY_FILE_BYTES as u64 {
+        return Err(KeyFileError::TooLarge);
+    }
+    let mut owner = iroha_fs::RetainedFile::open_private(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::PermissionDenied {
+            KeyFileError::UnsafeCustody
         } else {
-            KeyFileError::Io(std::io::Error::from(error).kind())
+            io(error)
         }
     })?;
-    let mut file = File::from(descriptor);
-    let opened = file.metadata().map_err(io)?;
-    if opened.dev() != before.dev() || opened.ino() != before.ino() {
+    if owner.identity().map_err(io)? != before.identity() {
         return Err(KeyFileError::Replaced);
     }
-    check(&opened)?;
-    // A fixed buffer is never reallocated, so no unzeroized copy of the secret is left behind.
+    let original = owner.snapshot().map_err(io)?;
+    // This one fixed allocation holds even the growth sentinel, so secret bytes never
+    // escape into an unzeroized reallocation. The descriptor and ancestors stay retained.
     let mut buffer = Zeroizing::new(vec![0_u8; MAX_KEY_FILE_BYTES + 1]);
     let mut filled = 0;
     loop {
-        let read = file.read(&mut buffer[filled..]).map_err(io)?;
+        let read = owner.file_mut().read(&mut buffer[filled..]).map_err(io)?;
         if read == 0 {
             break;
         }
@@ -1064,13 +1055,11 @@ fn read_owner_only_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, KeyFileError>
             return Err(KeyFileError::TooLarge);
         }
     }
+    if owner.snapshot().map_err(io)? != original {
+        return Err(KeyFileError::Replaced);
+    }
     buffer.truncate(filled);
     Ok(buffer)
-}
-
-#[cfg(not(unix))]
-fn read_owner_only_file(_path: &Path) -> Result<Zeroizing<Vec<u8>>, KeyFileError> {
-    Err(KeyFileError::Unsupported)
 }
 
 #[cfg(test)]
@@ -1352,6 +1341,52 @@ mod tests {
         assert!(!debug.contains(hex));
     }
 
+    #[test]
+    fn native_private_key_custody_preserves_bytes_bounds_and_single_link_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let private = iroha_fs::PrivateDirectory::open_or_create(root.path().join("keys")).unwrap();
+        let bytes = b"0x998dba6f0ff534544e377f85847d49e338287a687a30139a1e4900525c48f197\n";
+        private
+            .write_atomic("evm.key", bytes, iroha_fs::PublishMode::CreateNew)
+            .unwrap();
+        let path = private.path().join("evm.key");
+        assert_eq!(
+            EvmSigningKey::load(&path).unwrap().address(),
+            fixture_key().address()
+        );
+        assert_eq!(read_owner_only_file(&path).unwrap().as_slice(), bytes);
+        let alias = private.path().join("alias.key");
+        std::fs::hard_link(&path, &alias).unwrap();
+        assert!(EvmSigningKey::load(&path).is_err());
+        assert!(EvmSigningKey::load(&alias).is_err());
+        std::fs::remove_file(alias).unwrap();
+        private
+            .write_atomic(
+                "large.key",
+                &vec![b'0'; MAX_KEY_FILE_BYTES + 1],
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
+        assert_eq!(
+            read_owner_only_file(&private.path().join("large.key")),
+            Err(KeyFileError::TooLarge)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_key_loader_rejects_inherited_windows_access_without_repair() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("inherited.key");
+        let bytes = b"998dba6f0ff534544e377f85847d49e338287a687a30139a1e4900525c48f197";
+        std::fs::write(&path, bytes).unwrap();
+        assert_eq!(
+            read_owner_only_file(&path),
+            Err(KeyFileError::UnsafeCustody)
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
     #[cfg(unix)]
     #[test]
     fn key_files_must_be_owner_only_regular_files() {
@@ -1377,6 +1412,16 @@ mod tests {
             EvmSigningKey::load(&path),
             Err(KeyFileError::Permissions { .. })
         ));
+        for unsafe_mode in [0o500, 0o1600] {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(unsafe_mode))
+                .expect("unsafe mode");
+            assert_eq!(
+                EvmSigningKey::load(&path).map(|key| key.address()),
+                Err(KeyFileError::Permissions {
+                    mode: unsafe_mode as u16,
+                })
+            );
+        }
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");
         let link = dir.path().join("link.key");
         symlink(&path, &link).expect("symlink");

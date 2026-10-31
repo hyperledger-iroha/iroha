@@ -36102,6 +36102,18 @@ static DEFAULT_TEST_IDENTITIES: LazyLock<(
 )> = LazyLock::new(|| {
     let config_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_config/iroha_test_config.toml");
+    // The checked-in testing identities are compiled fixture data. Native Windows
+    // must not require the build checkout's filesystem to expose local file IDs.
+    // Ordinary operator configuration still uses its retained file reader.
+    #[cfg(windows)]
+    let reader = iroha_config::base::read::ConfigReader::new()
+        .without_env()
+        .with_toml_source(iroha_config::base::toml::TomlSource::inline(
+            include_str!("../../iroha_config/iroha_test_config.toml")
+                .parse()
+                .expect("checked-in default testing config must be valid TOML"),
+        ));
+    #[cfg(not(windows))]
     let reader = iroha_config::base::read::ConfigReader::new()
         .without_env()
         .read_toml_with_extends(&config_path)

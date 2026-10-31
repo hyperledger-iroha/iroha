@@ -7396,12 +7396,13 @@ where
     T: for<'de> crate::DeserializePayload<'de> + crate::SerializePayload,
 {
     let (field, next_offset) = take_length_prefixed_context_field(ptr, *offset)?;
-    let (value, used) = decode_field_canonical::<T>(field)?;
-    if used != field.len() {
-        return Err(Error::LengthMismatch);
-    }
+    // Retain one decoded owner here instead of propagating `(T, usize)` through
+    // another generic return frame. Fixed arrays can make each such temporary
+    // several KiB, accumulated at every nested record field in debug builds.
+    let mut slot = TypedFieldSlot::<T>::new();
+    decode_field_canonical_into_slot(field, &mut slot)?;
     *offset = next_offset;
-    Ok(value)
+    slot.into_value()
 }
 /// Copy one fixed-width byte-array field relative to an active payload context.
 ///

@@ -11,9 +11,9 @@
 //! twiddle gather and the scalar tails) is therefore executed and compared
 //! with the scalar reference on every host. x86-64 hosts run it with the
 //! CPU's own instructions and check the model against them.
-// TODO: record a run of these kernels on a physical x86-64 CPU. The CI foundation lane builds
-// and tests this crate on x86-64 runners; on the AArch64 development host the kernels have run
-// over the lane model and under QEMU's x86-64 emulation only.
+//! The Intel i7-11800H run under WSL2 executes these instructions and checks every
+//! kernel against its scalar reference; see `docs/validation/intel_avx2.md`.
+//! `required_avx2_execution` rejects qualification through the lane model or fallback.
 // The lane model keeps the names of the intrinsics it stands in for.
 #![cfg_attr(not(target_arch = "x86_64"), allow(clippy::used_underscore_items))]
 #[cfg(not(target_arch = "x86_64"))]

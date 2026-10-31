@@ -3,11 +3,12 @@
 //! While it is definitely possible to support other formats than TOML, since there is no
 //! need for this for now, TOML support is integrated in a non-generic way.
 use error_stack::{Report, ResultExt};
+use iroha_fs::FileMetadata;
 use norito::json::{self, Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use std::{
     collections::{BTreeMap, BTreeSet},
     convert::TryFrom,
-    fs::{self, File, Metadata},
+    fs,
     io::Read,
     path::{Path, PathBuf},
 };
@@ -75,62 +76,67 @@ pub enum FromFileError {
     #[error("Error while deserializing file contents as TOML")]
     Parse,
 }
-#[cfg(unix)]
-fn metadata_same_file(left: &Metadata, right: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-#[cfg(not(unix))]
-fn metadata_same_file(left: &Metadata, right: &Metadata) -> bool {
-    left.len() == right.len()
-        && left.modified().ok() == right.modified().ok()
-        && left.created().ok() == right.created().ok()
+fn metadata_same_file(left: &FileMetadata, right: &FileMetadata) -> bool {
+    left.identity() == right.identity()
 }
 #[cfg(unix)]
-fn metadata_same_snapshot(left: &Metadata, right: &Metadata) -> bool {
+fn metadata_same_snapshot(left: &FileMetadata, right: &FileMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     metadata_same_file(left, right)
+        && left.links() == right.links()
         && left.len() == right.len()
         && left.mtime() == right.mtime()
         && left.mtime_nsec() == right.mtime_nsec()
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-#[cfg(not(unix))]
-fn metadata_same_snapshot(left: &Metadata, right: &Metadata) -> bool {
+#[cfg(windows)]
+fn metadata_same_snapshot(left: &FileMetadata, right: &FileMetadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
     metadata_same_file(left, right)
+        && left.links() == right.links()
+        && left.len() == right.len()
+        && left.file_attributes() == right.file_attributes()
+        && left.last_write_time() == right.last_write_time()
+        && left.creation_time() == right.creation_time()
 }
-fn regular_file_metadata(path: &Path) -> Result<Metadata, FromFileError> {
-    let metadata = fs::symlink_metadata(path).change_context(FromFileError::Read)?;
+fn regular_file_metadata(path: &Path) -> Result<FileMetadata, FromFileError> {
+    let metadata = FileMetadata::symlink_metadata(path).change_context(FromFileError::Read)?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
         return Err(Report::new(FromFileError::NotRegularFile));
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err(Report::new(FromFileError::NotRegularFile));
+        }
+    }
     Ok(metadata)
 }
-/// Stable identity of a regular TOML source on Unix.
-#[cfg(unix)]
+/// Complete native identity of a regular TOML source, independent of its path.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct RegularFileIdentity {
-    device: u64,
-    inode: u64,
+    native: (u8, u64, [u8; 16]),
 }
-/// Stable canonical identity of a regular TOML source.
-#[cfg(not(unix))]
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) struct RegularFileIdentity {
-    canonical_path: PathBuf,
-}
-#[cfg(unix)]
-fn regular_file_identity(metadata: &Metadata, _canonical_path: PathBuf) -> RegularFileIdentity {
-    use std::os::unix::fs::MetadataExt as _;
+fn regular_file_identity(metadata: &FileMetadata) -> RegularFileIdentity {
     RegularFileIdentity {
-        device: metadata.dev(),
-        inode: metadata.ino(),
+        native: metadata.identity().local_parts(),
     }
 }
-#[cfg(not(unix))]
-fn regular_file_identity(_metadata: &Metadata, canonical_path: PathBuf) -> RegularFileIdentity {
-    RegularFileIdentity { canonical_path }
+fn open_regular_source(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        // Hold the original bytes against in-place writes and name replacement for
+        // the entire bounded read, even if a writer could restore its timestamp.
+        options
+            .share_mode(0x1) // FILE_SHARE_READ.
+            .custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT.
+    }
+    options.open(path)
 }
 /// Inspect a source without following a final symlink and return its stable identity.
 pub(crate) fn canonical_regular_file_identity(
@@ -138,7 +144,11 @@ pub(crate) fn canonical_regular_file_identity(
 ) -> Result<(RegularFileIdentity, PathBuf), FromFileError> {
     let metadata = regular_file_metadata(path)?;
     let canonical_path = fs::canonicalize(path).change_context(FromFileError::Read)?;
-    let identity = regular_file_identity(&metadata, canonical_path.clone());
+    let canonical_metadata = regular_file_metadata(&canonical_path)?;
+    if !metadata_same_snapshot(&metadata, &canonical_metadata) {
+        return Err(Report::new(FromFileError::ChangedWhileReading));
+    }
+    let identity = regular_file_identity(&metadata);
     Ok((identity, canonical_path))
 }
 impl TomlSource {
@@ -187,10 +197,9 @@ impl TomlSource {
                 limit: max_bytes,
             }));
         }
-        let canonical_path = fs::canonicalize(&path).change_context(FromFileError::Read)?;
-        let identity = regular_file_identity(&initial_path_metadata, canonical_path);
-        let mut file = File::open(&path).change_context(FromFileError::Read)?;
-        let initial_open_metadata = file.metadata().change_context(FromFileError::Read)?;
+        let identity = regular_file_identity(&initial_path_metadata);
+        let mut file = open_regular_source(&path).change_context(FromFileError::Read)?;
+        let initial_open_metadata = FileMetadata::of(&file).change_context(FromFileError::Read)?;
         if !initial_open_metadata.file_type().is_file()
             || !metadata_same_snapshot(&initial_path_metadata, &initial_open_metadata)
         {
@@ -210,7 +219,7 @@ impl TomlSource {
                 limit: max_bytes,
             }));
         }
-        let final_open_metadata = file.metadata().change_context(FromFileError::Read)?;
+        let final_open_metadata = FileMetadata::of(&file).change_context(FromFileError::Read)?;
         let final_path_metadata = regular_file_metadata(&path)?;
         if !metadata_same_snapshot(&initial_open_metadata, &final_open_metadata)
             || !metadata_same_snapshot(&final_open_metadata, &final_path_metadata)
@@ -491,7 +500,7 @@ mod tests {
     use super::*;
     use expect_test::expect;
     use std::{
-        fs,
+        fs::{self, File},
         sync::atomic::{AtomicU64, Ordering},
     };
     use toml::toml;
@@ -509,6 +518,54 @@ mod tests {
         ));
         fs::create_dir_all(&path).expect("create temporary configuration directory");
         path
+    }
+    #[test]
+    fn native_source_identity_distinguishes_equal_bytes_and_unifies_hard_links() {
+        let dir = temp_config_dir("native-identity");
+        let first = dir.join("first.toml");
+        let second = dir.join("second.toml");
+        let alias = dir.join("alias.toml");
+        fs::write(&first, "value = 1\n").unwrap();
+        fs::write(&second, "value = 1\n").unwrap();
+        fs::hard_link(&first, &alias).unwrap();
+        let original = regular_file_metadata(&first).unwrap();
+        let linked = regular_file_metadata(&alias).unwrap();
+        let distinct = regular_file_metadata(&second).unwrap();
+        assert!(metadata_same_snapshot(&original, &linked));
+        assert!(!metadata_same_file(&original, &distinct));
+        let (identity, _) = canonical_regular_file_identity(&first).unwrap();
+        assert_eq!(identity, canonical_regular_file_identity(&alias).unwrap().0);
+        assert_ne!(
+            identity,
+            canonical_regular_file_identity(&second).unwrap().0
+        );
+        let (source, length, read_identity) = TomlSource::from_file_with_limit(&alias, 10).unwrap();
+        assert_eq!(read_identity, identity);
+        assert_eq!(length, 10);
+        assert_eq!(
+            source
+                .table()
+                .get("value")
+                .and_then(toml::Value::as_integer),
+            Some(1)
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn source_read_handle_excludes_writers_and_replacement_until_closed() {
+        let dir = temp_config_dir("native-sharing");
+        let path = dir.join("source.toml");
+        let moved = dir.join("moved.toml");
+        fs::write(&path, "value = 1\n").unwrap();
+        let original = open_regular_source(&path).unwrap();
+        assert!(fs::OpenOptions::new().write(true).open(&path).is_err());
+        assert!(fs::rename(&path, &moved).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"value = 1\n");
+        drop(original);
+        fs::write(&path, "value = 2\n").unwrap();
+        fs::rename(&path, &moved).unwrap();
+        fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn table_accessors_share_one_table() {
@@ -549,10 +606,13 @@ mod tests {
         );
         fs::remove_dir_all(dir).expect("remove temporary configuration directory");
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn from_file_rejects_symbolic_link() {
+        #[cfg(unix)]
         use std::os::unix::fs::symlink;
+        #[cfg(windows)]
+        use std::os::windows::fs::symlink_file as symlink;
         let dir = temp_config_dir("symlink");
         let target = dir.join("target.toml");
         let link = dir.join("link.toml");

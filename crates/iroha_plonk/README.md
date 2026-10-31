@@ -280,6 +280,12 @@ architecture, OS, width and byte order are checked separately using target cfg;
 unsupported targets cannot select a built-in member. The semantic contract is
 identical on supported targets. Cross-target correctness tests remain necessary.
 
+Filesystem paths are serialized component by component into Git's slash-separated
+census names on every native host. Windows separators do not disable source walks
+or omit restored references. Git inventory bytes remain strictly validated, and
+case and literal filename bytes are preserved; a shared fixture digest tests the
+same source identity on Unix and Windows.
+
 Repository provenance belongs to packaging and capture tools. The standalone
 `build_support/source_identity.rs` census records native sources, assets,
 manifest/lock/configuration and declared external inputs, with independent

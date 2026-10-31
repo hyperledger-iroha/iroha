@@ -120,17 +120,19 @@ impl<'view, 'state> SignerCertifiedWalkV1<'view, 'state> {
                 failed = true;
                 return Some(Err(ExecutionAttemptError::Rejected(Error::Finality)));
             }
-            // Move the receipt directly into its source-bound owner. Chained result maps
-            // retain additional full decoded receipt temporaries on debug native stacks.
-            match walk.as_mut()?.next()? {
-                Ok(block) => Some(Ok(SignerCertifiedBlockV1 {
+            let walk = walk.as_mut()?;
+            // Match the complete iterator result directly. Unwrapping its outer Option or
+            // mapping the inner Result retains extra full proof temporaries during decoding.
+            match walk.next() {
+                Some(Ok(block)) => Some(Ok(SignerCertifiedBlockV1 {
                     view: self.view,
                     block,
                 })),
-                Err(error) => {
+                Some(Err(error)) => {
                     failed = true;
                     Some(Err(error.map_rejection(|_| Error::Finality)))
                 }
+                None => None,
             }
         })
     }

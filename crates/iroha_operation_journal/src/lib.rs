@@ -256,6 +256,29 @@ impl Journal {
         Self::acquire(path, true)
     }
 
+    /// Reserve a fresh journal child through an original retained private parent.
+    ///
+    /// The new directory and lock share that parent's native ancestry without reopening
+    /// its path. An incomplete reservation remains visible after an I/O failure and must
+    /// be reconciled before retrying; existing evidence is never replaced.
+    ///
+    /// # Errors
+    /// Refuses invalid or existing names, changed custody, competing locks and native errors.
+    pub fn create_child(
+        parent: &PrivateDirectory,
+        name: impl AsRef<std::ffi::OsStr>,
+    ) -> Result<Self> {
+        let outcome = parent
+            .create_child(name)
+            .map_err(Into::into)
+            .and_then(|directory| Self::lock_directory(directory, true));
+        if let Err(error) = parent.revalidate() {
+            drop(outcome);
+            return Err(error.into());
+        }
+        outcome
+    }
+
     /// Atomically publish the complete original operation and lock, then acquire the journal.
     /// No partial journal can appear at `path` between directory creation and retaining the signed
     /// bytes. An uncertain publication is reconciled by reopening this same path, never preparing

@@ -29,7 +29,7 @@
 - ✅ Deterministic encrypted-payload fixtures feed both Rust and Swift parity suites to keep Norito bytes in sync (`fixtures/confidential/encrypted_payload_v1.json:1`, `crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs:1`, `IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift:73`).
 - ✅ SDK Council rollout vote recorded in `specs/confidential_assets/approvals/payload_v1_rollout.md`; `status.md` logs the decision link so production flip now has auditable backing.
 
-## M2 — Gas Schedule & Telemetry *(🈴 Completed)*
+## M2 — Gas Schedule & Telemetry *(native calibration open)*
 
 | ID | Task | Owner(s) | Dependencies | Exit Criteria |
 |----|------|----------|--------------|---------------|
@@ -44,8 +44,8 @@
 
 - ✅ Confidential gas knobs thread from `iroha_config` through Kiso into runtime + telemetry updates, so operators can dial proof-base/per-byte costs deterministically (`crates/iroha_core/src/kiso.rs:298`, `crates/iroha_telemetry/src/metrics.rs:5760`–`5815`).
 - ✅ Grafana dashboards and docs show the new CommitmentTree metrics/alerting workflow, matching the roadmap references (`dashboards/grafana/confidential_assets.json:1`, `specs/confidential_assets.md:401`).
-- ✅ Apple Silicon NEON calibration refreshed (2026-04-28) with averages/logs captured in `specs/confidential_assets_calibration.md` and `specs/confidential_assets_calibration_neon_20260428.log`, satisfying the bench artefact requirement for this milestone.
-- ⚠️ SIMD-neutral + AVX2 runs waived by SDK Council pending access to x86_64 hosts; waiver + failure logs recorded alongside the calibration ledger (`specs/confidential_assets_calibration.md:7`). Follow-up action tracked via CI ticket GAS-214.
+- Historical Apple Silicon measurements are retained in `specs/confidential_assets_calibration.md` and `specs/confidential_assets_calibration_neon_20260428.log`; they do not qualify the current candidate on the named reference hosts.
+- SIMD-neutral and AVX2 calibration remains open under [WI9](../windows_intel_completion_goals.md). The earlier x86 waiver does not complete the current platform goal. Capture the specified Xeon Gold 6430 baselines (neutral also permits AMD EPYC 7B12), raw artifacts, telemetry and tolerances; preserve the separate Graviton3 NEON requirement. Available i7 instruction-parity results do not substitute for these measurements.
 
 ## M3 — Rotation & Wallet Tooling *(🈴 Completed)*
 
@@ -79,7 +79,7 @@ Status: ✅ All rotation policy, SDK/CLI tooling, and rehearsal ownership tasks 
 
 ### M4 Status
 
-Status: ✅ Operator/auditor runbooks, selective-disclosure APIs, calibration artefacts, and review tracking are all in-tree; milestone is now considered delivered pending the separate x86 waiver noted above.
+Status: Operator/auditor runbooks, selective-disclosure APIs and review tracking are in-tree. Current native calibration remains open under M2 and WI9; the historical waiver does not establish release qualification.
 
 - ✅ Auditor & operator workflows consolidated in `specs/confidential_assets_audit_runbook.md` (event feeds, telemetry surfaces, calibration evidence requirements, and external-review cadence).
 - ✅ Selective disclosure APIs + SDK bindings are documented in

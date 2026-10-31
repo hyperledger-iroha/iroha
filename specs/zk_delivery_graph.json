@@ -930,7 +930,7 @@
       ],
       "status": "implemented",
       "evidence": {
-        "source": "6043d97c4003da4bbb3fc772d9a0548b3f456b16 plus the current narrow Norito feature classification/test repair and value-identical FHE inventory canonical-format repair. All cited commands ran on this arm64 Mac on 2026-10-11; C2 Rust owners were unchanged. Current report and retained logs/fingerprints: dist/zk-delivery-handoff/reports/C.2-reassessment-2026-10-11.md and review-c2/. Source fingerprint recheck confirms all57 non-inventory pinned files unchanged; the inventory was reconciled and the current Python3.12 guard passes787 files/23primitives. This is component implementation evidence, not a full rebuilt-workspace qualification.",
+        "source": "6043d97c4003da4bbb3fc772d9a0548b3f456b16 plus the current narrow Norito feature classification/test repair and value-identical FHE inventory canonical-format repair. All cited commands ran on this arm64 Mac on 2026-10-11; C2 Rust owners were unchanged. Current report and retained logs/fingerprints: dist/zk-delivery-handoff/reports/C.2-reassessment-2026-10-11.md and review-c2/. Source fingerprint recheck confirms all57 non-inventory pinned files unchanged; the inventory was reconciled and the current Python3.12 guard passes787 files/23primitives. This is component implementation evidence, not a full rebuilt-workspace qualification. Hardware closure on 2026-10-22: HEAD 61bc20da4add8362651bf0f8dfbd2ce62388fb42 plus the current required-AVX2 test, under Intel i7-11800H WSL2; the 50-file arithmetic source inventory and exact execution scope are recorded in docs/validation/intel_avx2.md. Prior consumer and ownership checks retain their historical source scope.",
         "paths": [
           "crates/iroha_fhe/Cargo.toml",
           "crates/iroha_fhe/src/lib.rs",
@@ -948,7 +948,8 @@
           "specs/fhe_ownership_inventory.json",
           "scripts/check_cargo_feature_hygiene.py",
           "pytests/scripts/check_cargo_feature_hygiene_test.py",
-          "Cargo.lock"
+          "Cargo.lock",
+          "docs/validation/intel_avx2.md"
         ],
         "commands": [
           {
@@ -1008,17 +1009,16 @@
             "outcome": "passed"
           },
           {
-            "command": "bash -o pipefail -c 'cd \"$(git rev-parse --show-toplevel)\" && test \"$(uname -m)\" = x86_64 && mkdir -p dist/zk-delivery-handoff/review-c2 && CARGO_TARGET_DIR=target/zk-c2-physical-avx2 CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --lib accel:: -- --nocapture 2>&1 | tee dist/zk-delivery-handoff/review-c2/physical-avx2.log && ! rg -q \"AVX2 is not available on this CPU\" dist/zk-delivery-handoff/review-c2/physical-avx2.log'",
-            "outcome": "not_run",
-            "platform_todo": {
-              "platform": "physical_x86_64",
-              "reason": "Required physical AVX2 instruction execution is unavailable on this arm64 development Mac. Existing direct kernel and CPU/lane-model comparison tests are runnable; the exact command requires an x86-64 checkout and rejects the informative AVX2-unavailable skip. Lane-model/QEMU evidence is not physical execution.",
-              "todo_site": {
-                "path": "crates/iroha_fhe/src/accel/avx2.rs",
-                "marker": "TODO: record a run of these kernels on a physical x86-64 CPU."
-              },
-              "owner": "V.4"
-            }
+            "command": "scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --lib accel::tests::required_avx2_execution -- --ignored --exact --nocapture",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --lib --test canonical_vectors --test clearing --test rns_chain_vectors",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --no-default-features --lib --test canonical_vectors --test clearing --test rns_chain_vectors",
+            "outcome": "passed"
           },
           {
             "command": "/opt/homebrew/bin/python3.12 -I -S scripts/check_fhe_ownership_map.py",
@@ -1038,8 +1038,8 @@
           },
           {
             "clause": "Scalar, Metal, NEON/SIMD and CUDA paths used by supported targets match canonical vectors; provide deterministic fallback and retain independent mathematical test oracles.",
-            "state": "partial",
-            "proof": "Local checks are complete: CARGO_TARGET_DIR=target/zk-resume-review CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --lib --test canonical_vectors --test clearing --test rns_chain_vectors and CARGO_TARGET_DIR=target/zk-resume-review CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --no-default-features --lib --test canonical_vectors --test clearing --test rns_chain_vectors each pass 163 unit+9 canonical-vector+7 clearing+4 wide-RNS-vector tests. crates/iroha_fhe/tests/canonical_vectors.rs independently re-derives pinned results with num-bigint, crates/iroha_fhe/tests/clearing.rs observes success/error/unwind erasure, and crates/iroha_fhe/tests/rns_chain_vectors.rs exercises 50-62-bit exact arithmetic. crates/iroha_fhe/src/accel.rs asserts NEON on this host and dispatches ineligible inputs to scalar. The entire remaining gap is the physical_x86_64 platform TODO command bash -o pipefail -c 'cd \"$(git rev-parse --show-toplevel)\" && test \"$(uname -m)\" = x86_64 && mkdir -p dist/zk-delivery-handoff/review-c2 && CARGO_TARGET_DIR=target/zk-c2-physical-avx2 CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --lib accel:: -- --nocapture 2>&1 | tee dist/zk-delivery-handoff/review-c2/physical-avx2.log && ! rg -q \"AVX2 is not available on this CPU\" dist/zk-delivery-handoff/review-c2/physical-avx2.log' at crates/iroha_fhe/src/accel/avx2.rs; it is not_run and owned by V.4, not passed or hardware qualification. crates/iroha_fhe/src/ntt.rs records that no word-modulus Metal/CUDA kernel exists or is selected; the earlier general C2 ruling does not require nonexistent paths, and new accelerator paths must reopen evidence."
+            "state": "met",
+            "proof": "The earlier arm64 scalar/NEON results and independent references remain recorded in crates/iroha_fhe/tests/canonical_vectors.rs, crates/iroha_fhe/tests/clearing.rs, crates/iroha_fhe/tests/rns_chain_vectors.rs and crates/iroha_fhe/src/accel.rs. The deferred AVX2 command is superseded by scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --lib accel::tests::required_avx2_execution -- --ignored --exact --nocapture (1 passed): it requires native x86-64 and selected AVX2 before running every direct instruction kernel comparison, so lane-model or scalar-only success cannot qualify. scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --lib --test canonical_vectors --test clearing --test rns_chain_vectors and scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --no-default-features --lib --test canonical_vectors --test clearing --test rns_chain_vectors each pass 164 unit, 9 canonical-vector, 7 clearing and 4 RNS-chain tests on the Intel i7-11800H. docs/validation/intel_avx2.md pins the source inventory, native instruction coverage, WSL2 virtualization and the scalar-only negative control. This closes the actual AVX2 instruction-execution gap, not bare-metal OS, named Xeon performance, whole-node or release qualification. crates/iroha_fhe/src/accel/avx2.rs links the actual execution evidence; crates/iroha_fhe/src/ntt.rs still records no word-modulus Metal/CUDA kernel exists or is selected. New accelerator paths must reopen evidence. Historical arm64 commands were CARGO_TARGET_DIR=target/zk-resume-review CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --lib --test canonical_vectors --test clearing --test rns_chain_vectors and CARGO_TARGET_DIR=target/zk-resume-review CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --no-default-features --lib --test canonical_vectors --test clearing --test rns_chain_vectors."
           }
         ]
       }
@@ -2578,7 +2578,7 @@
           {
             "clause": "Test interruption before submission, after ambiguous submission and after irreversible progress; resume checks committed outcome before retrying and never fabricates cross-transaction atomicity.",
             "state": "partial",
-            "proof": "The historical python3 dist/zk-delivery-handoff/scripts/run_sdk_original_decode_review.py passed 63 actual SDK tests at its source-pinned checkpoint, including interruption/status recovery, ambiguous admission, irreversible progress, cancellation races and six original-reader/writer regressions. Its zero/tight budgets preserved original kind after retirement and an unrelated equal-budget scope, unchanged stored/signed custody and successful same-byte retry; malformed data still yielded corruption/rejection and signed preflight refusal sent no HTTP. The earlier lower version 11 and model wire 10 tests passed at their recorded checkpoints, including bare-decode versus late checked-writer controls. None is promoted to the changed current dependency candidate, which still needs actual SDK/consumer qualification. Prior scratch CAS/refund mutants and 39 workflow guard tests are historical evidence. Non-Rust families and external multisignature signing remain open. crates/iroha/src/workflow/storage.rs retains Linux/Windows file-store and Windows ACL execution TODOs. Wider CoreZK/IVM/governance proof-reader error erasure and remaining wallet-original paths are separate F.2/F.4/product dependencies; neither a wallet component result nor this historical Rust workflow result qualifies them."
+            "proof": "The historical python3 dist/zk-delivery-handoff/scripts/run_sdk_original_decode_review.py passed 63 actual SDK tests at its source-pinned checkpoint, including interruption/status recovery, ambiguous admission, irreversible progress, cancellation races and six original-reader/writer regressions. Its zero/tight budgets preserved original kind after retirement and an unrelated equal-budget scope, unchanged stored/signed custody and successful same-byte retry; malformed data still yielded corruption/rejection and signed preflight refusal sent no HTTP. The earlier lower version 11 and model wire 10 tests passed at their recorded checkpoints, including bare-decode versus late checked-writer controls. None is promoted to the changed current dependency candidate, which still needs actual SDK/consumer qualification. Prior scratch CAS/refund mutants and 39 workflow guard tests are historical evidence. Non-Rust families and external multisignature signing remain open. crates/iroha/src/workflow/storage.rs now asserts actual native private custody for every journal, CAS lock and runner lease; its Linux storage suite passes. Full Windows SDK storage/engine execution remains pending separately from the native filesystem controls; specs/windows_intel_completion_goals.md tracks that outcome. Wider CoreZK/IVM/governance proof-reader error erasure and remaining wallet-original paths are separate F.2/F.4/product dependencies; neither a wallet component result nor this historical Rust workflow result qualifies them."
           }
         ]
       }
@@ -3786,7 +3786,7 @@
       ],
       "status": "in_progress",
       "evidence": {
-        "source": "bf7defad2bac0079209de1802351ec4a0d343ff4 plus current adopted local implementation. The source-pinned dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/result.json completed three genuine complete credential proofs with separate replay using the same native verifier implementation and negative controls. Ordinary and maximum each encode 9,412,944 bytes and take 1060.961117s / 1053.277860s; RSS is 9,393,373,184 / 9,468,788,736 bytes. Both fail the unchanged 300-second and 1% unattributed-phase gates (19,511 / 19,832 ppm). The holder proof verifies but release correctly refuses its expired deadline. These are non-isolated local measurements: Swift and later GPU validation overlapped. They predate the subsequently adopted fixed-schedule/fixed-matrix and macOS feature-forwarding changes, so they do not qualify current performance. Darwin does not establish Linux 32 GiB RLIMIT_AS enforcement; no network submission occurred. Earlier commands below keep their recorded source scopes; prepared I.3 packets are not adopted work.",
+        "source": "bf7defad2bac0079209de1802351ec4a0d343ff4 plus current adopted local implementation. The source-pinned dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/result.json completed three genuine complete credential proofs with separate replay using the same native verifier implementation and negative controls. Ordinary and maximum each encode 9,412,944 bytes and take 1060.961117s / 1053.277860s; RSS is 9,393,373,184 / 9,468,788,736 bytes. Both fail the unchanged 300-second and 1% unattributed-phase gates (19,511 / 19,832 ppm). The holder proof verifies but release correctly refuses its expired deadline. These are non-isolated local measurements: Swift and later GPU validation overlapped. They predate the subsequently adopted fixed-schedule/fixed-matrix and macOS feature-forwarding changes, so they do not qualify current performance. Darwin does not establish Linux 32 GiB RLIMIT_AS enforcement; no network submission occurred. Earlier commands below keep their recorded source scopes; prepared I.3 packets are not adopted work. Linux harness controls at 61bc20da4add8362651bf0f8dfbd2ce62388fb42 plus the exit-during-sleep observation repair retain their scope; docs/validation/linux_resource_harness.md records RLIMIT_AS checks separately from complete prover qualification.",
         "paths": [
           "crates/iroha_measurement/src/schema.rs",
           "crates/iroha_measurement/src/recorder.rs",
@@ -3803,7 +3803,8 @@
           "crates/iroha/Cargo.toml",
           "Cargo.lock",
           "crates/iroha_measurement/fixtures/consumers.json",
-          "crates/iroha_measurement/README.md"
+          "crates/iroha_measurement/README.md",
+          "docs/validation/linux_resource_harness.md"
         ],
         "commands": [
           {
@@ -3831,8 +3832,8 @@
             "outcome": "failed"
           },
           {
-            "command": "python3 scripts/zk_resource_harness.py run --address-space-limit-bytes 34359738368 (on a Linux host, where RLIMIT_AS can be applied)",
-            "outcome": "not_run"
+            "command": "python3 -m unittest -v scripts/tests/zk_resource_harness_test.py",
+            "outcome": "passed"
           },
           {
             "command": "python3 scripts/zk_resource_harness.py run --require-thermal-state (on a physical iOS or Android device through an SDK emitter)",
@@ -3855,7 +3856,7 @@
           {
             "clause": "Provide one complete phase tree for proof/verification/native/SDK flows with inclusive/exclusive wall and CPU times, worker count/load, allocations/live buffers, ciphertext/key/proof bytes, peak RSS and enforced address-space observations.",
             "state": "partial",
-            "proof": "crates/iroha_measurement/src/schema.rs and crates/iroha_measurement/src/recorder.rs implement the shared phase tree; crates/iroha_measurement/tests/layering.rs checks dependency separation. crates/iroha/tests/sdk_phase_tree_measurement.rs now measures actual AccountClient preparation/signing/canonical frame encoding and exact roundtrip/signature checks, with frame Vec capacity counters, public-call phases and typed failed/unwound records. /opt/homebrew/bin/python3.12 dist/zk-delivery-handoff/scripts/run_e1_live_sdk_retry_2026_10_12.py passed current11 guards,4 SDK controls and original2accepted/2expectedrejected runs; independent Core replay is retained under dist/zk-delivery-handoff/reports/E.1-rust-sdk-live-adopted-independent-core-review-2026-10-12.json. Historical actual FASTPQ and X509 adapter evidence remains scoped to its recorded source. This does not complete every native/SDK emitter, every allocation family or six SDK deliveries; those are ordinary implementation gaps. Enforced Linux address-space and physical iOS/Android thermal measurements remain not run on this Mac, as documented in crates/iroha_measurement/README.md and platform.rs."
+            "proof": "crates/iroha_measurement/src/schema.rs and crates/iroha_measurement/src/recorder.rs implement the shared phase tree; crates/iroha_measurement/tests/layering.rs checks dependency separation. crates/iroha/tests/sdk_phase_tree_measurement.rs now measures actual AccountClient preparation/signing/canonical frame encoding and exact roundtrip/signature checks, with frame Vec capacity counters, public-call phases and typed failed/unwound records. /opt/homebrew/bin/python3.12 dist/zk-delivery-handoff/scripts/run_e1_live_sdk_retry_2026_10_12.py passed current11 guards,4 SDK controls and original2accepted/2expectedrejected runs; independent Core replay is retained under dist/zk-delivery-handoff/reports/E.1-rust-sdk-live-adopted-independent-core-review-2026-10-12.json. Historical actual FASTPQ and X509 adapter evidence remains scoped to its recorded source. This does not complete every native/SDK emitter, every allocation family or six SDK deliveries; those are ordinary implementation gaps. Current python3 -m unittest -v scripts/tests/zk_resource_harness_test.py passes 56 controls, including real Linux 8 GiB enforcement and a mismatched record refusal; a separate real-child run verifies both 32 GiB kernel limits. docs/validation/linux_resource_harness.md records the observed exit-during-sleep race, deterministic regression and unchanged rejection of actual observation failures. Complete native prover measurement and physical iOS/Android thermal measurements remain open; synthetic native tee records do not qualify them."
           },
           {
             "clause": "Unattributed proving time is at most 1%; record cache/warm-cold policy, named reference hardware, source/artifact/profile/config identity and raw failures.",

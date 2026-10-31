@@ -194,8 +194,15 @@ caller. `constant_time` is branch-free in operand values; `modular` is not.
 ```sh
 cargo test -p iroha_fhe                         # accelerated kernels and scalar references
 cargo test -p iroha_fhe --no-default-features   # scalar-only build
+cargo test -p iroha_fhe --lib accel::tests::required_avx2_execution -- --ignored --exact
 make check-fhe-bgv-cost                         # cost summary, its view and the known answers are current
 ```
+
+The explicit AVX2 qualification test requires x86-64, the `simd` feature and
+runtime AVX2 support. It fails instead of accepting a scalar fallback or the
+portable lane model. The [Intel execution record](../../docs/validation/intel_avx2.md)
+identifies the checked source and host; this arithmetic check does not qualify
+protocol security or a named performance baseline.
 
 The BGV tests use two references that share no code with the crate:
 `tests/vectors/bgv_reference.py` (Python integers, its own BLAKE3) generates

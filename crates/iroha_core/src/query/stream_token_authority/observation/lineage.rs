@@ -61,9 +61,14 @@ pub(super) fn authenticate<'view, 'state, 'bound>(
         ])?;
         let chain =
             SignerCertifiedWalkV1::new(view).map_err(|error| error.map_rejection(Error::from))?;
-        for block in chain.walk(targets.start(), targets.end()) {
+        // Keep the large fixed native receipts in the original iterator while advancing it.
+        let mut walk = chain.walk(targets.start(), targets.end());
+        for block in &mut walk {
             prepared.round.ensure_live().map_err(Error::from)?;
-            let block = block.map_err(|error| error.map_rejection(Error::from))?;
+            let block = match block {
+                Ok(block) => block,
+                Err(error) => return Err(error.map_rejection(Error::from)),
+            };
             targets.consume(block.height())?;
             if block.height() >= floor {
                 check

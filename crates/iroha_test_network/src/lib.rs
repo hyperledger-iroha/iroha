@@ -20,9 +20,23 @@ pub use disposable_rotation_ceremony::{
     GenesisDkgRunConfig, prepare_disposable_pending_custody, run_disposable_genesis_dkg,
     run_disposable_genesis_dkg_from_configs, run_disposable_rotation_dkg,
 };
+mod development_process;
 pub mod fslock_ports;
 pub mod genesis_support;
+#[cfg(test)]
+mod native_program_fixture;
+mod release_contract;
+pub use development_process::{
+    command as development_process_command, require_development_process_mode,
+};
+mod resolved_program;
 mod retained_genesis;
+pub use iroha_release_bundle::manifest::BinaryKind;
+use release_contract::release_program_contract;
+use resolved_program::ResolvedAsyncChild as Child;
+pub use resolved_program::{ResolvedAsyncChild, ResolvedChild, ResolvedCommand, ResolvedProgram};
+#[cfg(windows)]
+mod windows_process;
 use color_eyre::eyre::{Context, Report, Result, eyre};
 pub use config::chain_id;
 pub use config::genesis_participant_committee_key_instructions;
@@ -49,7 +63,6 @@ use iroha_core::sumeragi::{
 };
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash as CryptoHash, KeyPair, PrivateKey, PublicKey, sha256,
-    sha256_reader_bounded,
 };
 use iroha_data_model::da::commitment::DaProofPolicyBundle;
 use iroha_data_model::{
@@ -80,6 +93,7 @@ use iroha_data_model::{
     sns::NameStatus,
     transaction::Executable,
 };
+use iroha_fs::{ProcessChild, ProcessCommand, ProcessStdio as Stdio};
 use iroha_genesis::{GenesisBlock, GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
@@ -120,7 +134,7 @@ use std::{
     num::NonZero,
     ops::Deref,
     path::{Component, Path, PathBuf},
-    process::{ExitStatus, Output, Stdio},
+    process::{ExitStatus, Output},
     sync::{
         Arc, Mutex as StdMutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -136,7 +150,6 @@ use tokio::{
     fs::File,
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
     net::{TcpListener as TokioTcpListener, TcpStream},
-    process::Child,
     runtime::{self, Runtime},
     sync::{Mutex, Notify, OwnedRwLockWriteGuard, RwLock, broadcast, oneshot, watch},
     task::{JoinHandle, JoinSet, spawn_blocking},
@@ -585,13 +598,14 @@ fn build_command_timeout_env() -> Duration {
     read_env_duration(BUILD_COMMAND_TIMEOUT_ENV, BUILD_COMMAND_TIMEOUT_DEFAULT)
 }
 fn command_output_with_timeout(
-    command: &mut std::process::Command,
+    mut command: ProcessCommand,
     timeout: Duration,
 ) -> std::io::Result<Output> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     let command_debug = format!("{command:?}");
     let mut child = command.spawn()?;
     let stdout = child.stdout.take().map(read_pipe);
@@ -628,7 +642,7 @@ fn join_pipe(handle: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
         .unwrap_or_default()
 }
 fn wait_for_child_exit(
-    child: &mut std::process::Child,
+    child: &mut ProcessChild,
     timeout: Duration,
 ) -> std::io::Result<Option<ExitStatus>> {
     let started = Instant::now();
@@ -954,9 +968,9 @@ fn env_filter_from_env_or_default() -> tracing_subscriber::EnvFilter {
 trait CommandEnv {
     fn env_remove(&mut self, key: &str);
 }
-impl CommandEnv for tokio::process::Command {
+impl CommandEnv for ResolvedCommand {
     fn env_remove(&mut self, key: &str) {
-        tokio::process::Command::env_remove(self, key);
+        ResolvedCommand::env_remove(self, key);
     }
 }
 fn config_env_override_keys() -> &'static [&'static str] {
@@ -1073,16 +1087,16 @@ struct ProgramSpec {
     isolated_target_subdir: Option<&'static str>,
 }
 impl Program {
-    const fn release_prebuilt_binary(self) -> ReleasePrebuiltBinary {
+    const fn release_prebuilt_binary(self) -> BinaryKind {
         match self {
-            Self::Irohad => ReleasePrebuiltBinary::Irohad,
-            Self::IrohadTaira => ReleasePrebuiltBinary::IrohadTaira,
-            Self::IrohadPrivateSettlementRoutes => ReleasePrebuiltBinary::Irohad,
+            Self::Irohad => BinaryKind::Irohad,
+            Self::IrohadTaira => BinaryKind::IrohadTaira,
+            Self::IrohadPrivateSettlementRoutes => BinaryKind::Irohad,
             // The test signer is explicitly rejected whenever a release-prebuilt
             // contract is active. This value is therefore an unreachable sentinel.
-            Self::IrohadParliamentSigners => ReleasePrebuiltBinary::Irohad,
-            Self::IrohadDisposableBroker => ReleasePrebuiltBinary::Irohad,
-            Self::Iroha => ReleasePrebuiltBinary::Iroha,
+            Self::IrohadParliamentSigners => BinaryKind::Irohad,
+            Self::IrohadDisposableBroker => BinaryKind::Irohad,
+            Self::Iroha => BinaryKind::Iroha,
         }
     }
     const fn release_prebuilt_allowed(self) -> bool {
@@ -1180,7 +1194,7 @@ impl Program {
         }
     }
 }
-// Cache resolved binary paths to avoid redundant rebuilds/resolution per peer
+// Cache developer paths only. Qualified selections carry their own retained release owner.
 static IROHAD_TAIRA_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_PRIVATE_SETTLEMENT_ROUTES_BIN: OnceLock<PathBuf> = OnceLock::new();
@@ -1192,75 +1206,20 @@ const BUILD_STAMP_VERSION: u32 = 3;
 const IROHA_TEST_TARGET_DIR_ENV: &str = "IROHA_TEST_TARGET_DIR";
 const IROHA_TEST_BUILD_PROFILE_ENV: &str = "IROHA_TEST_BUILD_PROFILE";
 const IROHA_TEST_SKIP_BUILD_ENV: &str = "IROHA_TEST_SKIP_BUILD";
+#[cfg(test)]
 const IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV: &str = "IROHA_RELEASE_SOURCE_MANIFEST_SHA256";
+#[cfg(test)]
 const IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV: &str = "IROHA_RELEASE_PREBUILT_MANIFEST_SHA256";
+#[cfg(test)]
 const IROHA_RELEASE_CARGO_LOCK_SHA256_ENV: &str = "IROHA_RELEASE_CARGO_LOCK_SHA256";
+#[cfg(test)]
 const IROHA_RELEASE_ARTIFACT_ROOT_ENV: &str = "IROHA_RELEASE_ARTIFACT_ROOT";
 const IROHA_TEST_TARGET_SUBDIR: &str = "iroha-test-network";
-const SUMERAGI_RELEASE_TARGET_SUBDIR: &str = "sumeragi-release";
-const SUMERAGI_RELEASE_PROGRAMS_SUBDIR: &str = "programs";
-const SUMERAGI_RELEASE_INVOCATION_PREFIX: &str = "invocation.";
-const SUMERAGI_PREBUILT_MANIFEST: &str = ".sumeragi-prebuilt-binaries.tsv";
-const SUMERAGI_PREBUILT_MANIFEST_SCHEMA_VERSION: &str = "2";
-const MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES: u64 = 32 * 1024;
-const MAX_SUMERAGI_PREBUILT_BINARY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-const MAX_WORKSPACE_CARGO_LOCK_BYTES: u64 = 16 * 1024 * 1024;
-const RELEASE_BINARY_MODE_OCTAL: &str = "0500";
-const RELEASE_BINARY_MODE: u32 = 0o500;
-const RELEASE_MANIFEST_MODE: u32 = 0o400;
 #[derive(Debug, Clone)]
 struct BuildStamp {
     fingerprint: u64,
     profile: String,
     binary: PathBuf,
-}
-/// One executable covered by the source-bound release prebuild manifest.
-#[doc(hidden)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum ReleasePrebuiltBinary {
-    Irohad,
-    Iroha,
-    Kagami,
-    IrohadTaira,
-}
-impl ReleasePrebuiltBinary {
-    const ALL: [Self; 4] = [Self::Irohad, Self::Iroha, Self::Kagami, Self::IrohadTaira];
-    const fn manifest_prefix(self) -> &'static str {
-        match self {
-            Self::Irohad => "irohad",
-            Self::Iroha => "iroha",
-            Self::Kagami => "kagami",
-            Self::IrohadTaira => "irohad_taira",
-        }
-    }
-    const fn relative_path(self) -> &'static str {
-        match self {
-            Self::Irohad => "release/iroha3d",
-            Self::Iroha => "release/iroha",
-            Self::Kagami => "release/kagami",
-            Self::IrohadTaira => "release/iroha3d_taira",
-        }
-    }
-}
-#[derive(Debug, Clone)]
-struct ReleaseBinaryAttestation {
-    kind: ReleasePrebuiltBinary,
-    sha256: String,
-    size_bytes: u64,
-}
-#[derive(Debug, Clone)]
-struct ReleaseProgramContract {
-    configured_target_dir: PathBuf,
-    canonical_target_dir: PathBuf,
-    binaries: [ReleaseBinaryAttestation; 4],
-}
-impl ReleaseProgramContract {
-    fn binary(&self, kind: ReleasePrebuiltBinary) -> &ReleaseBinaryAttestation {
-        self.binaries
-            .iter()
-            .find(|entry| entry.kind == kind)
-            .expect("release manifest contains every fixed binary kind")
-    }
 }
 fn resolve_target_dir_path(repo: &Path, raw: &str) -> PathBuf {
     let candidate = PathBuf::from(raw);
@@ -1280,12 +1239,6 @@ fn resolve_target_dir(repo: &Path) -> PathBuf {
     }
     repo.join("target").join(IROHA_TEST_TARGET_SUBDIR)
 }
-fn is_lowercase_sha256(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
 fn lowercase_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut encoded = String::with_capacity(bytes.len() * 2);
@@ -1302,679 +1255,54 @@ fn exact_env_value(key: &str) -> color_eyre::Result<Option<String>> {
         Err(std::env::VarError::NotUnicode(_)) => Err(eyre!("{key} must contain valid Unicode")),
     }
 }
-#[cfg(unix)]
-fn authenticate_release_artifact_root(repo: &Path, raw: &str) -> color_eyre::Result<PathBuf> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let configured = PathBuf::from(raw);
-    if !configured.is_absolute() {
-        return Err(eyre!(
-            "release binary resolution requires an absolute {IROHA_RELEASE_ARTIFACT_ROOT_ENV}"
-        ));
-    }
-    let metadata = fs::symlink_metadata(&configured).wrap_err_with(|| {
-        eyre!(
-            "failed to inspect release artifact root {}",
-            configured.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(eyre!(
-            "{IROHA_RELEASE_ARTIFACT_ROOT_ENV} must name a real directory, not a symlink"
-        ));
-    }
-    if metadata.uid() != nix::unistd::geteuid().as_raw() || metadata.mode() & 0o7777 != 0o700 {
-        return Err(eyre!(
-            "{IROHA_RELEASE_ARTIFACT_ROOT_ENV} must be an effective-user-owned private directory with exact mode 0700"
-        ));
-    }
-    let canonical = configured.canonicalize().wrap_err_with(|| {
-        eyre!(
-            "failed to canonicalize release artifact root {}",
-            configured.display()
-        )
-    })?;
-    if canonical != configured {
-        return Err(eyre!(
-            "{IROHA_RELEASE_ARTIFACT_ROOT_ENV} must be absolute, normalized, and contain no symlinked components"
-        ));
-    }
-    let canonical_repo = repo
-        .canonicalize()
-        .wrap_err("failed to canonicalize repository root for release artifact isolation")?;
-    if canonical.starts_with(&canonical_repo) || canonical_repo.starts_with(&canonical) {
-        return Err(eyre!(
-            "{IROHA_RELEASE_ARTIFACT_ROOT_ENV} must not overlap repository source"
-        ));
-    }
-    Ok(canonical)
-}
-#[cfg(not(unix))]
-fn authenticate_release_artifact_root(_repo: &Path, _raw: &str) -> color_eyre::Result<PathBuf> {
-    Err(eyre!(
-        "release artifact root authentication requires Unix ownership and mode semantics"
-    ))
-}
-#[cfg(unix)]
-fn validate_published_mode_and_links(
-    metadata: &fs::Metadata,
-    expected_mode: u32,
-    label: &str,
-) -> color_eyre::Result<()> {
-    use std::os::unix::fs::MetadataExt as _;
-    if metadata.mode() & 0o7777 != expected_mode {
-        return Err(eyre!(
-            "{label} must have exact mode {expected_mode:04o}; got {:04o}",
-            metadata.mode() & 0o7777
-        ));
-    }
-    if metadata.nlink() != 1 {
-        return Err(eyre!(
-            "{label} must have exactly one hard link; got {}",
-            metadata.nlink()
-        ));
-    }
-    Ok(())
-}
-#[cfg(not(unix))]
-fn validate_published_mode_and_links(
-    _metadata: &fs::Metadata,
-    _expected_mode: u32,
-    _label: &str,
-) -> color_eyre::Result<()> {
-    Ok(())
-}
-#[cfg(unix)]
-fn validate_published_directory_mode(
-    metadata: &fs::Metadata,
-    expected_mode: u32,
-    label: &str,
-) -> color_eyre::Result<()> {
-    use std::os::unix::fs::MetadataExt as _;
-    if metadata.mode() & 0o7777 != expected_mode {
-        return Err(eyre!(
-            "{label} must have exact mode {expected_mode:04o}; got {:04o}",
-            metadata.mode() & 0o7777
-        ));
-    }
-    Ok(())
-}
-#[cfg(not(unix))]
-fn validate_published_directory_mode(
-    _metadata: &fs::Metadata,
-    _expected_mode: u32,
-    _label: &str,
-) -> color_eyre::Result<()> {
-    Ok(())
-}
-fn published_regular_file_metadata(
-    path: &Path,
-    expected_mode: u32,
-    label: &str,
-) -> color_eyre::Result<fs::Metadata> {
-    let metadata = fs::symlink_metadata(path)
-        .wrap_err_with(|| eyre!("failed to inspect {label} {}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(eyre!(
-            "{label} {} must be a regular, non-symlink file",
-            path.display()
-        ));
-    }
-    validate_published_mode_and_links(&metadata, expected_mode, label)?;
-    Ok(metadata)
-}
-fn published_directory_metadata(
-    path: &Path,
-    expected_mode: u32,
-    label: &str,
-) -> color_eyre::Result<fs::Metadata> {
-    let metadata = fs::symlink_metadata(path)
-        .wrap_err_with(|| eyre!("failed to inspect {label} {}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(eyre!(
-            "{label} {} must be a directory, not a symlink",
-            path.display()
-        ));
-    }
-    validate_published_directory_mode(&metadata, expected_mode, label)?;
-    Ok(metadata)
-}
-#[cfg(unix)]
-fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.len() == right.len()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-}
-#[cfg(not(unix))]
-fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.len() == right.len() && left.modified().ok() == right.modified().ok()
-}
-fn read_release_manifest(path: &Path) -> color_eyre::Result<Vec<u8>> {
-    let before =
-        published_regular_file_metadata(path, RELEASE_MANIFEST_MODE, "release prebuilt manifest")?;
-    if before.len() > MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES {
-        return Err(eyre!(
-            "release prebuilt manifest exceeds {} byte limit",
-            MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES
-        ));
-    }
-    let mut file = fs::File::open(path).wrap_err_with(|| {
-        eyre!(
-            "failed to open release prebuilt manifest {}",
-            path.display()
-        )
-    })?;
-    let opened = file
-        .metadata()
-        .wrap_err("failed to inspect opened release prebuilt manifest")?;
-    if !same_file_identity(&before, &opened) {
-        return Err(eyre!(
-            "release prebuilt manifest changed while it was being opened"
-        ));
-    }
-    let capacity = usize::try_from(before.len())
-        .unwrap_or(usize::MAX)
-        .min(MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES as usize);
-    let mut bytes = Vec::with_capacity(capacity);
-    Read::by_ref(&mut file)
-        .take(MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .wrap_err("failed to read release prebuilt manifest")?;
-    if bytes.len() as u64 > MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES {
-        return Err(eyre!(
-            "release prebuilt manifest exceeds {} byte limit",
-            MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES
-        ));
-    }
-    let after =
-        published_regular_file_metadata(path, RELEASE_MANIFEST_MODE, "release prebuilt manifest")?;
-    if !same_file_identity(&opened, &after) {
-        return Err(eyre!(
-            "release prebuilt manifest changed while it was being read"
-        ));
-    }
-    Ok(bytes)
-}
-fn hash_workspace_cargo_lock(repo: &Path) -> color_eyre::Result<String> {
-    let path = repo.join("Cargo.lock");
-    let metadata = fs::symlink_metadata(&path)
-        .wrap_err_with(|| eyre!("failed to inspect workspace Cargo.lock {}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(eyre!(
-            "workspace Cargo.lock {} must be a regular, non-symlink file",
-            path.display()
-        ));
-    }
-    let file = fs::File::open(&path)
-        .wrap_err_with(|| eyre!("failed to open workspace Cargo.lock {}", path.display()))?;
-    let (digest, size) = sha256_reader_bounded(file, MAX_WORKSPACE_CARGO_LOCK_BYTES)
-        .wrap_err("failed to hash bounded workspace Cargo.lock")?;
-    if size != metadata.len() {
-        return Err(eyre!("workspace Cargo.lock changed while it was hashed"));
-    }
-    Ok(lowercase_hex(&digest))
-}
-fn parse_canonical_size(value: &str, label: &str) -> color_eyre::Result<u64> {
-    if value.is_empty()
-        || (value.len() > 1 && value.starts_with('0'))
-        || !value.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return Err(eyre!(
-            "{label} must be a canonical unsigned decimal integer"
-        ));
-    }
-    value
-        .parse::<u64>()
-        .wrap_err_with(|| eyre!("{label} does not fit u64"))
-}
-fn validate_target_triple(value: &str, label: &str) -> color_eyre::Result<()> {
-    if value.is_empty()
-        || value.len() > 128
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-    {
-        return Err(eyre!("{label} is not a bounded canonical target triple"));
-    }
-    Ok(())
-}
-fn parse_release_prebuilt_manifest(
-    bytes: &[u8],
-    source_manifest_sha256: &str,
-    configured_target: &Path,
-    repo: &Path,
-) -> color_eyre::Result<[ReleaseBinaryAttestation; 4]> {
-    const KEYS: [&str; 25] = [
-        "schema_version",
-        "source_manifest_sha256",
-        "cargo_lock_sha256",
-        "cargo_version_sha256",
-        "rustc_version_sha256",
-        "host_triple",
-        "target_triple",
-        "profile",
-        "bundle_dir",
-        "irohad_relative_path",
-        "irohad_sha256",
-        "irohad_size_bytes",
-        "irohad_mode_octal",
-        "iroha_relative_path",
-        "iroha_sha256",
-        "iroha_size_bytes",
-        "iroha_mode_octal",
-        "kagami_relative_path",
-        "kagami_sha256",
-        "kagami_size_bytes",
-        "kagami_mode_octal",
-        "irohad_taira_relative_path",
-        "irohad_taira_sha256",
-        "irohad_taira_size_bytes",
-        "irohad_taira_mode_octal",
-    ];
-    const FIELD_COUNT: usize = 25;
-    const BASE_FIELD_COUNT: usize = 9;
-    let text = std::str::from_utf8(bytes)
-        .wrap_err("release prebuilt manifest must contain valid UTF-8")?;
-    if !text.ends_with('\n') || text.contains('\r') || text.contains('\0') {
-        return Err(eyre!(
-            "release prebuilt manifest must use canonical LF-terminated TSV"
-        ));
-    }
-    let lines = text.strip_suffix('\n').expect("checked suffix");
-    let rows = lines.split('\n').collect::<Vec<_>>();
-    if rows.len() != FIELD_COUNT {
-        return Err(eyre!(
-            "release prebuilt manifest must contain exactly {FIELD_COUNT} fields; got {}",
-            rows.len()
-        ));
-    }
-    let mut values = Vec::with_capacity(FIELD_COUNT);
-    for (index, (row, expected_key)) in rows.iter().zip(KEYS).enumerate() {
-        let mut fields = row.split('\t');
-        let key = fields.next().expect("split always yields key");
-        let value = fields
-            .next()
-            .ok_or_else(|| eyre!("release prebuilt manifest row {} is not TSV", index + 1))?;
-        if fields.next().is_some() || key != expected_key || value.is_empty() {
-            return Err(eyre!(
-                "release prebuilt manifest row {} must be the unique non-empty `{expected_key}` \
-                 field",
-                index + 1
-            ));
-        }
-        values.push(value);
-    }
-    if values[0] != SUMERAGI_PREBUILT_MANIFEST_SCHEMA_VERSION {
-        return Err(eyre!(
-            "unsupported release prebuilt manifest schema version {}",
-            values[0]
-        ));
-    }
-    if values[1] != source_manifest_sha256 {
-        return Err(eyre!(
-            "release prebuilt manifest source digest does not match inherited release identity"
-        ));
-    }
-    for (value, label) in [
-        (values[2], "release manifest Cargo.lock digest"),
-        (values[3], "release manifest Cargo version digest"),
-        (values[4], "release manifest rustc version digest"),
-    ] {
-        if !is_lowercase_sha256(value) {
-            return Err(eyre!("{label} must be a lowercase SHA-256 digest"));
-        }
-    }
-    let current_lock_sha256 = hash_workspace_cargo_lock(repo)?;
-    if values[2] != current_lock_sha256 {
-        return Err(eyre!(
-            "release prebuilt manifest Cargo.lock digest does not match the current workspace"
-        ));
-    }
-    if let Some(inherited_lock) = exact_env_value(IROHA_RELEASE_CARGO_LOCK_SHA256_ENV)?
-        && (!is_lowercase_sha256(&inherited_lock) || values[2] != inherited_lock)
-    {
-        return Err(eyre!(
-            "release prebuilt manifest Cargo.lock digest does not match \
-                 {IROHA_RELEASE_CARGO_LOCK_SHA256_ENV}"
-        ));
-    }
-    validate_target_triple(values[5], "release manifest host triple")?;
-    validate_target_triple(values[6], "release manifest target triple")?;
-    if values[7] != "release" {
-        return Err(eyre!(
-            "release prebuilt manifest profile must be exactly `release`"
-        ));
-    }
-    for env_key in [IROHA_TEST_BUILD_PROFILE_ENV, "PROFILE"] {
-        if let Some(profile) = exact_env_value(env_key)?
-            && profile != "release"
-        {
-            return Err(eyre!(
-                "release binary resolution requires {env_key}=release; got {profile:?}"
-            ));
-        }
-    }
-    let configured_target_text = configured_target.to_str().ok_or_else(|| {
-        eyre!("release invocation bundle path must contain valid Unicode for manifest binding")
-    })?;
-    if values[8] != configured_target_text {
-        return Err(eyre!(
-            "release prebuilt manifest bundle_dir does not match {IROHA_TEST_TARGET_DIR_ENV}"
-        ));
-    }
-    let mut binaries = Vec::with_capacity(ReleasePrebuiltBinary::ALL.len());
-    for (ordinal, kind) in ReleasePrebuiltBinary::ALL.into_iter().enumerate() {
-        let base = BASE_FIELD_COUNT + ordinal * 4;
-        if values[base] != kind.relative_path() {
-            return Err(eyre!(
-                "release prebuilt manifest `{}` path must be exactly `{}`",
-                kind.manifest_prefix(),
-                kind.relative_path()
-            ));
-        }
-        if !is_lowercase_sha256(values[base + 1]) {
-            return Err(eyre!(
-                "release prebuilt manifest `{}` digest must be lowercase SHA-256",
-                kind.manifest_prefix()
-            ));
-        }
-        let size_bytes = parse_canonical_size(
-            values[base + 2],
-            &format!(
-                "release prebuilt manifest `{}` size",
-                kind.manifest_prefix()
-            ),
-        )?;
-        if size_bytes == 0 || size_bytes > MAX_SUMERAGI_PREBUILT_BINARY_BYTES {
-            return Err(eyre!(
-                "release prebuilt manifest `{}` size must be within 1..={}",
-                kind.manifest_prefix(),
-                MAX_SUMERAGI_PREBUILT_BINARY_BYTES
-            ));
-        }
-        if values[base + 3] != RELEASE_BINARY_MODE_OCTAL {
-            return Err(eyre!(
-                "release prebuilt manifest `{}` mode must be exactly {RELEASE_BINARY_MODE_OCTAL}",
-                kind.manifest_prefix()
-            ));
-        }
-        binaries.push(ReleaseBinaryAttestation {
-            kind,
-            sha256: values[base + 1].to_owned(),
-            size_bytes,
-        });
-    }
-    binaries.try_into().map_err(|_| {
-        eyre!("release prebuilt manifest must contain exactly four executable attestations")
-    })
-}
-fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleaseProgramContract>> {
-    let source_manifest_sha256 = exact_env_value(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV)?;
-    let prebuilt_manifest_sha256 = exact_env_value(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV)?;
-    let Some(source_manifest_sha256) = source_manifest_sha256 else {
-        if prebuilt_manifest_sha256.is_some() {
-            return Err(eyre!(
-                "{IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV} requires \
-                 {IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV}"
-            ));
-        }
-        return Ok(None);
-    };
-    if !is_lowercase_sha256(&source_manifest_sha256) {
-        return Err(eyre!(
-            "{IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV} must be a lowercase SHA-256 digest"
-        ));
-    }
-    let prebuilt_manifest_sha256 = prebuilt_manifest_sha256.ok_or_else(|| {
-        eyre!(
-            "release binary resolution requires inherited \
-             {IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV}"
-        )
-    })?;
-    if !is_lowercase_sha256(&prebuilt_manifest_sha256) {
-        return Err(eyre!(
-            "{IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV} must be a lowercase SHA-256 digest"
-        ));
-    }
-    if exact_env_value(IROHA_TEST_SKIP_BUILD_ENV)?.as_deref() != Some("1") {
-        return Err(eyre!(
-            "release binary resolution requires {IROHA_TEST_SKIP_BUILD_ENV}=1 after the \
-             top-level prebuild"
-        ));
-    }
-    let configured_target_raw = exact_env_value(IROHA_TEST_TARGET_DIR_ENV)?.ok_or_else(|| {
-        eyre!(
-            "release binary resolution requires {IROHA_TEST_TARGET_DIR_ENV} to select the \
-             manifest-addressed top-level prebuild"
-        )
-    })?;
-    let configured_target = PathBuf::from(&configured_target_raw);
-    if !configured_target.is_absolute() {
-        return Err(eyre!(
-            "release binary resolution requires an absolute {IROHA_TEST_TARGET_DIR_ENV}"
-        ));
-    }
-    let artifact_root_raw = exact_env_value(IROHA_RELEASE_ARTIFACT_ROOT_ENV)?.ok_or_else(|| {
-        eyre!("release binary resolution requires inherited {IROHA_RELEASE_ARTIFACT_ROOT_ENV}")
-    })?;
-    let artifact_root = authenticate_release_artifact_root(repo, &artifact_root_raw)?;
-    let expected_programs_root = artifact_root
-        .join(SUMERAGI_RELEASE_TARGET_SUBDIR)
-        .join(&source_manifest_sha256)
-        .join(SUMERAGI_RELEASE_PROGRAMS_SUBDIR);
-    if configured_target.parent() != Some(expected_programs_root.as_path()) {
-        return Err(eyre!(
-            "{IROHA_TEST_TARGET_DIR_ENV} must be an immediate private invocation bundle under {}; \
-             got {}",
-            expected_programs_root.display(),
-            configured_target.display()
-        ));
-    }
-    let _invocation_suffix = configured_target
-        .file_name()
-        .and_then(|name| name.to_str())
-        .and_then(|name| name.strip_prefix(SUMERAGI_RELEASE_INVOCATION_PREFIX))
-        .filter(|suffix| {
-            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
-        })
-        .ok_or_else(|| {
-            eyre!(
-                "{IROHA_TEST_TARGET_DIR_ENV} private bundle name must be `{}` followed by a \
-                 non-empty ASCII alphanumeric token",
-                SUMERAGI_RELEASE_INVOCATION_PREFIX
-            )
-        })?;
-    published_directory_metadata(
-        &configured_target,
-        RELEASE_BINARY_MODE,
-        "release invocation bundle",
-    )?;
-    let canonical_target_dir = configured_target.canonicalize().wrap_err_with(|| {
-        eyre!(
-            "release program target {} is missing; prebuild all corridor binaries at the \
-             top level before setting {IROHA_TEST_SKIP_BUILD_ENV}=1",
-            configured_target.display()
-        )
-    })?;
-    let canonical_expected_programs_root =
-        expected_programs_root.canonicalize().wrap_err_with(|| {
-            eyre!(
-                "failed to canonicalize manifest-addressed release programs root {}",
-                expected_programs_root.display()
-            )
-        })?;
-    if canonical_expected_programs_root != expected_programs_root {
-        return Err(eyre!(
-            "manifest-addressed release programs root must contain no symlinked or non-canonical components"
-        ));
-    }
-    if canonical_target_dir.parent() != Some(canonical_expected_programs_root.as_path()) {
-        return Err(eyre!(
-            "{IROHA_TEST_TARGET_DIR_ENV} resolves outside the manifest-addressed release target"
-        ));
-    }
-    let manifest_path = configured_target.join(SUMERAGI_PREBUILT_MANIFEST);
-    let manifest_bytes = read_release_manifest(&manifest_path)?;
-    let observed_manifest_sha256 = lowercase_hex(&sha256(&manifest_bytes));
-    if observed_manifest_sha256 != prebuilt_manifest_sha256 {
-        return Err(eyre!(
-            "release prebuilt manifest digest does not match inherited \
-             {IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV}"
-        ));
-    }
-    let binaries = parse_release_prebuilt_manifest(
-        &manifest_bytes,
-        &source_manifest_sha256,
-        &configured_target,
-        repo,
-    )?;
-    Ok(Some(ReleaseProgramContract {
-        configured_target_dir: configured_target,
-        canonical_target_dir,
-        binaries,
-    }))
-}
-fn validate_release_program_candidate(
-    contract: &ReleaseProgramContract,
-    kind: ReleasePrebuiltBinary,
-    candidate: impl AsRef<Path>,
-) -> color_eyre::Result<PathBuf> {
-    let attestation = contract.binary(kind);
-    let expected = contract.configured_target_dir.join(kind.relative_path());
-    let expected_canonical = expected.canonicalize().wrap_err_with(|| {
-        eyre!(
-            "release `{}` binary {} is missing",
-            kind.manifest_prefix(),
-            expected.display()
-        )
-    })?;
-    let candidate = candidate.as_ref();
-    let candidate_canonical = candidate.canonicalize().wrap_err_with(|| {
-        eyre!(
-            "failed to canonicalize release `{}` binary {}",
-            kind.manifest_prefix(),
-            candidate.display()
-        )
-    })?;
-    if candidate_canonical != expected_canonical {
-        return Err(eyre!(
-            "release `{}` binary path must be exactly {}; got {}",
-            kind.manifest_prefix(),
-            expected.display(),
-            candidate.display()
-        ));
-    }
-    let mut component_path = contract.configured_target_dir.clone();
-    let relative = Path::new(kind.relative_path());
-    let component_count = relative.components().count();
-    for (index, component) in relative.components().enumerate() {
-        let Component::Normal(component) = component else {
-            return Err(eyre!(
-                "release `{}` manifest path is not canonical",
-                kind.manifest_prefix()
-            ));
-        };
-        component_path.push(component);
-        if index + 1 < component_count {
-            published_directory_metadata(
-                &component_path,
-                RELEASE_BINARY_MODE,
-                "release binary parent directory",
-            )?;
-        }
-    }
-    let before =
-        published_regular_file_metadata(&expected, RELEASE_BINARY_MODE, kind.manifest_prefix())?;
-    if before.len() != attestation.size_bytes {
-        return Err(eyre!(
-            "release `{}` binary size mismatch: expected {}, got {}",
-            kind.manifest_prefix(),
-            attestation.size_bytes,
-            before.len()
-        ));
-    }
-    let file = fs::File::open(&expected).wrap_err_with(|| {
-        eyre!(
-            "failed to open release `{}` binary {}",
-            kind.manifest_prefix(),
-            expected.display()
-        )
-    })?;
-    let opened = file.metadata().wrap_err_with(|| {
-        eyre!(
-            "failed to inspect opened release `{}` binary",
-            kind.manifest_prefix()
-        )
-    })?;
-    if !same_file_identity(&before, &opened) {
-        return Err(eyre!(
-            "release `{}` binary changed while it was being opened",
-            kind.manifest_prefix()
-        ));
-    }
-    let (digest, size) = sha256_reader_bounded(file, MAX_SUMERAGI_PREBUILT_BINARY_BYTES)
-        .wrap_err_with(|| {
-            eyre!(
-                "failed to hash bounded release `{}` binary",
-                kind.manifest_prefix()
-            )
-        })?;
-    let after =
-        published_regular_file_metadata(&expected, RELEASE_BINARY_MODE, kind.manifest_prefix())?;
-    if size != attestation.size_bytes || !same_file_identity(&opened, &after) {
-        return Err(eyre!(
-            "release `{}` binary changed while it was being hashed",
-            kind.manifest_prefix()
-        ));
-    }
-    if lowercase_hex(&digest) != attestation.sha256 {
-        return Err(eyre!(
-            "release `{}` binary SHA-256 does not match the prebuilt manifest",
-            kind.manifest_prefix()
-        ));
-    }
-    if !candidate_canonical.starts_with(&contract.canonical_target_dir) {
-        return Err(eyre!(
-            "release `{}` binary escaped the private invocation bundle",
-            kind.manifest_prefix()
-        ));
-    }
-    Ok(candidate_canonical)
-}
-/// Resolve and independently verify one binary from an active release prebuild contract.
-///
-/// `Ok(None)` means no source-bound release contract is active.
+/// Resolve a qualified original from the active source-bound release invocation.
+/// Returns `None` only when no release identity is active; invalid partial identities fail.
 #[doc(hidden)]
 pub fn resolve_release_prebuilt_binary(
-    kind: ReleasePrebuiltBinary,
-) -> color_eyre::Result<Option<PathBuf>> {
-    let Some(contract) = release_program_contract(&compiled_repo_path())? else {
-        return Ok(None);
-    };
-    validate_release_program_candidate(
-        &contract,
-        kind,
-        contract.configured_target_dir.join(kind.relative_path()),
-    )
-    .map(Some)
+    kind: BinaryKind,
+) -> color_eyre::Result<Option<ResolvedProgram>> {
+    release_program_contract(&compiled_repo_path())?
+        .map(|contract| contract.select(kind, None))
+        .transpose()
 }
-/// Revalidate a previously resolved release binary against fresh manifest and file evidence.
-///
-/// `Ok(None)` means no source-bound release contract is active.
+
+/// Recheck a cached selection while retaining its original qualification authorities.
+/// A disappearing release identity never converts a qualified selection into development.
 #[doc(hidden)]
 pub fn revalidate_release_prebuilt_binary(
-    kind: ReleasePrebuiltBinary,
-    candidate: impl AsRef<Path>,
-) -> color_eyre::Result<Option<PathBuf>> {
+    kind: BinaryKind,
+    candidate: &ResolvedProgram,
+) -> color_eyre::Result<Option<ResolvedProgram>> {
     let Some(contract) = release_program_contract(&compiled_repo_path())? else {
+        if candidate.is_release() {
+            return Err(eyre!("release identity disappeared for a retained program"));
+        }
         return Ok(None);
     };
-    validate_release_program_candidate(&contract, kind, candidate).map(Some)
+    let path = candidate.diagnostic_path()?;
+    let admitted = contract.select(kind, Some(&path))?;
+    candidate.revalidate()?;
+    if candidate.is_release() {
+        Ok(Some(candidate.clone()))
+    } else {
+        Ok(Some(admitted))
+    }
+}
+
+/// Select an existing developer binary only while no release identity is active.
+/// This helper grants no qualified release status and cannot bypass failed admission.
+#[doc(hidden)]
+pub fn resolve_development_binary(path: &Path) -> color_eyre::Result<ResolvedProgram> {
+    if release_program_contract(&compiled_repo_path())?.is_some() {
+        return Err(eyre!(
+            "developer binary selection is forbidden in a release invocation"
+        ));
+    }
+    let path = path.canonicalize()?;
+    if !path.is_file() {
+        return Err(eyre!("developer binary is not a regular file"));
+    }
+    Ok(ResolvedProgram::development(path))
 }
 fn profile_hint_from_exe_path(current_exe: &Path) -> Option<String> {
     let mut dir = current_exe.parent()?;
@@ -2637,7 +1965,7 @@ fn ensure_binary_fresh(
         let mut attempt = 0_u8;
         loop {
             attempt = attempt.saturating_add(1);
-            let mut command = std::process::Command::new(&cargo_program);
+            let mut command = development_process_command(&cargo_program)?;
             command
                 .arg("build")
                 .arg("--locked")
@@ -2662,7 +1990,7 @@ fn ensure_binary_fresh(
             }
             command.current_dir(repo);
             ensure_child_cargo_quiescent(&cargo_program)?;
-            let output = command_output_with_timeout(&mut command, build_command_timeout_env())
+            let output = command_output_with_timeout(command, build_command_timeout_env())
                 .wrap_err("failed to invoke cargo to build binary")?;
             if output.status.success() {
                 break;
@@ -2726,9 +2054,9 @@ fn cached_binary_if_present(cache: &OnceLock<PathBuf>) -> Option<PathBuf> {
     None
 }
 impl Program {
-    /// Resolve program path.
+    /// Resolve a retained program, admitting any release identity before developer lookup.
     ///
-    /// Tries, in order:
+    /// Without release anchors, developer selection tries, in order:
     /// - Explicit env override (`TEST_NETWORK_BIN_*`).
     /// - `CARGO_BIN_EXE_*` if Cargo provided a direct path to the built binary
     /// - Common target locations (debug/release) under the repo root (defaulting to
@@ -2736,17 +2064,46 @@ impl Program {
     /// - Rebuilds with `cargo build --locked --offline -p <pkg>` when the cached fingerprint
     ///   disagrees with the current workspace state (skipped when `IROHA_TEST_SKIP_BUILD=1`).
     ///
-    /// A source-manifest-bound release corridor is lookup-only: it requires the top-level runner
-    /// to prebuild into the manifest-addressed release target and skip child builds. Any resolver
-    /// running under Cargo is likewise lookup-only; nested Cargo invocation is never supported.
+    /// A source-manifest-bound release invocation uses the canonical bundle and retains its
+    /// admission through the returned program. It never falls back to developer selection. Any
+    /// developer resolver running under Cargo is lookup-only; nested Cargo builds are unsupported.
     ///
     /// # Errors
-    /// If the path is not found (and build did not help).
-    fn resolve_internal(&self, skip_build_override: Option<bool>) -> color_eyre::Result<PathBuf> {
+    /// Refuses incomplete or changed release admission, or an unavailable developer program.
+    fn resolve_internal(
+        &self,
+        skip_build_override: Option<bool>,
+    ) -> color_eyre::Result<ResolvedProgram> {
         self.resolve_internal_in_repo(skip_build_override, &compiled_repo_path())
     }
 
     fn resolve_internal_in_repo(
+        &self,
+        skip_build_override: Option<bool>,
+        repo: &Path,
+    ) -> color_eyre::Result<ResolvedProgram> {
+        // Admit the complete release contract before looking at developer caches or paths.
+        if let Some(contract) = release_program_contract(repo)? {
+            if !self.release_prebuilt_allowed() {
+                return Err(eyre!(
+                    "feature-isolated test programs are forbidden in release-prebuilt corridors"
+                ));
+            }
+            if skip_build_override == Some(false) {
+                return Err(eyre!(
+                    "release resolution cannot override lookup-only prebuild policy"
+                ));
+            }
+            let candidate = exact_env_value(self.spec().env)?.map(PathBuf::from);
+            // Preserve the producer's exact native spelling, including a Windows verbatim
+            // prefix. Canonicalizing only this side would rewrite an authenticated name.
+            return contract.select(self.release_prebuilt_binary(), candidate.as_deref());
+        }
+        self.resolve_development_internal_in_repo(skip_build_override, repo)
+            .map(ResolvedProgram::development)
+    }
+
+    fn resolve_development_internal_in_repo(
         &self,
         skip_build_override: Option<bool>,
         repo: &Path,
@@ -2765,13 +2122,6 @@ impl Program {
             build_args,
             isolated_target_subdir,
         } = self.spec();
-        let release_contract = release_program_contract(repo)?;
-        if release_contract.is_some() && !self.release_prebuilt_allowed() {
-            return Err(eyre!(
-                "feature-isolated test programs are forbidden in release-prebuilt corridors"
-            ));
-        }
-        let release_binary = self.release_prebuilt_binary();
         // 1) Explicit override
         if let Ok(path) = std::env::var(env) {
             let raw = PathBuf::from(&path);
@@ -2786,17 +2136,7 @@ impl Program {
                 .wrap_err_with(|| {
                     eyre!("Could not resolve path of `{name}` program. Have you built it?")
                 })?;
-            return match release_contract.as_ref() {
-                Some(contract) => {
-                    { validate_release_program_candidate(contract, release_binary, candidate) }
-                        .wrap_err_with(|| {
-                            eyre!(
-                                "{env} must equal the exact manifest-attested release binary path"
-                            )
-                        })
-                }
-                None => Ok(candidate),
-            };
+            return Ok(candidate);
         }
         // Explicit absolute prebuilt paths do not need the build checkout. Discovery
         // and freshness checks still require the real source repository.
@@ -2823,18 +2163,12 @@ impl Program {
             Program::Iroha => cached_binary_if_present(&IROHA_BIN),
         };
         if let Some(path) = cached {
-            return match release_contract.as_ref() {
-                Some(contract) => {
-                    validate_release_program_candidate(contract, release_binary, path)
-                }
-                None => Ok(path),
-            };
+            return Ok(path);
         }
         let bin = bin_name(name);
         // 2) Prefer paths Cargo already built (`CARGO_BIN_EXE_*`) but still allow rebuilds
         let cargo_bin_env = format!("CARGO_BIN_EXE_{name}");
-        let allow_ambient_candidates =
-            release_contract.is_none() && isolated_target_subdir.is_none();
+        let allow_ambient_candidates = isolated_target_subdir.is_none();
         let cargo_bin_candidate = allow_ambient_candidates
             .then(|| {
                 std::env::var(&cargo_bin_env)
@@ -2867,7 +2201,7 @@ impl Program {
         push_candidate(primary_binary.clone());
         push_candidate(target_dir.join(format!("debug/{bin}")));
         push_candidate(target_dir.join(format!("release/{bin}")));
-        if release_contract.is_none() && isolated_target_subdir.is_none() {
+        if isolated_target_subdir.is_none() {
             let default_target = repo.join("target");
             push_candidate(default_target.join(format!("{profile}/{bin}")));
             push_candidate(default_target.join(format!("debug/{bin}")));
@@ -2884,14 +2218,8 @@ impl Program {
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false)
         });
-        if release_contract.is_some() && !skip_build {
-            return Err(eyre!(
-                "release binary resolution cannot override {IROHA_TEST_SKIP_BUILD_ENV}=1"
-            ));
-        }
         let running_under_cargo = std::env::var_os("CARGO").is_some();
-        let allow_child_build =
-            child_build_allowed(running_under_cargo, release_contract.is_some());
+        let allow_child_build = child_build_allowed(running_under_cargo, false);
         let validate_freshness = must_validate_binary_freshness(skip_build, allow_child_build);
         if !skip_build
             && !validate_freshness
@@ -2947,12 +2275,6 @@ impl Program {
             )
         };
         if let Some(found) = post_build_candidates {
-            let found = match release_contract.as_ref() {
-                Some(contract) => {
-                    validate_release_program_candidate(contract, release_binary, found)?
-                }
-                None => found,
-            };
             match self {
                 Program::Irohad => {
                     let _ = IROHAD_BIN.set(found.clone());
@@ -2989,23 +2311,23 @@ impl Program {
                2. Provide a different path via `{env}` env var"
         ))
     }
-    pub fn resolve(&self) -> color_eyre::Result<PathBuf> {
+    pub fn resolve(&self) -> color_eyre::Result<ResolvedProgram> {
         self.resolve_internal(None)
     }
     /// Async variant of [`Self::resolve`].
     ///
     /// Spawns a blocking task so that top-level builds and filesystem probing never block
     /// a Tokio runtime thread (which can otherwise starve timers and hang async tests).
-    pub async fn resolve_async(&self) -> color_eyre::Result<PathBuf> {
+    pub async fn resolve_async(&self) -> color_eyre::Result<ResolvedProgram> {
         let program = *self;
         tokio::task::spawn_blocking(move || program.resolve_internal(None))
             .await
             .wrap_err("failed to join blocking task while resolving program")?
     }
-    pub fn resolve_force_build(&self) -> color_eyre::Result<PathBuf> {
+    pub fn resolve_force_build(&self) -> color_eyre::Result<ResolvedProgram> {
         self.resolve_internal(Some(false))
     }
-    pub fn resolve_skip_build(&self) -> color_eyre::Result<PathBuf> {
+    pub fn resolve_skip_build(&self) -> color_eyre::Result<ResolvedProgram> {
         self.resolve_internal(Some(true))
     }
 }
@@ -3149,10 +2471,10 @@ fn try_acquire_file_permit_in(dir: &Path, limit: usize) -> Option<FilePermit> {
     None
 }
 fn permit_is_stale(path: &Path) -> bool {
-    if let Some(pid) = read_permit_pid(path)
-        && let Some(alive) = pid_alive(pid)
-    {
-        return !alive;
+    if let Some(pid) = read_permit_pid(path) {
+        // An observation failure is not proof of owner death. In particular,
+        // never expire a live or inaccessible Windows process by file age.
+        return pid_alive(pid) == Some(false);
     }
     let Ok(metadata) = fs::metadata(path) else {
         return false;
@@ -3229,7 +2551,9 @@ fn pid_alive(pid: u32) -> Option<bool> {
         Err(_) => None,
     }
 }
-#[cfg(not(unix))]
+#[cfg(windows)]
+use windows_process::pid_alive;
+#[cfg(not(any(unix, windows)))]
 fn pid_alive(_pid: u32) -> Option<bool> {
     None
 }
@@ -8836,7 +8160,7 @@ impl NetworkPeer {
         self.private_settlement_route_control.as_deref()
     }
 
-    fn append_parliament_beacon_signer_mode_arg(&self, command: &mut tokio::process::Command) {
+    fn append_parliament_beacon_signer_mode_arg(&self, command: &mut ResolvedCommand) {
         if let Some(mode) = self.parliament_beacon_signer_mode {
             debug_assert_eq!(self.program, Program::IrohadParliamentSigners);
             command
@@ -8962,8 +8286,8 @@ impl NetworkPeer {
         } else {
             false
         };
-        let make_irohad_command = |binary: &Path| {
-            let mut cmd = tokio::process::Command::new(binary);
+        let make_irohad_command = |binary: &ResolvedProgram| {
+            let mut cmd = binary.command()?;
             strip_config_env_overrides(&mut cmd);
             cmd.stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -8986,17 +8310,21 @@ impl NetworkPeer {
                 cmd.arg("--sora");
             }
             self.append_parliament_beacon_signer_mode_arg(&mut cmd);
+            // The native Windows supervisor owns the sole write end until graceful shutdown.
+            // write_run_config enables the daemon's existing stdin-EOF lifecycle contract.
+            #[cfg(windows)]
+            cmd.stdin(Stdio::piped());
             if std::env::var_os("IROHA_SKIP_BIND_CHECKS").is_none() {
                 cmd.env("IROHA_SKIP_BIND_CHECKS", "1");
             }
             cmd.current_dir(&self.dir);
             Ok::<_, Report>(cmd)
         };
-        let mut child = match make_irohad_command(&irohad)?.spawn() {
+        let mut child = match make_irohad_command(&irohad)?.spawn_async() {
             Ok(child) => child,
-            Err(err) if err.kind() == ErrorKind::NotFound => {
+            Err(err) if err.kind() == ErrorKind::NotFound && !irohad.is_release() => {
                 warn!(
-                    binary = %irohad.display(),
+                    binary = %irohad.diagnostic_path()?.display(),
                     "cached `iroha3d` path vanished before spawn; rebuilding and retrying once"
                 );
                 let program = self.program;
@@ -9008,15 +8336,29 @@ impl NetworkPeer {
                     &refreshed,
                 )?
                 .unwrap_or(refreshed);
-                make_irohad_command(&refreshed)?.spawn().wrap_err_with(|| {
-                    eyre!(
-                        "failed to spawn `iroha3d` after refreshing binary path: {}",
-                        refreshed.display()
-                    )
-                })?
+                make_irohad_command(&refreshed)?
+                    .spawn_async()
+                    .wrap_err_with(|| {
+                        eyre!(
+                            "failed to spawn `iroha3d` after refreshing binary path: {}",
+                            refreshed.diagnostic_path().map_or_else(
+                                |_| "<changed program>".to_owned(),
+                                |path| path.display().to_string()
+                            )
+                        )
+                    })?
             }
             Err(err) => return Err(err).wrap_err("failed to spawn `iroha3d`"),
         };
+        // Child::wait closes stdin stored in Child. Move the original pipe into the
+        // supervisor before any wait so ordinary monitoring cannot request shutdown.
+        #[cfg(windows)]
+        let shutdown_input = Some(
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| eyre!("peer launch did not retain its shutdown input pipe"))?,
+        );
         let pid = child.id();
         let stderr_log_ready = Arc::new(Notify::new());
         let (fatal_tx, fatal_rx) = watch::channel(false);
@@ -9077,6 +8419,8 @@ impl NetworkPeer {
         let is_normal_shutdown_started = Arc::new(AtomicBool::new(false));
         let peer_exit = PeerExit {
             child,
+            #[cfg(windows)]
+            shutdown_input,
             span: span.clone(),
             is_running: self.is_running.clone(),
             is_normal_shutdown_started: is_normal_shutdown_started.clone(),
@@ -10315,6 +9659,12 @@ impl NetworkPeer {
                 .chain(extra_layers.into_iter().map(|(path, _)| path))
                 .collect::<Vec<String>>(),
         );
+        // Apply the supervisor-owned lifecycle setting last, after all caller layers.
+        // This is an existing node-local configuration field, not a protocol override.
+        #[cfg(windows)]
+        {
+            final_config = final_config.write(["lifecycle", "exit_on_stdin_close"], true);
+        }
         if let Some(block) = genesis {
             let path = self.dir.join(format!("run-{run}-genesis.nrt"));
             final_config =
@@ -10653,6 +10003,8 @@ impl Drop for PeerStderrBuffer {
 include!("lib/peer_runtime_tests.rs");
 struct PeerExit {
     child: Child,
+    #[cfg(windows)]
+    shutdown_input: Option<tokio::process::ChildStdin>,
     span: tracing::Span,
     is_running: Arc<AtomicBool>,
     is_normal_shutdown_started: Arc<AtomicBool>,
@@ -10712,8 +10064,10 @@ impl PeerExit {
         }
     }
     async fn shutdown_or_kill(&mut self) -> Result<ExitStatus> {
+        #[cfg(unix)]
         use nix::{sys::signal, unistd::Pid};
         const TIMEOUT: Duration = Duration::from_secs(5);
+        #[cfg(unix)]
         const QUIT_GRACE: Duration = Duration::from_secs(1);
         self.is_normal_shutdown_started
             .store(true, Ordering::Relaxed);
@@ -10733,12 +10087,25 @@ impl PeerExit {
             });
             return self.child.wait().await.wrap_err("wait failure");
         }
-        self.span.in_scope(|| info!("sending SIGTERM"));
-        signal::kill(
-            Pid::from_raw(self.child.id().expect("checked child id above") as i32),
-            signal::Signal::SIGTERM,
-        )
-        .wrap_err("failed to send SIGTERM")?;
+        #[cfg(unix)]
+        {
+            self.span.in_scope(|| info!("sending SIGTERM"));
+            signal::kill(
+                Pid::from_raw(self.child.id().expect("checked child id above") as i32),
+                signal::Signal::SIGTERM,
+            )
+            .wrap_err("failed to send SIGTERM")?;
+        }
+        #[cfg(windows)]
+        {
+            let input = self
+                .shutdown_input
+                .take()
+                .ok_or_else(|| eyre!("live peer has no retained shutdown input pipe"))?;
+            self.span
+                .in_scope(|| info!("closing original peer input for graceful shutdown"));
+            drop(input);
+        }
         if let Ok(status) = timeout(TIMEOUT, self.child.wait()).await {
             self.span.in_scope(|| info!("exited gracefully"));
             return status.wrap_err("wait failure");
@@ -10767,7 +10134,7 @@ impl PeerExit {
             self.child.wait().await
         })
         .await
-        .wrap_err("didn't terminate after SIGKILL")?
+        .wrap_err("child did not terminate after forced shutdown")?
         .wrap_err("wait failure")
     }
     fn dump_last_stderr(&self) {
@@ -11279,6 +10646,20 @@ mod tests {
     fn pid_alive_detects_current_and_dead_processes() {
         assert_eq!(pid_alive(std::process::id()), Some(true));
         assert_eq!(pid_alive(i32::MAX as u32), Some(false));
+    }
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn live_permit_is_not_reclaimed_after_the_age_limit() {
+        let dir = tempdir().expect("permit dir");
+        let path = dir.path().join("permit-0.lock");
+        let mut file = fs::File::create(&path).expect("live permit file");
+        writeln!(file, "pid={}", std::process::id()).expect("write live PID");
+        file.set_times(fs::FileTimes::new().set_modified(UNIX_EPOCH))
+            .expect("make permit older than recovery TTL");
+        drop(file);
+        assert!(!permit_is_stale(&path));
+        assert!(try_acquire_file_permit_in(dir.path(), 1).is_none());
+        assert!(path.is_file(), "the live owner's permit must remain");
     }
     #[test]
     fn sora_profile_detection_does_not_augment_a_supplied_pop_roster() {
@@ -16050,6 +15431,7 @@ mod tests {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _clear_source = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
         let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
+        let _clear_lock = EnvVarGuard::cleared(IROHA_RELEASE_CARGO_LOCK_SHA256_ENV);
         let fixture = tempdir().expect("temporary missing repository fixture");
         let missing_repo = fixture.path().join("missing-checkout");
         let binary = env::current_exe().expect("current prebuilt test binary");
@@ -16058,17 +15440,17 @@ mod tests {
             .resolve_internal_in_repo(Some(true), &missing_repo)
             .expect("absolute diagnostic binary must not need its build checkout");
         assert_eq!(
-            resolved,
+            resolved.diagnostic_path().unwrap(),
             binary.canonicalize().expect("canonical test binary")
         );
         assert!(release_program_contract(&missing_repo).unwrap().is_none());
         assert!(
-            resolve_release_prebuilt_binary(ReleasePrebuiltBinary::Iroha)
+            resolve_release_prebuilt_binary(BinaryKind::Iroha)
                 .expect("inactive release lookup must not need a checkout")
                 .is_none()
         );
         assert!(
-            revalidate_release_prebuilt_binary(ReleasePrebuiltBinary::Iroha, &binary)
+            revalidate_release_prebuilt_binary(BinaryKind::Iroha, &resolved)
                 .expect("inactive release revalidation must not need a checkout")
                 .is_none()
         );
@@ -16079,6 +15461,7 @@ mod tests {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _clear_source = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
         let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
+        let _clear_lock = EnvVarGuard::cleared(IROHA_RELEASE_CARGO_LOCK_SHA256_ENV);
         let _clear_binary = EnvVarGuard::cleared(PROGRAM_IROHA_ENV);
         let fixture = tempdir().expect("temporary missing repository fixture");
         let missing_repo = fixture.path().join("missing-checkout");
@@ -16108,6 +15491,7 @@ mod tests {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _clear_source = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
         let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
+        let _clear_lock = EnvVarGuard::cleared(IROHA_RELEASE_CARGO_LOCK_SHA256_ENV);
         let fixture = tempdir().expect("temporary missing repository fixture");
         let missing_repo = fixture.path().join("missing-checkout");
         let binary = env::current_exe().expect("current prebuilt test binary");
@@ -16119,6 +15503,10 @@ mod tests {
             ),
             (
                 IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV,
+                IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV,
+            ),
+            (
+                IROHA_RELEASE_CARGO_LOCK_SHA256_ENV,
                 IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV,
             ),
         ] {
@@ -16137,7 +15525,7 @@ mod tests {
         let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
         let binary = fixture
             .target
-            .join(ReleasePrebuiltBinary::Iroha.relative_path());
+            .join(BinaryKind::Iroha.filename(cfg!(windows)));
         let _binary = EnvVarRestore::set(PROGRAM_IROHA_ENV, &binary);
         let missing_repo = fixture.repo.join("missing-checkout");
         let error = Program::Iroha
@@ -16146,7 +15534,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("failed to canonicalize repository root for release artifact isolation"),
+                .contains("admit original release source root"),
             "{error}"
         );
         assert!(!missing_repo.exists());
@@ -16156,6 +15544,7 @@ mod tests {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _clear_release = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
         let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
+        let _clear_lock = EnvVarGuard::cleared(IROHA_RELEASE_CARGO_LOCK_SHA256_ENV);
         let repo = tempfile::tempdir().expect("create isolated repository fixture");
         let rel = PathBuf::from("target/test-bin-dummy/iroha-cli-dummy");
         let abs = repo.path().join(&rel);
@@ -16167,7 +15556,10 @@ mod tests {
         let resolved = Program::Iroha
             .resolve_internal_in_repo(Some(true), repo.path())
             .expect("resolve via env");
-        assert_eq!(resolved, abs.canonicalize().unwrap());
+        assert_eq!(
+            resolved.diagnostic_path().unwrap(),
+            abs.canonicalize().unwrap()
+        );
         // Cleanup and restore environment
         if let Some(v) = old_env {
             set_env_var(super::PROGRAM_IROHA_ENV, v);
@@ -16180,6 +15572,7 @@ mod tests {
         let _guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
         let _clear_release = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
         let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
+        let _clear_lock = EnvVarGuard::cleared(IROHA_RELEASE_CARGO_LOCK_SHA256_ENV);
         let fixture = tempfile::tempdir().expect("create isolated executable fixture");
         let abs = fixture.path().join("iroha-cli-dummy-async");
         std::fs::write(&abs, b"dummy").unwrap();
@@ -16189,7 +15582,10 @@ mod tests {
             .resolve_async()
             .await
             .expect("resolve via env");
-        assert_eq!(resolved, abs.canonicalize().unwrap());
+        assert_eq!(
+            resolved.diagnostic_path().unwrap(),
+            abs.canonicalize().unwrap()
+        );
         if let Some(v) = old_env {
             set_env_var(super::PROGRAM_IROHA_ENV, v);
         } else {
@@ -16366,10 +15762,11 @@ mod tests {
         for (peer, expected) in network.peers().iter().zip(modes) {
             assert_eq!(peer.parliament_beacon_signer_mode, Some(expected));
             let child_args = |peer: &NetworkPeer| {
-                let mut command = tokio::process::Command::new("iroha3d");
+                let mut command = ResolvedProgram::development("iroha3d".into())
+                    .command()
+                    .unwrap();
                 peer.append_parliament_beacon_signer_mode_arg(&mut command);
                 command
-                    .as_std()
                     .get_args()
                     .map(|arg| arg.to_string_lossy().into_owned())
                     .collect::<Vec<_>>()

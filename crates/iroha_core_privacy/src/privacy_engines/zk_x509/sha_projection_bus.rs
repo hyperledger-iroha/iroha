@@ -18,20 +18,23 @@ pub fn is_active_v1(manifest: ZkX509ShaCallManifestV1) -> bool {
         && manifest.activation == ZkX509ShaCallActivationV1::Required
 }
 
-pub(super) fn populate_fixed_v1(
+pub(super) fn emit_fixed_v1(
     manifest: ZkX509ShaCallManifestV1,
     word: &[F; SHA_WORD_CAPACITY_FIXED_WIDTH_V1],
-    fixed: &mut [F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1],
+    mut emit: impl FnMut(usize, F),
 ) {
     if !is_active_v1(manifest) {
         return;
     }
-    fixed[FIX_WORD_V1] = F(u64::from(
-        word[SHA_WORD_CAPACITY_INPUT_WORD_V1] == F::ONE
-            && word[SHA_WORD_CAPACITY_INPUT_WORD_INDEX_V1].0 < WORDS_V1 as u64,
-    ));
-    fixed[FIX_LENGTH_V1] = word[SHA_WORD_CAPACITY_CALL_LAST_V1];
-    fixed[FIX_DIGEST_V1] = word[SHA_WORD_CAPACITY_DIGEST_SELECTOR_V1];
+    emit(
+        FIX_WORD_V1,
+        F(u64::from(
+            word[SHA_WORD_CAPACITY_INPUT_WORD_V1] == F::ONE
+                && word[SHA_WORD_CAPACITY_INPUT_WORD_INDEX_V1].0 < WORDS_V1 as u64,
+        )),
+    );
+    emit(FIX_LENGTH_V1, word[SHA_WORD_CAPACITY_CALL_LAST_V1]);
+    emit(FIX_DIGEST_V1, word[SHA_WORD_CAPACITY_DIGEST_SELECTOR_V1]);
 }
 
 pub(super) fn row_factor_v1<A: PolynomialAirFieldV1>(
@@ -150,7 +153,7 @@ pub(super) fn push_residues_v1<A: PolynomialAirFieldV1>(
     current: &ZkX509ShaBatchRowV1<A>,
     next: &ZkX509ShaBatchRowV1<A>,
     challenges: ZkX509ShaCallBusChallengesV1,
-    residues: &mut Vec<A>,
+    residues: &mut impl super::ShaResidueSinkV1<A>,
 ) {
     let first = current.fixed[ZK_X509_SHA_FIXED_SEGMENT_FIRST_V1];
     for lane in 0..4 {

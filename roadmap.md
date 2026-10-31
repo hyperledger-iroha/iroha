@@ -7,11 +7,11 @@ the linked specifications. Routine repair receipts belong in PRs and CI.
 
 ## Current priorities
 
-Contract-controlled native locks require matching ABI inventories and compiler
-artifacts, native controller/bypass/CAS/deadline tests, and application custody
-qualification. Complete controlled drawdown with owner-consented waterfall
-distribution under native UID limits before migrating that business path;
-preserve the original payer's beneficial holdings and ordinary refund controls.
+Contract-controlled native locks require native controller/bypass/CAS/deadline
+tests and application custody qualification. Complete controlled drawdown with
+owner-consented waterfall distribution under native UID limits before migrating
+that business path; preserve the original payer's beneficial holdings and
+ordinary refund controls.
 
 1. Deliver the recoverable payment contract below, starting with included-but-rejected
    ISO settlement and withheld AMX decisions across committee changes. Reuse native
@@ -30,11 +30,17 @@ preserve the original payer's beneficial holdings and ordinary refund controls.
    signing inputs. This handoff task owns the outcomes in the
    [Sumeragi handoff goals](specs/sumeragi_goals.md#active-handoff-completion-gates)
    and works only in `/Users/takemiyamakoto/dev/iroha` on `optimizations`.
-5. Validate the combined fixture/runtime repairs through fresh workspace,
-   genuine fixture and native SDK artifacts on one source candidate. Qualify the
-   joint X509 relation and transcript privacy, and resolve its proving-time and
-   hardware-specific address-space failures;
+5. Qualify the implemented native fixture and release-owner corrections through
+   a fresh library build, affected-owner runtimes, workspace checks and genuine
+   fixture and native SDK artifacts on one source candidate. Qualify the
+   joint X509 relation and transcript privacy, and resolve proving time and
+   process observation under unchanged memory and address-space limits;
    produce current q77 maximum proofs without widening resource limits.
+
+The [Windows and Intel completion goals](specs/windows_intel_completion_goals.md)
+track native custody, retained CLI/Core evidence, SDK and package qualification,
+actual instruction execution, and the remaining named-hardware/resource gates.
+Component correctness does not close an installed-release or performance gate.
 
 The [first-release goals](specs/first_release_completion_goals.md),
 [IVM goals](specs/kotodama_ivm_completion.md) and [ZK goals](specs/zk_first_release_goals.md)
@@ -248,7 +254,7 @@ with no node-schema key.
 | C5 | Privacy authority/degree | ZK-ACE/STARK/AXT/IVM | Finalized source State and signed amount/intent, six-lane/qROM/AIR/FRI and exact SDK parity; explicit terminal degree/geometry; qualify the joint X509 relation and transcript privacy, and complete its maximum proof within unchanged byte/RSS, literal address-space and 300-second limits; unsupported paths stay disabled. |
 | C6 | FHE/MKHE/Figure 9 | Crypto/model/proofs | Complete native40 correspondence/full-size eight-party replay; qPCS redesign within fixed work bounds, governed Figure 9 keys and independent measured ordinary-stack proofs. |
 | C7 | Acceleration | Native backends | Automatic target-appropriate daemon defaults, ten reproducible signed embedded CUDA PTX families, driverless daemon startup, actual CPU/Metal/CUDA KAT/root parity, authenticated library/device/calibration, fault quarantine, side-channel and RSS/throughput; unqualified T256/MKHE stay scalar. |
-| C8 | Kaigi sessions | Model/crypto/Core/SDKs | Release-profile evidence for the passing [four-validator gate](specs/kaigi_four_validator_lifecycle_v1.md); private proving in the Kotlin, Swift, Python and C# SDKs; a governed path to enable private calls on a running network, because verifying keys can only be registered at genesis; [SoraNet relay routing](specs/soranet/kaigi_over_soranet.md#outstanding-work), which needs an owner trust-model decision. |
+| C8 | Kaigi sessions | Model/crypto/Core/SDKs | Release-profile evidence for the passing [four-validator gate](specs/kaigi_four_validator_lifecycle_v1.md); private proving in the Kotlin, Swift, Python and C# SDKs; a governed path to enable private calls on a running network, because verifying keys can only be registered at genesis; a decision on whether a stale-roster rejection keeps paying the full fee, since people joining at once pay for every lost race; [SoraNet relay routing](specs/soranet/kaigi_over_soranet.md#outstanding-work), which needs an owner trust-model decision. |
 | C9 | Native PLONK/IPA prover | ZK/prover owners | Qualify source-bound VK-to-PK reconstruction, wallet admission and proving-buffer release across current native-finality operation stages. Resolve the dense A chip workload's remaining margin: the retained campaign failed at 36.554105 CPU seconds; the current first-overflow single-process diagnostic verifies two 7,648 B proofs with slower CPU 35.573358 seconds and kernel peak RSS 663,453,696 B. Its time meets the 36-second hard limit but exceeds the 32.4-second block-median qualification margin; this diagnostic has no calibration or campaign verdict. Qualify all eight configurations under the unchanged margins, owned-witness method and process-wide 64 MiB MSM budget; measure the installed native single-terminal Load separately. No complete resource campaign qualifies the changed engine; the earlier four-thread real-Q failure at 10.22 seconds remains retained. Current range/carry component checks and conditional binding review do not establish timing qualification. Retain earlier failures, borderline margins and invalid attempts. Qualify PIPA-R/PIPA-AS operation relations, corrected-claim branches, lineage, transport and CreditStatus through the complete authenticated catalog and real offline exchange; finish the soundness and joint privacy obligations under the explicitly accepted recursive Fiat–Shamir assumption, without treating that design decision as C12 closure. Native v4 passes the scoped engineering journey; complete live-network and physical runtime qualification and rebuilt node/SDK delivery for the migrated, re-keyed [native consumers](specs/native_prover_migration_inventory.md). Retired vendor trees and the temporary oracle are deleted; source guards pass. First release has one production engine, with no compatibility decoder or old-key fallback. |
 
 ## Services and deployment

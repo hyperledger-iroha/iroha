@@ -150,6 +150,7 @@ fn operators(network: &Network) -> Result<BTreeMap<PeerId, Operator>> {
         .collect()
 }
 
+#[cfg(unix)]
 fn install_genesis_custody(
     global: &amx::Root,
     runtime: &tokio::runtime::Runtime,
@@ -252,6 +253,7 @@ fn parent_registration_sources(
 
 #[test]
 #[ignore = "16 actual processes, real all-seat DKG and paid 4→7→4 workload; needs three isolated network permits"]
+#[cfg(unix)]
 fn original_epoch_zero_commit_releases_paid_escrow_after_real_four_seven_four_rotation_and_restart()
 -> Result<()> {
     ensure!(
@@ -270,6 +272,7 @@ fn original_epoch_zero_commit_releases_paid_escrow_after_real_four_seven_four_ro
 
 // Retain only the durable owners between phases. The original test held its
 // later proof and rotation frames while native genesis was still executing.
+#[cfg(unix)]
 struct RotationSetup {
     exchange: amx::Exchange,
     dkg: DisposableGenesisDkgOutput,
@@ -284,6 +287,7 @@ struct RotationSetup {
 // borrows this same setup without moving the large Exchange through the wrapper.
 // TODO: Qualify this phase boundary with the complete default-stack network test.
 #[inline(never)]
+#[cfg(unix)]
 fn prepare_rotation_exchange() -> Result<Box<RotationSetup>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -363,6 +367,7 @@ struct FrozenRotationPayment {
     old_decision: iroha_data_model::sumeragi_amx::AmxCertifiedBlockV1,
 }
 
+#[cfg(unix)]
 struct FirstRotationHandoff {
     first: PreparedRotation,
     survivors: BTreeSet<PeerId>,
@@ -370,6 +375,7 @@ struct FirstRotationHandoff {
 
 // Prepared custody retains owner-private credential directories. Keep both exact
 // ceremony owners alive through bank restart, fee audit and the final idle check.
+#[cfg(unix)]
 struct RetainedRotationCustody {
     _second: PreparedRotation,
     _first: PreparedRotation,
@@ -378,6 +384,7 @@ struct RetainedRotationCustody {
 // Keep only durable owners on this orchestration frame. Each completed ceremony
 // and proof acquisition frame returns before the next phase is entered.
 #[inline(never)]
+#[cfg(unix)]
 fn recover_original_decision_after_rotation(setup: &mut RotationSetup) -> Result<()> {
     let pending = freeze_original_rotation_payment(&mut setup.exchange)?;
     let first = perform_first_rotation_handoff(setup, &pending)?;
@@ -482,6 +489,7 @@ fn freeze_original_rotation_payment(
 }
 
 #[inline(never)]
+#[cfg(unix)]
 fn perform_first_rotation_handoff(
     setup: &RotationSetup,
     pending: &FrozenRotationPayment,
@@ -587,6 +595,7 @@ fn perform_first_rotation_handoff(
 }
 
 #[inline(never)]
+#[cfg(unix)]
 fn perform_second_rotation_handoff(
     setup: &RotationSetup,
     pending: &FrozenRotationPayment,

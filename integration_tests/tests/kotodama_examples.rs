@@ -11,7 +11,6 @@ use integration_tests::process::{output_with_timeout, process_timeout, status_wi
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 fn on_path(bin: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
@@ -43,6 +42,8 @@ fn is_executable(p: &Path) -> bool {
     p.extension().map(|e| e == "exe").unwrap_or(false)
 }
 fn tool(variable: &str, name: &str) -> Option<PathBuf> {
+    iroha_test_network::require_development_process_mode()
+        .expect("optional external tools require a development invocation");
     let tool = env::var(variable)
         .ok()
         .map(PathBuf::from)
@@ -64,16 +65,17 @@ fn compile(koto: &Path, example: &str) -> PathBuf {
     let source = root.join(format!("examples/{example}/{example}.ko"));
     let out = root.join(format!("target/examples/{example}.to"));
     fs::create_dir_all(out.parent().unwrap()).unwrap();
-    let mut command = Command::new(koto);
+    let mut command =
+        iroha_test_network::development_process_command(koto).expect("select development tool");
     command.arg("build").arg(&source).arg("--out").arg(&out);
-    let status =
-        status_with_timeout(&mut command, process_timeout()).expect("failed to spawn koto");
+    let status = status_with_timeout(command, process_timeout()).expect("failed to spawn koto");
     assert!(status.success(), "koto build failed: {status:?}");
     out
 }
 /// Run one entrypoint locally and require the debugger to report success.
 fn debug_call(iroha: &Path, artifact: &Path, entrypoint: &str) {
-    let mut command = Command::new(iroha);
+    let mut command =
+        iroha_test_network::development_process_command(iroha).expect("select development tool");
     command
         .arg("--config")
         .arg(root().join("defaults/client.toml"))
@@ -82,8 +84,7 @@ fn debug_call(iroha: &Path, artifact: &Path, entrypoint: &str) {
         .args(["contract", "debug-call", "--code-file"])
         .arg(artifact)
         .args(["--entrypoint", entrypoint]);
-    let output =
-        output_with_timeout(&mut command, process_timeout()).expect("failed to spawn iroha");
+    let output = output_with_timeout(command, process_timeout()).expect("failed to spawn iroha");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success() && stdout.contains("\"ok\": true"),
@@ -106,7 +107,8 @@ fn inspect_hello() {
         return;
     };
     let artifact = compile(&koto, "hello");
-    let mut command = Command::new(&iroha);
+    let mut command =
+        iroha_test_network::development_process_command(&iroha).expect("select development tool");
     command
         .args([
             "--output-format",
@@ -117,8 +119,7 @@ fn inspect_hello() {
             "--file",
         ])
         .arg(&artifact);
-    let output =
-        output_with_timeout(&mut command, process_timeout()).expect("failed to spawn iroha");
+    let output = output_with_timeout(command, process_timeout()).expect("failed to spawn iroha");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success() && stdout.contains("code_hash") && stdout.contains("abi_hash"),

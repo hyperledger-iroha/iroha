@@ -4,10 +4,13 @@
 //! canonical decoding; only the protocol restoration job can produce `AvailableBody`.
 
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{self, Read},
     path::{Path, PathBuf},
 };
+
+#[cfg(any(not(windows), test))]
+use std::fs::OpenOptions;
 
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 
@@ -113,6 +116,8 @@ pub(super) struct ArtifactRead {
     path: PathBuf,
     file: File,
     directory: Option<ReadDirectory>,
+    #[cfg(windows)]
+    path_original: Option<(iroha_fs::RetainedFile, iroha_fs::FileSnapshot)>,
     length: usize,
     bytes: Option<ChargedBuffer<u8>>,
 }
@@ -120,6 +125,7 @@ pub(super) struct ArtifactRead {
 impl ArtifactRead {
     /// Open a regular bounded artifact. Only a missing path is `None`; malformed files,
     /// permission errors, and allocation failures must never masquerade as absence.
+    #[cfg(not(windows))]
     pub(super) fn open(path: &Path, max_bytes: usize) -> io::Result<Option<Self>> {
         let mut options = OpenOptions::new();
         options.read(true);
@@ -155,6 +161,40 @@ impl ArtifactRead {
             path: path.into(),
             file,
             directory: None,
+            length,
+            bytes: None,
+        }))
+    }
+
+    /// Retain a bounded native Windows original and its ancestors through allocation retries.
+    /// Only initial pathname absence is optional; errors after that observation remain errors.
+    #[cfg(windows)]
+    pub(super) fn open(path: &Path, max_bytes: usize) -> io::Result<Option<Self>> {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if !metadata.file_type().is_file() => {
+                return Err(invalid("artifact is not a regular file"));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+            _ => {}
+        }
+        let original = iroha_fs::RetainedFile::open_regular(path)?;
+        let snapshot = original.snapshot()?;
+        let length = usize::try_from(original.file().metadata()?.len())
+            .map_err(|_| invalid("artifact length overflow"))?;
+        if length > max_bytes {
+            return Err(invalid(
+                "artifact type or length exceeds the storage boundary",
+            ));
+        }
+        // This duplicate reads the same retained native object; it never reopens the path.
+        let file = original.file().try_clone()?;
+        original.revalidate()?;
+        Ok(Some(Self {
+            path: path.into(),
+            file,
+            directory: None,
+            path_original: Some((original, snapshot)),
             length,
             bytes: None,
         }))
@@ -223,6 +263,8 @@ impl ArtifactRead {
             path,
             file,
             directory: Some(directory),
+            #[cfg(windows)]
+            path_original: None,
             length,
             bytes: None,
         })
@@ -299,22 +341,39 @@ impl ArtifactRead {
                 )
                 .map_err(ArtifactReadError::Io);
         }
-        let current = fs::symlink_metadata(&self.path).map_err(ArtifactReadError::Io)?;
-        if opened.len() != self.length as u64 || !current.file_type().is_file() {
-            return Err(ArtifactReadError::Io(invalid(
-                "artifact source changed during read",
-            )));
-        }
-        #[cfg(unix)]
+        #[cfg(windows)]
         {
-            use std::os::unix::fs::MetadataExt as _;
-            if opened.dev() != current.dev() || opened.ino() != current.ino() {
+            let Some((original, before)) = &self.path_original else {
                 return Err(ArtifactReadError::Io(invalid(
-                    "artifact path no longer names the original source",
+                    "artifact has no original custody",
+                )));
+            };
+            if original.snapshot().map_err(ArtifactReadError::Io)? != *before {
+                return Err(ArtifactReadError::Io(invalid(
+                    "artifact source changed during read",
                 )));
             }
+            Ok(())
         }
-        Ok(())
+        #[cfg(not(windows))]
+        {
+            let current = fs::symlink_metadata(&self.path).map_err(ArtifactReadError::Io)?;
+            if opened.len() != self.length as u64 || !current.file_type().is_file() {
+                return Err(ArtifactReadError::Io(invalid(
+                    "artifact source changed during read",
+                )));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt as _;
+                if opened.dev() != current.dev() || opened.ino() != current.ino() {
+                    return Err(ArtifactReadError::Io(invalid(
+                        "artifact path no longer names the original source",
+                    )));
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -349,7 +408,15 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("artifact");
         fs::write(&path, b"original").unwrap();
+        #[cfg(not(windows))]
         let read = ArtifactRead::open(&path, 8).unwrap().unwrap();
+        #[cfg(windows)]
+        let read = {
+            let directory = iroha_fs::OwnerDirectory::open(root.path()).unwrap();
+            ArtifactRead::open_in(&directory, "artifact", 8)
+                .unwrap()
+                .unwrap()
+        };
         let mut file = OpenOptions::new().write(true).open(&path).unwrap();
         file.set_len(4).unwrap();
         let budget = AllocationBudget::new(8);
@@ -380,13 +447,72 @@ mod tests {
         let read = ArtifactRead::open(&path, 8).unwrap().unwrap();
         let replacement = root.path().join("replacement");
         fs::write(&replacement, b"original").unwrap();
+        #[cfg(not(windows))]
         fs::rename(&replacement, &path).unwrap();
+        #[cfg(windows)]
+        assert!(fs::rename(&replacement, &path).is_err());
         #[cfg(unix)]
         assert!(matches!(
             read.complete(&AllocationBudget::new(8)),
             Err((_, ArtifactReadError::Io(_)))
         ));
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        assert_eq!(
+            read.complete(&AllocationBudget::new(8))
+                .ok()
+                .unwrap()
+                .as_slice(),
+            b"original"
+        );
+        #[cfg(not(any(unix, windows)))]
         drop(read);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_path_original_excludes_writers_and_delete_through_allocation_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("artifact");
+        fs::write(&path, b"original").unwrap();
+        let budget = AllocationBudget::new(8);
+        let occupied = ChargedBuffer::<u8>::new(1, &budget).unwrap();
+        let read = ArtifactRead::open(&path, 8).unwrap().unwrap();
+        let (read, error) = read.complete(&budget).err().unwrap();
+        assert!(matches!(error, ArtifactReadError::Allocation(_)));
+        assert!(OpenOptions::new().write(true).open(&path).is_err());
+        assert!(fs::remove_file(&path).is_err());
+        assert!(fs::rename(&path, root.path().join("retired")).is_err());
+        drop(occupied);
+        let bytes = read.complete(&budget).ok().unwrap();
+        assert_eq!(bytes.as_slice(), b"original");
+        assert!(bytes.belongs_to(&budget));
+        drop(bytes);
+        let writable = OpenOptions::new().write(true).open(&path).unwrap();
+        drop(writable);
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_path_original_rejects_hardlinks_and_existing_writers() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("artifact");
+        let alias = root.path().join("alias");
+        fs::write(&path, b"original").unwrap();
+        fs::hard_link(&path, &alias).unwrap();
+        assert!(ArtifactRead::open(&path, 8).is_err());
+        assert!(ArtifactRead::open(&alias, 8).is_err());
+        fs::remove_file(&alias).unwrap();
+        let writer = OpenOptions::new().write(true).open(&path).unwrap();
+        assert!(ArtifactRead::open(&path, 8).is_err());
+        drop(writer);
+        let read = ArtifactRead::open(&path, 8).unwrap().unwrap();
+        assert_eq!(
+            read.complete(&AllocationBudget::new(8))
+                .ok()
+                .unwrap()
+                .as_slice(),
+            b"original"
+        );
     }
 }

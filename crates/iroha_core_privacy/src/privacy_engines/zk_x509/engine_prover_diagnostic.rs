@@ -797,11 +797,10 @@ fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool
     }
     let observation = observation.finish_v1();
     record(observation.public_text_v1());
-    // TODO: X.3 owns the complete X509 run under scripts/zk_resource_harness.py
-    // and the phases that close the remaining attribution gap. The last
-    // retained maximum receipt left about 4.45% of the proving time outside
-    // every top-level phase, so this record is expected to report
-    // `phase_tree_within_one_percent=false` until those phases exist.
+    // TODO: X.3 owns a complete current-candidate X509 run under
+    // scripts/zk_resource_harness.py. The added phase owners have focused
+    // coverage; only the complete invocation can establish the one-percent
+    // attribution bound and the unchanged time and memory requirements.
     record(
         retain_phase_tree_v1(
             &directory,

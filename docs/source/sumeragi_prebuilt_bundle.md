@@ -1,72 +1,63 @@
 # Source-bound release binary bundles
 
-`scripts/sumeragi_prebuilt_bundle.sh` builds, publishes and re-verifies a
-private, read-only bundle of release executables for network tests that must
-not build their own binaries. The shell functions call
-`scripts/sumeragi_prebuilt_bundle.py` (`prepare-cache`, `create`, `validate`)
-for every filesystem and manifest check; `iroha_test_network` consumes the
-result.
+The structured `scripts/run_release_pipeline.py prepare-sumeragi-programs`
+operation owns preparation for network tests that must not build their own binaries.
+Its shell adapter is `scripts/sumeragi_prebuilt_bundle.sh`.
+`sumeragi_prebuilt_bundle.py` supplies bounded protocol validation and has no
+standalone publishing CLI.
 
-## Bundle contents
+## Source owners
 
-| Manifest role | Bundle path | Export |
-| --- | --- | --- |
-| `irohad` | `release/iroha3d` | `TEST_NETWORK_BIN_IROHAD` |
-| `iroha` | `release/iroha` | `TEST_NETWORK_BIN_IROHA` |
-| `kagami` | `release/kagami` | `KAGAMI_BIN` |
-| `irohad_taira` | `release/iroha3d_taira` | `TEST_NETWORK_BIN_IROHAD_TAIRA` |
+| Boundary | Owner |
+| --- | --- |
+| Canonical manifest, publication and retained executable selection | `crates/iroha_release_bundle` |
+| Original filesystem and native process custody | `crates/iroha_fs` |
+| Bounded process interoperability | `crates/iroha_process_bridge` |
+| Reviewed registry, original source keeper and independent artifact admission | `scripts/run_release_pipeline.py`, `release_entry_owner.py`, `release_bridge_admission.py` |
+| Public/cached resolution and complete admission through child lifetime | `iroha_test_network::ResolvedProgram` and its process wrappers |
 
-All four are built with `--locked --offline --release` into one Cargo cache in
-the default feature graph (`irohad` for `iroha3d` and `iroha3d_taira`, then
-`iroha_cli` and `iroha_kagami`); the Taira launcher and the standard daemon are
-distinct executables of the `irohad` package. The bundle directory is
-`<IROHA_RELEASE_ARTIFACT_ROOT>/sumeragi-release/<source-manifest-sha256>/programs/invocation.<token>`.
-It holds the four executables (mode `0500`) and the schema-2 manifest
-`.sumeragi-prebuilt-binaries.tsv` (mode `0400`) with exactly 25 ordered
-`key<TAB>value` lines: schema version, source manifest, `Cargo.lock`, Cargo and
-rustc version digests, host and target triples, profile, bundle directory, and
-the relative path, SHA-256, size and mode of each executable. Every directory is
-closed to mode `0500` after publication.
+The entry and shared bridge require explicit independent executable/provenance
+pins on every host. The original source keeper, registry, tools and locks remain
+held through original child completion. Windows includes the complete Job;
+Unix observes the original root. An unresolved ordinary observation keeps the
+initiating Python process supervising the same session rather than exiting and
+releasing its owners. This does not provide crash-proof interpreter custody.
 
-## Usage
+## Canonical inventory
 
-The caller sources `scripts/sumeragi_release_process_policy.sh` (its root checks
-and Cargo wrapper) and `scripts/sumeragi_prebuilt_bundle.sh`, sets
-`CARGO_TARGET_DIR` and `IROHA_RELEASE_ARTIFACT_ROOT` to private owner-only
-directories outside the repository, and passes the repository root and the
-workspace source digest (`scripts/compute_workspace_source_manifest.py`):
+The flat invocation directory contains `iroha3d`, `iroha`, `kagami` and
+`iroha3d_taira`, with `.exe` suffixes on Windows, plus `release-bundle.json`.
+The sole Norito JSON schema is `iroha.release-bundle.v1`. It binds the native
+target, source and Cargo.lock digests, tool transcripts, exact inventory, content
+hashes, sizes, custody policy and original local file/directory identities.
+Those local identities bind this invocation; they are not portable consensus IDs.
 
-- `sumeragi_ensure_source_bound_localnet_binaries <repo> <source-sha256>`
-  builds a fresh bundle and exports `IROHA_TEST_TARGET_DIR` and
-  `IROHA_RELEASE_PREBUILT_MANIFEST_SHA256`. When
-  `IROHA_RELEASE_PREBUILT_MANIFEST_SHA256` is already set, the inherited bundle
-  is validated and reused; it is never rebuilt or replaced.
-- `sumeragi_export_source_bound_localnet_binaries <repo> <source-sha256>`
-  re-validates the bundle and exports the four binary paths above.
-- `sumeragi_localnet_binary_attestation_valid <repo> <source-sha256>` only
-  validates.
+The namespace is
+`<artifact-root>/sumeragi-release/<source-sha256>/programs/invocation.<token>`.
+Unix seals directories/executables to owner `0500` and the manifest to `0400`.
+Windows uses protected effective-owner DACLs with read/execute for directories
+and executables, and read-only access for the manifest. Publication retains the
+original creators across sealing; recovery authenticates the exact originals.
+Unexpected entries, links, unsafe policies, altered content and substituted
+identities refuse admission.
 
-Validation rejects a bundle whose manifest digest, source digest, profile,
-bundle path or `Cargo.lock` digest differs, whose directory tree holds anything
-beyond the published entries, or whose executables differ from the manifest in
-path, digest, size or mode, are not single-link regular files, or change while
-they are read.
+## Consumer contract and qualification
 
-## Consumer
+Release admission requires `IROHA_RELEASE_SOURCE_MANIFEST_SHA256`,
+`IROHA_RELEASE_PREBUILT_MANIFEST_SHA256`, `IROHA_RELEASE_ARTIFACT_ROOT`,
+`IROHA_TEST_TARGET_DIR` and `IROHA_TEST_SKIP_BUILD=1`. If
+`IROHA_RELEASE_CARGO_LOCK_SHA256` is supplied, it must also match. The current
+original Cargo.lock digest is always compared with the manifest. Invalid partial identities
+refuse before developer caches, overrides or builds. Qualified resolution returns
+a retained program; `diagnostic_path()` is observational and cannot authorize a
+launch. Commands and children retain the complete admission owner through exit.
+An inherited bundle is re-admitted and reused; invalid inherited anchors never
+trigger a rebuild.
 
-With `IROHA_RELEASE_SOURCE_MANIFEST_SHA256` set, `iroha_test_network` resolves
-binaries only from the bundle. It requires `IROHA_TEST_SKIP_BUILD=1`,
-`IROHA_TEST_TARGET_DIR` naming an immediate `invocation.<token>` directory under
-the manifest-addressed programs root of `IROHA_RELEASE_ARTIFACT_ROOT`, and a
-manifest whose SHA-256 equals `IROHA_RELEASE_PREBUILT_MANIFEST_SHA256`; it then
-checks every executable against the manifest. The BPNG alias-registry network
-test (`integration_tests/tests/alias_registry_bootstrap_network.rs`) and the
-integration Kagami helper (`integration_tests/src/kagami.rs`) resolve their
-binaries this way. `pytests/scripts/sumeragi_prebuilt_bundle_test.py` and
-`pytests/scripts/sumeragi_prebuilt_bundle_shell_test.py` cover the builder.
-
-TODO(release-runner): no maintained runner currently sources this builder or
-provides the BPNG test's full sealed release environment
-(`IROHA_RELEASE_SEALED_WORKTREE`, `IROHA_RELEASE_EXPECTED_IDENTITY_PATH` and the
-other `IROHA_RELEASE_*` identities), so that test fails closed until one is
-added.
+Canonical Rust admission tests and the `pytests/scripts/test_release_*`,
+`test_pipeline_preparation`, `test_shell_preparation`, `test_native_supervision`
+and `test_bridge_cli_supervision` suites cover these boundaries. The real native
+producer/consumer corridor still requires independently trusted artifacts and
+matching runtime checks. No maintained runner supplies a complete authenticated
+BPNG release environment. Darwin original-image launch and Unix recursive Cargo
+selection remain unresolved. See the [platform completion record](../../specs/windows_intel_completion_goals.md).

@@ -476,7 +476,6 @@ const GC_STORAGE_MANIFEST_IDENTITY_DOMAIN_V1: &[u8] =
     b"sorafs.node.gc.storage_manifest.identity.v1";
 const GC_STORAGE_MANIFEST_SET_DOMAIN_V1: &[u8] = b"sorafs.node.gc.manifest_set.identity.v1";
 const GC_STORAGE_CHUNK_REFCOUNTS_DOMAIN_V1: &[u8] = b"sorafs.node.gc.chunk_refcounts.identity.v1";
-const LOCAL_RUNTIME_SNAPSHOT_TMP_EXT: &str = "tmp";
 static LOCAL_CHECKPOINT_WRITE_LOCK: Mutex<()> = Mutex::new(());
 const EVIDENCE_VIEWER_AUDIT_CYCLE_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.moderation.evidence_viewer_audit.cycle_id.v1";
@@ -552,7 +551,6 @@ use orderbook_transaction_forwarder::{
     OrderbookTransactionForwarderPolicyV1, OrderbookTransactionPendingV1,
     OrderbookTransactionSigningRequestV1,
 };
-use rand::{rand_core::TryRng as _, rngs::SysRng};
 use repair_transaction_forwarder::{
     REPAIR_TRANSACTION_MAX_CANONICAL_BYTES_V1, RepairOperationV1, RepairTransactionContextV1,
     RepairTransactionEnqueueResultV1, RepairTransactionForwarder, RepairTransactionForwarderError,
@@ -602,11 +600,11 @@ use sorafs_manifest::{
     validate_reputation_snapshot_transition,
 };
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     fs,
-    io::{self, ErrorKind, Read, Write},
+    io::{self, ErrorKind, Read},
     path::{Component, Path, PathBuf},
     sync::{Arc, Mutex, OnceLock, RwLock},
     time::{SystemTime, UNIX_EPOCH},
@@ -1034,17 +1032,22 @@ fn write_local_checkpoint_atomic_with_mode(
     )
 }
 fn sync_local_checkpoint_parent(parent: &Path) -> io::Result<()> {
-    let directory = fs::File::open(parent)?;
-    directory.sync_all()
+    iroha_fs::OwnerDirectory::open(parent)?.sync()
 }
 fn remove_local_checkpoint_file_durably(path: &Path) -> io::Result<()> {
     let path = absolute_local_checkpoint_path(path)?;
-    reject_unsafe_checkpoint_ancestors(&path)?;
-    let metadata = fs::symlink_metadata(&path)?;
-    validate_local_checkpoint_file_metadata(&path, &metadata)?;
-    fs::remove_file(&path)?;
-    if let Some(parent) = path.parent() {
-        sync_local_checkpoint_parent(parent)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("checkpoint has no parent"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::other("checkpoint has no name"))?;
+    let directory = iroha_fs::OwnerDirectory::open(parent)?;
+    if !directory.remove_private(name)? {
+        return Err(io::Error::new(
+            ErrorKind::NotFound,
+            "checkpoint does not exist",
+        ));
     }
     Ok(())
 }
@@ -1060,43 +1063,49 @@ fn write_local_checkpoint_atomic_with_mode_and_parent_sync(
         ))
     })?;
     let path = absolute_local_checkpoint_path(path)?;
-    let path = path.as_path();
-    reject_unsafe_checkpoint_ancestors(path)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-        reject_unsafe_checkpoint_ancestors(path)?;
-    }
-    reject_unsafe_checkpoint_target(path)?;
-    let tmp_path = local_checkpoint_tmp_path(path)?;
-    let result: Result<(), LocalCheckpointWriteError> = (|| {
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        fs_flags::set_no_follow_flag(&mut options);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let mut file = options.open(&tmp_path)?;
-        file.write_all(bytes)?;
-        set_local_private_file_permissions(&tmp_path)?;
-        file.sync_all()?;
-        reject_unsafe_checkpoint_ancestors(path)?;
-        reject_unsafe_checkpoint_target(path)?;
-        fs::rename(&tmp_path, path)?;
-        if let Some(parent) = path.parent() {
-            parent_sync(parent).map_err(LocalCheckpointWriteError::committed)?;
-        }
-        Ok(())
-    })();
-    if result.as_ref().is_err_and(|err| !err.committed) {
-        let _ = fs::remove_file(&tmp_path);
-    }
-    result
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("checkpoint has no parent"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::other("checkpoint has no name"))?;
+    let directory = iroha_fs::OwnerDirectory::open_or_create(parent)?;
+    let mut committed = false;
+    directory
+        .write_atomic_observed(
+            name,
+            bytes,
+            iroha_fs::PublishMode::Replace,
+            128,
+            |step, _| {
+                match step {
+                    iroha_fs::AtomicWriteStep::Publish => {
+                        reject_unsafe_checkpoint_target(&directory, name)?;
+                    }
+                    iroha_fs::AtomicWriteStep::Published => committed = true,
+                    iroha_fs::AtomicWriteStep::SyncDirectory => parent_sync(parent)?,
+                    _ => {}
+                }
+                Ok(())
+            },
+        )
+        .map_err(|error| {
+            if committed {
+                LocalCheckpointWriteError::committed(error)
+            } else {
+                LocalCheckpointWriteError::precommit(error)
+            }
+        })
 }
-fn reject_unsafe_checkpoint_target(path: &Path) -> io::Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => validate_local_checkpoint_file_metadata(path, &metadata),
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(err),
+fn reject_unsafe_checkpoint_target(
+    directory: &iroha_fs::OwnerDirectory,
+    name: &std::ffi::OsStr,
+) -> io::Result<()> {
+    if let Some(original) = directory.open_retained_regular_optional(name)? {
+        iroha_fs::FileSnapshot::of(original.file(), true)?;
+        original.revalidate()?;
     }
+    directory.revalidate()
 }
 fn absolute_local_checkpoint_path(path: &Path) -> io::Result<PathBuf> {
     if path.file_name().is_none() {
@@ -1132,29 +1141,17 @@ fn absolute_local_checkpoint_path(path: &Path) -> io::Result<PathBuf> {
     }
     Ok(normalized)
 }
-fn validate_local_checkpoint_file_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(io::Error::other(format!(
-            "checkpoint target `{}` must be a regular file",
-            path.display()
-        )));
+fn validate_local_checkpoint_file_metadata(
+    path: &Path,
+    metadata: &iroha_fs::FileMetadata,
+) -> io::Result<()> {
+    let original = iroha_fs::RetainedFile::open_private(path)?;
+    if original.identity()? != metadata.identity() {
+        return Err(io::Error::other(
+            "checkpoint changed while admitting private custody",
+        ));
     }
-    #[cfg(unix)]
-    {
-        if metadata.nlink() != 1 {
-            return Err(io::Error::other(format!(
-                "checkpoint target `{}` must have exactly one hard link",
-                path.display()
-            )));
-        }
-        if metadata.permissions().mode() & 0o077 != 0 {
-            return Err(io::Error::other(format!(
-                "checkpoint target `{}` must not be accessible by group or other users",
-                path.display()
-            )));
-        }
-    }
-    Ok(())
+    original.revalidate()
 }
 fn reject_unsafe_checkpoint_ancestors(path: &Path) -> io::Result<()> {
     if path
@@ -1203,50 +1200,54 @@ fn reject_unsafe_checkpoint_ancestors(path: &Path) -> io::Result<()> {
 }
 fn read_local_checkpoint_bounded(path: &Path, max_bytes: u64) -> io::Result<Option<Vec<u8>>> {
     let path = absolute_local_checkpoint_path(path)?;
-    let path = path.as_path();
-    reject_unsafe_checkpoint_ancestors(path)?;
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err),
-    };
-    validate_local_checkpoint_file_metadata(path, &metadata)?;
-    if metadata.len() > max_bytes {
-        return Err(io::Error::other(format!(
-            "checkpoint `{}` is {} bytes, exceeding limit {max_bytes}",
-            path.display(),
-            metadata.len()
-        )));
+    // Preserve the canonical native path bound even when an early parent is absent.
+    if path.components().count() > 128 {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "checkpoint path exceeds the native custody depth bound",
+        ));
     }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    fs_flags::set_no_follow_flag(&mut options);
-    let file = options.open(path)?;
-    let opened = file.metadata()?;
-    reject_unsafe_checkpoint_ancestors(path)?;
-    validate_local_checkpoint_file_metadata(path, &opened)?;
-    if opened.len() > max_bytes || !same_local_file_identity(&metadata, &opened) {
-        return Err(io::Error::other(format!(
-            "checkpoint `{}` changed identity or exceeded its size limit while opening",
-            path.display()
-        )));
+    let maximum = usize::try_from(max_bytes)
+        .map_err(|_| io::Error::other("checkpoint size limit does not fit memory address space"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::other("checkpoint has no name"))?;
+    let mut parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("checkpoint has no parent"))?;
+    let mut missing = Vec::new();
+    loop {
+        match fs::symlink_metadata(parent) {
+            Ok(_) => break,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                let Some(component) = parent.file_name() else {
+                    return Err(error);
+                };
+                missing.push(component.to_owned());
+                parent = parent.parent().ok_or(error)?;
+            }
+            Err(error) => return Err(error),
+        }
     }
-    let capacity = usize::try_from(opened.len()).map_err(|_| {
-        io::Error::other(format!(
-            "checkpoint `{}` length does not fit memory address space",
-            path.display()
-        ))
-    })?;
-    let mut bytes = Vec::with_capacity(capacity);
-    file.take(max_bytes.saturating_add(1))
-        .read_to_end(&mut bytes)?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
-        return Err(io::Error::other(format!(
-            "checkpoint `{}` grew beyond limit {max_bytes} while reading",
-            path.display()
-        )));
+    // Metadata only locates an admission point. The first retained reader owns the
+    // actual ancestry, including trusted OS aliases, and is never reopened as authority.
+    let mut directory = iroha_fs::ReaderDirectory::open(parent)?;
+    for component in missing.into_iter().rev() {
+        let Some(child) = directory.open_child_optional(component)? else {
+            return Ok(None);
+        };
+        directory = child;
     }
-    Ok(Some(bytes))
+    read_local_checkpoint_from(&directory, name, maximum)
+}
+fn read_local_checkpoint_from(
+    directory: &iroha_fs::ReaderDirectory,
+    name: &std::ffi::OsStr,
+    maximum: usize,
+) -> io::Result<Option<Vec<u8>>> {
+    directory
+        .read_private_optional(name, maximum)
+        .map(|bytes| bytes.map(|bytes| bytes.to_vec()))
 }
 pub(crate) fn decode_local_checkpoint_canonical<T>(
     bytes: &[u8],
@@ -1311,108 +1312,14 @@ fn read_trust_policy_file(
     label: &'static str,
 ) -> io::Result<Vec<u8>> {
     let path = absolute_local_checkpoint_path(path)?;
-    let path = path.as_path();
-    reject_unsafe_checkpoint_ancestors(path)?;
-    let before_open = fs::symlink_metadata(path)?;
-    validate_trust_policy_file_metadata(path, &before_open, label)?;
-    let max_bytes = u64::try_from(max_bytes)
-        .map_err(|_| io::Error::other(format!("{label} size cap does not fit u64")))?;
-    if before_open.len() > max_bytes {
-        return Err(io::Error::other(format!(
-            "{label} `{}` is {} bytes, exceeding limit {max_bytes}",
-            path.display(),
-            before_open.len()
-        )));
-    }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    fs_flags::set_no_follow_flag(&mut options);
-    let file = options.open(path)?;
-    let opened = file.metadata()?;
-    validate_trust_policy_file_metadata(path, &opened, label)?;
-    if opened.len() > max_bytes || !reputation_policy_metadata_stable(&before_open, &opened) {
-        return Err(io::Error::other(format!(
-            "{label} `{}` changed identity or exceeded its size limit while opening",
-            path.display()
-        )));
-    }
-    let capacity = usize::try_from(opened.len()).map_err(|_| {
-        io::Error::other(format!(
-            "{label} `{}` length does not fit memory address space",
-            path.display()
-        ))
-    })?;
-    let mut bytes = Vec::new();
-    bytes.try_reserve_exact(capacity).map_err(|_| {
-        io::Error::other(format!(
-            "failed to reserve memory for {label} `{}`",
-            path.display()
-        ))
-    })?;
-    let mut limited = file.take(max_bytes.saturating_add(1));
-    limited.read_to_end(&mut bytes)?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
-        return Err(io::Error::other(format!(
-            "{label} `{}` grew beyond limit {max_bytes} while reading",
-            path.display()
-        )));
-    }
-    let after_read_file = limited.get_ref().metadata()?;
-    let after_read = fs::symlink_metadata(path)?;
-    validate_trust_policy_file_metadata(path, &after_read, label)?;
-    if !reputation_policy_metadata_stable(&opened, &after_read_file)
-        || !reputation_policy_metadata_stable(&after_read_file, &after_read)
-    {
-        return Err(io::Error::other(format!(
-            "{label} `{}` changed while being read",
-            path.display()
-        )));
-    }
-    Ok(bytes)
-}
-#[cfg(unix)]
-fn reputation_policy_metadata_stable(expected: &fs::Metadata, observed: &fs::Metadata) -> bool {
-    expected.dev() == observed.dev()
-        && expected.ino() == observed.ino()
-        && expected.len() == observed.len()
-        && expected.mtime() == observed.mtime()
-        && expected.mtime_nsec() == observed.mtime_nsec()
-        && expected.ctime() == observed.ctime()
-        && expected.ctime_nsec() == observed.ctime_nsec()
-}
-#[cfg(not(unix))]
-fn reputation_policy_metadata_stable(expected: &fs::Metadata, observed: &fs::Metadata) -> bool {
-    expected.len() == observed.len()
-        && expected.modified().ok() == observed.modified().ok()
-        && same_local_file_identity(expected, observed)
-}
-fn validate_trust_policy_file_metadata(
-    path: &Path,
-    metadata: &fs::Metadata,
-    label: &'static str,
-) -> io::Result<()> {
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(io::Error::other(format!(
-            "{label} `{}` must be a regular non-symlink file",
-            path.display()
-        )));
-    }
-    #[cfg(unix)]
-    {
-        if metadata.nlink() != 1 {
-            return Err(io::Error::other(format!(
-                "{label} `{}` must have exactly one hard link",
-                path.display()
-            )));
-        }
-        if metadata.permissions().mode() & 0o022 != 0 {
-            return Err(io::Error::other(format!(
-                "{label} `{}` must not be writable by group or other users",
-                path.display()
-            )));
-        }
-    }
-    Ok(())
+    iroha_fs::read_regular(&path, max_bytes)
+        .map(|bytes| bytes.to_vec())
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("{label} `{}`: {error}", path.display()),
+            )
+        })
 }
 fn collect_secure_object_store_files(
     root: &Path,
@@ -1428,15 +1335,14 @@ fn collect_secure_object_store_files(
             MODERATION_QUARANTINE_OBJECT_STORE_MAX_DEPTH
         )));
     }
-    let entries = match fs::read_dir(current) {
-        Ok(entries) => entries,
+    let directory = match iroha_fs::OwnerDirectory::open(current) {
+        Ok(directory) => directory,
         Err(err) if err.kind() == ErrorKind::NotFound && current == root => return Ok(()),
         Err(err) => return Err(err),
     };
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        let metadata = fs::symlink_metadata(&path)?;
+    directory.visit_entries(|name| {
+        let path = directory.path().join(name);
+        let metadata = iroha_fs::FileMetadata::symlink_metadata(&path)?;
         if metadata.file_type().is_symlink() {
             return Err(io::Error::other(format!(
                 "quarantine object store entry `{}` must not be a symlink",
@@ -1471,44 +1377,14 @@ fn collect_secure_object_store_files(
                 path.display()
             )));
         }
-    }
-    Ok(())
-}
-#[cfg(unix)]
-fn same_local_file_identity(expected: &fs::Metadata, opened: &fs::Metadata) -> bool {
-    expected.dev() == opened.dev() && expected.ino() == opened.ino()
-}
-#[cfg(not(unix))]
-fn same_local_file_identity(expected: &fs::Metadata, opened: &fs::Metadata) -> bool {
-    expected.len() == opened.len()
-        && expected.modified().ok() == opened.modified().ok()
-        && expected.created().ok() == opened.created().ok()
-}
-#[cfg(unix)]
-fn set_local_private_file_permissions(path: &Path) -> io::Result<()> {
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-}
-#[cfg(not(unix))]
-fn set_local_private_file_permissions(_path: &Path) -> io::Result<()> {
-    Ok(())
-}
-fn local_checkpoint_tmp_path(path: &Path) -> io::Result<PathBuf> {
-    let mut nonce = [0_u8; 16];
-    SysRng.try_fill_bytes(&mut nonce).map_err(|err| {
-        io::Error::other(format!(
-            "failed to generate checkpoint temporary-file nonce: {err}"
-        ))
-    })?;
-    let suffix = format!(
-        "{LOCAL_RUNTIME_SNAPSHOT_TMP_EXT}-{}-{}",
-        std::process::id(),
-        hex::encode(nonce)
-    );
-    let candidate = path.with_added_extension(&suffix);
-    Ok(match candidate.file_name().and_then(|name| name.to_str()) {
-        Some(name) => candidate.with_file_name(format!(".{name}")),
-        None => candidate,
+        Ok(())
     })
+}
+fn same_local_file_identity(
+    expected: &iroha_fs::FileMetadata,
+    opened: &iroha_fs::FileMetadata,
+) -> bool {
+    expected.identity() == opened.identity()
 }
 const REPUTATION_EVENT_CHANNEL_CAPACITY: usize = 128;
 fn reconciliation_divergence_count(storage: &StorageBackend, manifests: &[StoredManifest]) -> u32 {

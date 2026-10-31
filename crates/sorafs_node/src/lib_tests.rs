@@ -2548,6 +2548,76 @@ fn local_checkpoint_roundtrip_is_bounded_and_atomic() {
     assert!(read_local_checkpoint_bounded(&path, 4).is_err());
 }
 #[test]
+fn local_checkpoint_optional_read_preserves_initial_absence_without_creating_parents() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    for path in [root.join("missing"), root.join("one/two/checkpoint")] {
+        assert_eq!(read_local_checkpoint_bounded(&path, 16).unwrap(), None);
+        assert!(!path.exists());
+    }
+    assert!(fs::read_dir(&root).unwrap().next().is_none());
+    let mut excessive = root.clone();
+    for _ in 0..128 {
+        excessive.push("missing");
+    }
+    excessive.push("checkpoint");
+    assert_eq!(
+        read_local_checkpoint_bounded(&excessive, 16)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::InvalidInput
+    );
+    assert!(fs::read_dir(root).unwrap().next().is_none());
+}
+#[test]
+fn local_checkpoint_selected_reader_and_publication_owner_keep_original_parent() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let path = root.join("original/checkpoint");
+    write_local_checkpoint_atomic(&path, b"original").unwrap();
+    let parent = path.parent().unwrap();
+    let reader = iroha_fs::ReaderDirectory::open(parent).unwrap();
+    let owner = iroha_fs::OwnerDirectory::open(parent).unwrap();
+    let name = path.file_name().unwrap();
+    assert_eq!(
+        read_local_checkpoint_from(&reader, name, 8)
+            .unwrap()
+            .unwrap(),
+        b"original"
+    );
+    reject_unsafe_checkpoint_target(&owner, name).unwrap();
+    reject_unsafe_checkpoint_target(&owner, std::ffi::OsStr::new("missing")).unwrap();
+    let displaced = root.join("displaced");
+    #[cfg(unix)]
+    {
+        fs::rename(parent, &displaced).unwrap();
+        assert_eq!(
+            read_local_checkpoint_from(&reader, name, 8)
+                .unwrap_err()
+                .kind(),
+            ErrorKind::NotFound
+        );
+        assert!(reject_unsafe_checkpoint_target(&owner, name).is_err());
+        write_local_checkpoint_atomic(&path, b"intruder").unwrap();
+        assert!(read_local_checkpoint_from(&reader, name, 8).is_err());
+        assert!(reject_unsafe_checkpoint_target(&owner, name).is_err());
+        assert_eq!(fs::read(displaced.join(name)).unwrap(), b"original");
+        assert_eq!(fs::read(&path).unwrap(), b"intruder");
+    }
+    #[cfg(windows)]
+    {
+        assert!(fs::rename(parent, &displaced).is_err());
+        assert_eq!(
+            read_local_checkpoint_from(&reader, name, 8)
+                .unwrap()
+                .unwrap(),
+            b"original"
+        );
+        reject_unsafe_checkpoint_target(&owner, name).unwrap();
+        assert!(!displaced.exists());
+    }
+}
+#[test]
 fn local_checkpoint_distinguishes_precommit_and_visible_uncertain_failures() {
     fn fail_parent_sync(_: &Path) -> io::Result<()> {
         Err(io::Error::other("injected parent sync failure"))
@@ -2646,14 +2716,33 @@ fn local_checkpoint_rejects_symlink_targets_and_parents() {
         .expect("restore parent permissions");
 }
 #[test]
-fn local_checkpoint_rejects_parent_traversal_and_randomizes_temporary_names() {
+fn local_checkpoint_rejects_parent_traversal_and_uses_unique_temporary_names() {
     let temp = tempfile::tempdir().expect("temp dir");
     let traversal = temp.path().join("runtime").join("..").join("escaped.to");
     assert!(write_local_checkpoint_atomic(&traversal, b"state").is_err());
     assert!(!temp.path().join("escaped.to").exists());
-    let path = temp.path().join("checkpoint.to");
-    let first = local_checkpoint_tmp_path(&path).expect("first randomized temp path");
-    let second = local_checkpoint_tmp_path(&path).expect("second randomized temp path");
+    let directory = iroha_fs::OwnerDirectory::open(temp.path()).expect("checkpoint directory");
+    let mut names = Vec::new();
+    for _ in 0..2 {
+        directory
+            .write_atomic_observed(
+                "checkpoint.to",
+                b"state",
+                iroha_fs::PublishMode::Replace,
+                128,
+                |step, path| {
+                    if step == iroha_fs::AtomicWriteStep::CreateTemp {
+                        names.push(path.to_owned());
+                        return Err(io::Error::other("observe unique name before creation"));
+                    }
+                    Ok(())
+                },
+            )
+            .expect_err("stop before temporary creation");
+    }
+    let [first, second] = names.as_slice() else {
+        panic!("two staging attempts")
+    };
     assert_ne!(first, second);
     assert!(
         first
@@ -2670,7 +2759,6 @@ fn local_checkpoint_rejects_parent_traversal_and_randomizes_temporary_names() {
             .starts_with('.')
     );
 }
-#[cfg(unix)]
 #[test]
 fn local_checkpoint_identity_rejects_same_length_file_swap() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -2678,10 +2766,82 @@ fn local_checkpoint_identity_rejects_same_length_file_swap() {
     let second = temp.path().join("second.to");
     fs::write(&first, b"same-size-a").expect("write first");
     fs::write(&second, b"same-size-b").expect("write second");
-    let first_meta = fs::metadata(&first).expect("first metadata");
-    let second_meta = fs::metadata(&second).expect("second metadata");
+    let first_meta = iroha_fs::FileMetadata::symlink_metadata(&first).expect("first metadata");
+    let second_meta = iroha_fs::FileMetadata::symlink_metadata(&second).expect("second metadata");
     assert!(same_local_file_identity(&first_meta, &first_meta));
     assert!(!same_local_file_identity(&first_meta, &second_meta));
+}
+#[test]
+fn local_checkpoint_retained_private_custody_rejects_hardlinks_and_retires_durably() {
+    let temp = tempfile::tempdir().expect("checkpoint root");
+    let root = temp.path().canonicalize().expect("canonical root");
+    let path = root.join("checkpoint");
+    let alias = root.join("alias");
+    write_local_private_checkpoint_atomic(&path, b"private-state").expect("private publication");
+    let metadata = iroha_fs::FileMetadata::symlink_metadata(&path).expect("metadata");
+    validate_local_checkpoint_file_metadata(&path, &metadata).expect("original private custody");
+    assert_eq!(
+        read_trust_policy_file(&path, 13, "fixture").unwrap(),
+        b"private-state"
+    );
+    assert!(read_trust_policy_file(&path, 12, "fixture").is_err());
+    fs::hard_link(&path, &alias).expect("introduce alias");
+    assert!(read_local_checkpoint_bounded(&path, 128).is_err());
+    assert!(read_trust_policy_file(&path, 128, "fixture").is_err());
+    assert!(write_local_checkpoint_atomic(&path, b"replacement").is_err());
+    assert!(remove_local_checkpoint_file_durably(&path).is_err());
+    assert_eq!(fs::read(&alias).unwrap(), b"private-state");
+    fs::remove_file(&alias).expect("retire alias");
+    remove_local_checkpoint_file_durably(&path).expect("durable private retirement");
+    assert_eq!(read_local_checkpoint_bounded(&path, 128).unwrap(), None);
+    assert_eq!(
+        remove_local_checkpoint_file_durably(&path)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::NotFound
+    );
+}
+#[cfg(windows)]
+#[test]
+fn local_checkpoint_windows_refuses_inherited_and_foreign_private_access_without_repair() {
+    let temp = tempfile::tempdir().expect("checkpoint root");
+    let root = temp.path().canonicalize().expect("canonical root");
+    let inherited = root.join("inherited");
+    fs::write(&inherited, b"inherited-state").expect("ordinary inherited file");
+    assert!(read_local_checkpoint_bounded(&inherited, 128).is_err());
+    assert!(write_local_checkpoint_atomic(&inherited, b"replacement").is_err());
+    assert!(remove_local_checkpoint_file_durably(&inherited).is_err());
+    assert_eq!(fs::read(&inherited).unwrap(), b"inherited-state");
+    let path = root.join("private");
+    write_local_checkpoint_atomic(&path, b"original-state").expect("canonical private file");
+    let grant = std::process::Command::new("icacls.exe")
+        .arg(&path)
+        .args(["/grant", "*S-1-1-0:(R)"])
+        .output()
+        .expect("grant foreign read access");
+    assert!(
+        grant.status.success(),
+        "{}",
+        String::from_utf8_lossy(&grant.stderr)
+    );
+    let before = std::process::Command::new("icacls.exe")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(before.status.success());
+    assert!(read_local_checkpoint_bounded(&path, 128).is_err());
+    assert!(write_local_checkpoint_atomic(&path, b"replacement").is_err());
+    assert!(remove_local_checkpoint_file_durably(&path).is_err());
+    let after = std::process::Command::new("icacls.exe")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(after.status.success());
+    assert_eq!(
+        after.stdout, before.stdout,
+        "refusal must not repair original ACL"
+    );
+    assert_eq!(fs::read(&path).unwrap(), b"original-state");
 }
 #[test]
 fn runtime_initialization_requires_every_checkpoint_after_first_start() {

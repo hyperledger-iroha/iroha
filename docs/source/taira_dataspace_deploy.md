@@ -19,7 +19,8 @@ Set `dataspace.max_fee` to a deliberate positive cap before planning. Its asset
 comes from authenticated namespace policy. The one cap covers the exact rents
 and all three transactions, including recovery; it is not a cap per transaction.
 The owner key comes only from `dataspace.owner_key`. Both key files must meet the
-native custody checks (direct owner-only files, mode 0600). The operator key is a
+native custody checks (direct owner-only files, Unix mode 0600 or a protected
+current-user-only Windows DACL). The operator key is a
 separate credential allowlisted by the selected validators for authenticated
 reads; `--operator-private-key-fd` can supply it through an inherited descriptor.
 No client configuration, manual manifest, lane ID or operation ID is required.
@@ -82,6 +83,17 @@ intent is immutable. `apply` never silently rebases or replaces a transaction.
 If initial planning fails before saving a plan, correct only `max_fee` and rerun
 `plan` to update that cap. This preserves the verified read-only proof cache;
 it cannot change a saved plan, signed operation or other definition fields.
+
+Windows refresh persists a bounded private intent before moving either original
+file, then persists a commit before cleanup. Until commitment, recovery restores
+the original file identity and bytes; after commitment, it preserves the new
+canonical original and finishes cleanup. An interrupted or uncertain refresh
+blocks journal reads and dispatch: `status` and `apply` refuse without recovering
+it. Explicit `plan` on the original host, with the same operation, definition and
+trust, performs recovery before reading the saved plan. Conflicting originals,
+changed custody or signed evidence are preserved and refused. Unpublished control
+stages never authorize recovery. Unix retains its original atomic-exchange path.
+
 If the still-unsigned alias phase has an expired quote deadline, it can extend
 that deadline while keeping the same names, owner, terms, policy and exact rent.
 An already signed alias transaction is retained unchanged.
@@ -107,7 +119,9 @@ alone cannot establish completion. Pending verification keeps
 
 The CLI definition adapter is `crates/iroha_cli/src/dataspace_definition.rs`;
 planning and recovery are in `taira_dataspace_deploy_definition.rs` and
-`taira_dataspace_deploy.rs`. The native bridge is
+`taira_dataspace_deploy.rs`. Windows journal custody and unsigned-refresh recovery
+are in `taira_dataspace_deploy_windows.rs` and
+`taira_dataspace_deploy_windows_refresh.rs`. The native bridge is
 `crates/iroha_core/src/state/runtime_catalog.rs`. See the
 [review and acceptance goals](../../specs/configuration_simplification.md),
 [lane contract](../../specs/sumeragi_lanes.md) and

@@ -176,6 +176,46 @@ fn provider_advert_reader_accepts_boundary_and_rejects_one_over() {
     assert!(read_provider_advert_bytes(&path).is_err());
 }
 #[test]
+fn provider_advert_reader_rejects_hardlinked_input() {
+    let (_directory, root) = canonical_tempdir();
+    let path = root.join("provider-advert.to");
+    let alias = root.join("provider-advert-alias.to");
+    fs::write(&path, b"advertisement").expect("write provider advert");
+    fs::hard_link(&path, &alias).expect("create actual hard link");
+    assert!(read_provider_advert_bytes(&path).is_err());
+    assert!(read_provider_advert_bytes(&alias).is_err());
+    fs::remove_file(&alias).expect("remove the second link");
+    assert_eq!(
+        read_provider_advert_bytes(&path).expect("single-link original is readable"),
+        b"advertisement"
+    );
+}
+#[test]
+fn provider_advert_reader_rejects_missing_input_and_directory() {
+    let (_directory, root) = canonical_tempdir();
+    let path = root.join("provider-advert.to");
+    assert!(read_provider_advert_bytes(&path).is_err());
+    fs::create_dir(&path).expect("create directory at the advertised file name");
+    assert!(read_provider_advert_bytes(&path).is_err());
+}
+#[cfg(unix)]
+#[test]
+fn provider_advert_reader_rejects_foreign_write_access() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (_directory, root) = canonical_tempdir();
+    let path = root.join("provider-advert.to");
+    fs::write(&path, b"advertisement").expect("write provider advert");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o666))
+        .expect("grant actual foreign write access");
+    assert!(read_provider_advert_bytes(&path).is_err());
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+        .expect("restore current-owner-only writes");
+    assert_eq!(
+        read_provider_advert_bytes(&path).expect("safe public original is readable"),
+        b"advertisement"
+    );
+}
+#[test]
 fn verify_provider_advert_signature_rejects_all_zero_signature_material() {
     let descriptor = chunker_registry::default_descriptor();
     let profile_handle = format!(

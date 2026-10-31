@@ -8,8 +8,9 @@ use crate::{
     sumeragi::test_chain::{CertifiedTestChain, PreparedTestChainConfig, TestChainConfig},
 };
 use iroha_data_model::{
-    NetworkId, governance::anonymous_ballot::authenticate_parliament_candidate_genesis_v1,
-    transaction::TransactionEntrypoint,
+    NetworkId,
+    governance::anonymous_ballot::authenticate_parliament_candidate_genesis_v1,
+    transaction::{TransactionBuilder, TransactionEntrypoint},
 };
 use iroha_primitives::json::Json;
 use iroha_test_samples::BOB_ID;
@@ -94,82 +95,108 @@ async fn candidate_testing_cannot_be_installed_or_replaced_after_genesis() {
 
 #[tokio::test]
 async fn candidate_testing_duplicate_and_unsupported_signed_genesis_leave_no_committed_slot() {
-    // The authoring snapshot merges parameters by id. Build and sign a separate
-    // original transaction so this control really contains two policy occurrences.
-    let selected = config(true);
-    let signer = selected.genesis_key.clone();
-    let chain_id = selected.chain_id.clone();
-    let prepared = CertifiedTestChain::prepare(selected).unwrap();
-    let original = prepared.genesis.block();
-    let first = original.external_transactions().next().unwrap();
-    let mut builder = iroha_data_model::transaction::TransactionBuilder::new_genesis(
-        first.authority().clone(),
-        first.fee_payment_intent().clone(),
-    );
-    builder.set_creation_time(std::time::Duration::from_millis(1_001));
-    let second = builder
-        .with_instructions([SetParameter::new(parameter())])
-        .sign(signer.private_key());
-    let mut transactions = original
-        .external_transactions()
-        .cloned()
-        .collect::<Vec<_>>();
-    transactions.push(second);
-    let duplicate = SignedBlock::try_genesis_with_da_proof_policies(
-        transactions,
-        signer.private_key(),
-        original.header().confidential_features(),
-        original.da_commitments().cloned(),
-        original.da_proof_policies().cloned(),
-    )
-    .unwrap();
-    let network_id = NetworkId::from_genesis_hash(duplicate.hash());
-    assert!(matches!(
-        authenticate_parliament_candidate_genesis_v1(&duplicate, &network_id),
-        Err(ParliamentCandidateTestingErrorV1::DuplicatePolicy)
-    ));
-    let state = super::super::State::new_with_chain_and_network_id_for_testing(
-        World::new(),
-        crate::kura::Kura::blank_kura_for_testing(),
-        crate::query::store::LiveQueryStore::start_test(),
-        chain_id,
-        network_id,
-    );
-    let result = state
-        .block_with_owned_start_stages_with_carrier(
-            duplicate.header(),
-            Some(&duplicate),
-            |block| {
-                assert_eq!(
-                    block
-                        .network_policy_routes
-                        .as_ref()
-                        .unwrap()
-                        .validate_carrier(&duplicate),
-                    Err("Network genesis has no authenticated original candidate policy")
-                );
-                Err::<(), _>("duplicate source refused before execution")
-            },
-            |_, ()| Ok(()),
+    // The manifest's parameter snapshot has unique keys. Construct malformed signed
+    // sources below that authoring API, both within one input and across two inputs.
+    for separate_transaction in [false, true] {
+        let selected = config(true);
+        let key = selected.genesis_key.clone();
+        let mut prepared = CertifiedTestChain::prepare(selected).unwrap();
+        let original = prepared.genesis.block();
+        let mut transactions: Vec<_> = original.external_transactions().cloned().collect();
+        let transaction = &transactions[0];
+        let builder =
+            TransactionBuilder::from_genesis_payload(transaction.payload().clone()).unwrap();
+        if separate_transaction {
+            transactions.push(
+                builder
+                    .with_instructions([SetParameter::new(parameter())])
+                    .sign(key.private_key()),
+            );
+        } else {
+            let Executable::Instructions(instructions) = transaction.instructions() else {
+                unreachable!()
+            };
+            let mut instructions = instructions.to_vec();
+            instructions.push(SetParameter::new(parameter()).into());
+            transactions[0] = builder
+                .with_instructions(instructions)
+                .sign(key.private_key());
+        }
+        let duplicate = SignedBlock::try_genesis_with_da_proof_policies(
+            transactions,
+            key.private_key(),
+            original.header().confidential_features(),
+            original.da_commitments().cloned(),
+            original.da_proof_policies().cloned(),
         )
-        .map(|_| ());
-    assert!(matches!(
-        result,
-        Err(StateBlockStartError::Stage(
-            "duplicate source refused before execution"
-        ))
-    ));
-    assert_eq!(state.view().height(), 0);
-    assert!(
-        state
-            .view()
-            .world()
-            .parameters()
-            .custom()
-            .get(ParliamentCandidateTestingPolicyV1::parameter_id())
-            .is_none()
-    );
-    assert_eq!(state.kura().blocks_count(), 0);
+        .unwrap();
+        let network = NetworkId::from_genesis_hash(duplicate.hash());
+        assert!(matches!(
+            authenticate_parliament_candidate_genesis_v1(&duplicate, &network),
+            Err(ParliamentCandidateTestingErrorV1::DuplicatePolicy)
+        ));
+        // Configure the pristine owner for this independently signed source before native
+        // validation; no original execution result or installation marker is supplied.
+        std::sync::Arc::get_mut(&mut prepared.state)
+            .unwrap()
+            .network_id = network;
+        let result = prepared
+            .state
+            .block_with_owned_start_stages_with_carrier(
+                duplicate.header(),
+                Some(&duplicate),
+                |block| {
+                    assert_eq!(
+                        block
+                            .network_policy_routes
+                            .as_ref()
+                            .unwrap()
+                            .validate_carrier(&duplicate),
+                        Err("Network genesis has no authenticated original candidate policy")
+                    );
+                    Err::<(), _>("duplicate source refused before execution")
+                },
+                |_, ()| Ok(()),
+            )
+            .map(|_| ());
+        assert!(matches!(
+            result,
+            Err(StateBlockStartError::Stage(
+                "duplicate source refused before execution"
+            ))
+        ));
+        let topology = crate::sumeragi::network_topology::Topology::new(
+            prepared
+                .validator_keys
+                .iter()
+                .map(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone())),
+        );
+        let validation = crate::block::ValidBlock::validate_signed_genesis(
+            duplicate,
+            &topology,
+            &AccountId::new(key.public_key().clone()),
+            &iroha_primitives::time::TimeSource::new_system(),
+            &prepared.state,
+            iroha_data_model::parameter::system::ConsensusMode::Permissioned,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        )
+        .unpack(|_| {});
+        assert!(
+            validation.is_err(),
+            "duplicate signed policy must be rejected"
+        );
+        drop(validation);
+        let view = prepared.state.view();
+        assert_eq!(view.height(), 0);
+        assert!(
+            view.world()
+                .parameters()
+                .custom()
+                .get(ParliamentCandidateTestingPolicyV1::parameter_id())
+                .is_none()
+        );
+        assert_eq!(prepared.state.kura().blocks_count(), 0);
+    }
 
     let mut unsupported = config(false);
     unsupported

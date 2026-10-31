@@ -115,10 +115,22 @@ unimplemented. The combined test graph, complete resource funding and original
 Validate-to-Apply custody remain open. Component repairs do not establish one
 retained execution through finality and restart.
 
-The ordinary SoraFS Node library tests pass after correcting fixture permissions,
-hedged-encryption assertions and cumulative quarantine decoding. The Core
-selection has scoped coverage and Torii's unit-test target compiles. Production
-qualification remains open under the
+The earlier Windows SoraFS Node library completes with 1,553 passes, two genuine
+error-1314 symlink failures and three intentional ignores. Source, parent and
+image checks remain intact; the full gate is rejected. Both real Kubo
+publication/restart/tamper controls pass on that current image with the same
+source and parent custody. The recorded Linux Node result retains its scope.
+The separately copied Linux filesystem/release candidate passes 381 controls with
+three intentional child entries ignored, all 74 required controls, 23 documentation
+tests and strict lint. Genuine recursive Cargo/Rustc controls pass using anonymous
+kernel-sealed executable originals and retained filesystem witnesses. These results
+do not qualify the combined Windows repairs or the release corridor.
+
+The separately recorded fresh CAR library passes all 383 controls, including all
+47 required sink, HTTP, planner and Taikai identity controls and all 20 local-NTFS
+directory-planner controls. These results do not qualify changed source.
+Moderation model/provenance, software signing-key and shipping pack/deploy callers
+still require native execution. Production qualification remains open under the
 [reliability goals](specs/sorafs/first_release_reliability_goals.md) and
 [closure ledger](specs/sorafs/v1_closure_ledger.md).
 
@@ -333,6 +345,12 @@ incomplete joint-security construction. Complete operation-v1 commit, persistenc
 restart/replay and four-validator delivery remain local work. Selected State
 publication, RAM-LFE encrypted normalization/refresh and ordinary/AXT full
 effects are also unfinished. No complete product is delivered.
+
+Canonical ordered SHA residue emission feeds MAIN directly. The copied candidate
+passes production/default-test compilation, 103 ordinary tests and the
+independent oracle covering all 49 providers. The final test-only collecting
+adapter annotations pass a separate production check. These checks do not
+qualify a new maximum proof, proving-time result or release.
 
 Maximum FASTPQ ordinary and AXT production and fresh verifier replays pass on
 their recorded candidate. Current hardware controls pass 57 tests, including all

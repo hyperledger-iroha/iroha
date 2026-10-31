@@ -4,6 +4,39 @@ use super::*;
 use rand::SeedableRng;
 use rand_chacha::ChaCha12Rng;
 
+/// Fault only the output boundary while executing genuine Log19 admission/AIR.
+struct PartialEmissionFault<'a> {
+    fold: main_residue_fold::MainResidueFoldV1<'a>,
+    triggered: &'a std::cell::Cell<bool>,
+    unwind: bool,
+}
+
+impl crate::privacy_engines::zk_x509::sha_residue_output::ShaResidueSinkV1<F>
+    for PartialEmissionFault<'_>
+{
+    fn len(&self) -> usize {
+        let actual = self.fold.len();
+        if !self.unwind && actual >= 155 {
+            self.triggered.set(true);
+            actual - 1
+        } else {
+            actual
+        }
+    }
+
+    fn reserve(&mut self, additional: usize) {
+        self.fold.reserve(additional);
+    }
+
+    fn push(&mut self, value: F) {
+        self.fold.push(value);
+        if self.unwind && self.fold.len() == 17 {
+            self.triggered.set(true);
+            panic!("synthetic fault after actual ordered SHA emission");
+        }
+    }
+}
+
 #[test]
 fn every_profile_stripe_matches_direct_boundary_and_random_denominators() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
@@ -289,6 +322,47 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
                     "{:?}/{} stripe {ordinal} row {row}",
                     segment.adapter, segment.instance
                 );
+                if segment.adapter == SegmentAdapterIdV1::Sha256CallBus && ordinal == 0 && row == 0
+                {
+                    let MainProverConstraintProviderV1::Log19(source) = provider else {
+                        panic!("SHA registration must use actual Log19 source");
+                    };
+                    for unwind in [false, true] {
+                        let triggered = std::cell::Cell::new(false);
+                        let (result, erased) =
+                            crate::privacy_engines::zk_x509::private_table::inspection::observe_v1(
+                                || {
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        let mut sink = PartialEmissionFault {
+                                            fold: main_residue_fold::MainResidueFoldV1::new_v1(
+                                                &alphas,
+                                            ),
+                                            triggered: &triggered,
+                                            unwind,
+                                        };
+                                        source.emit_constraint_residues_v1(
+                                            registration,
+                                            opening,
+                                            &rows[4],
+                                            &rows[5],
+                                            &mut sink,
+                                        )
+                                    }))
+                                },
+                            );
+                        assert!(triggered.get(), "the real emission fault must run");
+                        if unwind {
+                            assert!(result.is_err());
+                        } else {
+                            let expected = map_main_sha_source_error_v1(
+                                crate::privacy_engines::zk_x509::sha_word_stark::ZkX509ShaWordStarkErrorV1::Topology.into(),
+                            );
+                            assert!(result.unwrap().unwrap_err() == expected);
+                        }
+                        assert!(erased.iter().any(|r| r.cells == 1 && r.nonzero_before == 1));
+                        assert!(erased.iter().all(|r| r.nonzero_after == 0));
+                    }
+                }
             }
             assert!(
                 provider
@@ -303,6 +377,26 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
                     )
                     .is_err()
             );
+            let mut extra_alphas = alphas.clone();
+            extra_alphas.push(E::ONE);
+            for malformed in [&[][..], extra_alphas.as_slice()] {
+                let (result, erased) =
+                    crate::privacy_engines::zk_x509::private_table::inspection::observe_v1(|| {
+                        provider.composition_value_on_stripe_v1(
+                            registration,
+                            &table,
+                            0,
+                            opening,
+                            &rows[4],
+                            &rows[5],
+                            malformed,
+                        )
+                    });
+                assert!(matches!(result, Err(ZkX509StarkErrorV1::ProfileMismatch)));
+                // Every emission requires a clearing fold owner first. An empty
+                // erasure inventory proves this refused before that construction.
+                assert!(erased.is_empty());
+            }
             assert!(
                 provider
                     .composition_value_on_stripe_v1(

@@ -3,6 +3,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use hex::FromHex;
 use iroha_crypto::{BlsNormal, KeyGenOption, KeyPair};
 use norito::json::{Map, Value, to_string_pretty};
+#[cfg(not(windows))]
 use sorafs_car::set_no_follow_flag;
 use sorafs_car::{CarBuildPlan, fetch_plan::try_chunk_fetch_plan_to_json};
 use sorafs_chunker::ChunkProfile;
@@ -21,8 +22,10 @@ use sorafs_manifest::{
     compute_envelope_authorization_digest, compute_envelope_digest, compute_proposal_digest,
     verify_advert_against_record, verify_envelope, verify_revocation_signatures,
 };
+#[cfg(any(not(windows), test))]
+use std::fs;
 use std::{
-    env, fs,
+    env,
     io::{self, Write},
     path::{Path, PathBuf},
 };
@@ -807,6 +810,19 @@ Do not edit manually; rerun the generator if data changes.\n",
     file.write_all(content.as_bytes())?;
     Ok(())
 }
+#[cfg(windows)]
+#[path = "common/output_fs.rs"]
+mod native_output_fs;
+
+#[cfg(windows)]
+fn open_output_file(
+    path: &Path,
+    label: &str,
+) -> Result<iroha_fs::RetainedOutputFile, Box<dyn std::error::Error>> {
+    native_output_fs::open_output_file(path, label).map_err(Into::into)
+}
+
+#[cfg(not(windows))]
 fn open_output_file(path: &Path, label: &str) -> Result<fs::File, Box<dyn std::error::Error>> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -832,6 +848,7 @@ fn open_output_file(path: &Path, label: &str) -> Result<fs::File, Box<dyn std::e
     }
     Ok(file)
 }
+#[cfg(not(windows))]
 fn ensure_parent_dir(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -846,6 +863,7 @@ fn ensure_parent_dir(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn validate_output_path(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -1097,5 +1115,83 @@ mod tests {
             temp_path.join("proposal_v1.to").is_symlink(),
             "rejected symlink must not be removed"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_fixture_outputs_preserve_binary_json_and_readme_bytes() {
+        let (_temporary, root) = canonical_tempdir();
+        let directory = root.join("nested/fixtures");
+        write_binary(&directory, "payload.to", b"previous longer payload").unwrap();
+        let original = iroha_fs::RetainedFile::open_regular(directory.join("payload.to"))
+            .unwrap()
+            .identity()
+            .unwrap();
+        write_binary(&directory, "payload.to", b"short\0").unwrap();
+        assert_eq!(fs::read(directory.join("payload.to")).unwrap(), b"short\0");
+        assert_eq!(
+            iroha_fs::RetainedFile::open_regular(directory.join("payload.to"))
+                .unwrap()
+                .identity()
+                .unwrap(),
+            original
+        );
+        let value = Value::Object(Map::new());
+        let expected = format!("{}\n", to_string_pretty(&value).unwrap());
+        write_json(&directory, "metadata.json", value).unwrap();
+        assert_eq!(
+            iroha_fs::read_private(directory.join("metadata.json"), 1024)
+                .unwrap()
+                .as_slice(),
+            expected.as_bytes()
+        );
+        write_readme(&directory).unwrap();
+        let readme = fs::read(directory.join("README.md")).unwrap();
+        assert!(readme.starts_with(b"# Provider Admission Fixtures\n"));
+        write_readme(&directory).unwrap();
+        assert_eq!(
+            iroha_fs::read_private(directory.join("README.md"), 16 * 1024)
+                .unwrap()
+                .as_slice(),
+            readme
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_output_adapter_refuses_unsafe_originals_without_damage() {
+        let (temporary, root) = canonical_tempdir();
+        let output = root.join("original");
+        let mut created = open_output_file(&output, "native output test").unwrap();
+        created.write_all(b"keep original").unwrap();
+        created.flush().unwrap();
+        drop(created);
+        let alias = root.join("alias");
+        fs::hard_link(&output, &alias).unwrap();
+        assert!(open_output_file(&output, "native output test").is_err());
+        assert_eq!(fs::read(&output).unwrap(), b"keep original");
+        assert_eq!(fs::read(&alias).unwrap(), b"keep original");
+        fs::remove_file(alias).unwrap();
+        let writer = fs::OpenOptions::new().write(true).open(&output).unwrap();
+        assert!(open_output_file(&output, "native output test").is_err());
+        assert_eq!(fs::read(&output).unwrap(), b"keep original");
+        drop(writer);
+        let junction = root.join("junction");
+        let target = root.join("target");
+        fs::create_dir(&target).unwrap();
+        let result = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "native junction fixture creation failed"
+        );
+        assert!(open_output_file(&junction.join("new-output"), "native output test").is_err());
+        assert!(!target.join("new-output").exists());
+        assert_eq!(fs::read(&output).unwrap(), b"keep original");
+        drop(temporary);
     }
 }

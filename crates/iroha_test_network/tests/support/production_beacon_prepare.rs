@@ -14,25 +14,23 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanDelegateAccountAliasResolution,
 };
+use iroha_fs::ProcessStdio as Stdio;
 use iroha_genesis::{RawGenesisTransaction, validate_prepared_genesis_bundle};
 use iroha_model_base::peer::PeerId;
+use iroha_test_network::{ResolvedCommand as Command, ResolvedProgram};
 use norito::json;
 use std::{
     fs,
     io::Write as _,
     num::NonZeroU64,
     os::{
-        fd::AsRawFd as _,
+        fd::AsFd as _,
         unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     },
     path::{Path, PathBuf},
-    process::Stdio,
     str::FromStr as _,
 };
-use tokio::{
-    process::Command,
-    time::{Instant, timeout_at},
-};
+use tokio::time::{Instant, timeout_at};
 
 pub(super) struct Prepared {
     pub directory: PathBuf,
@@ -174,7 +172,7 @@ fn routed_account_and_snapshot_config(directory: &Path, manifest: &Path) -> Resu
     Ok(client_path)
 }
 
-async fn run(command: &mut Command, evidence: &Path, deadline: Instant, stage: &str) -> Result<()> {
+async fn run(mut command: Command, evidence: &Path, deadline: Instant, stage: &str) -> Result<()> {
     ensure!(
         Instant::now() < deadline,
         "beacon fixture deadline before {stage}"
@@ -192,13 +190,13 @@ async fn run(command: &mut Command, evidence: &Path, deadline: Instant, stage: &
     };
     let stdout = log("stdout")?;
     let stderr = log("stderr")?;
-    let mut child = command
+    command
         .env_clear()
         .kill_on_drop(true)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout.try_clone()?))
-        .stderr(Stdio::from(stderr.try_clone()?))
-        .spawn()?;
+        .stderr(Stdio::from(stderr.try_clone()?));
+    let mut child = command.spawn_async()?;
     let status = timeout_at(deadline, child.wait()).await;
     stdout.sync_all()?;
     stderr.sync_all()?;
@@ -276,7 +274,7 @@ fn short_epoch_manifest(path: &Path) -> Result<()> {
 async fn materialize_generated_validator_configs(
     root: &Path,
     directory: &Path,
-    cli: &Path,
+    cli: &ResolvedProgram,
     api_base: u16,
     deadline: Instant,
 ) -> Result<()> {
@@ -294,7 +292,7 @@ async fn materialize_generated_validator_configs(
             .custom_flags(nix::libc::O_NOFOLLOW)
             .open(directory.join(format!("peer{peer}.toml")))?;
         let output = output_dir.join(format!("{role}.toml"));
-        let mut command = Command::new(cli);
+        let mut command = cli.command()?;
         command
             .args([
                 "taira",
@@ -317,9 +315,9 @@ async fn materialize_generated_validator_configs(
             .arg(format!("127.0.0.1:{}", api_base + peer))
             .arg("--output")
             .arg(&output);
-        super::inherit(&mut command, &[(source.as_raw_fd(), 198)])?;
+        super::inherit(&mut command, &[(source.as_fd(), 198)])?;
         run(
-            &mut command,
+            command,
             &root.join(format!("prepare-materialize-{role}")),
             deadline,
             "generated validator reset materialization",
@@ -357,8 +355,8 @@ async fn materialize_generated_validator_configs(
 /// validate the exact short-epoch genesis before constructing its public request.
 pub(super) async fn prepare(
     root: &Path,
-    kagami: &Path,
-    cli: &Path,
+    kagami: &ResolvedProgram,
+    cli: &ResolvedProgram,
     api_base: u16,
     p2p_base: u16,
     deadline: Instant,
@@ -379,7 +377,7 @@ pub(super) async fn prepare(
         !directory.try_exists()?,
         "native localnet output already exists"
     );
-    let mut generate = Command::new(kagami);
+    let mut generate = kagami.command()?;
     generate
         .args([
             "sora-network",
@@ -404,7 +402,7 @@ pub(super) async fn prepare(
         ])
         .arg(&directory);
     run(
-        &mut generate,
+        generate,
         &root.join("prepare-localnet"),
         deadline,
         "fresh native localnet",
@@ -425,7 +423,7 @@ pub(super) async fn prepare(
         directory.join("genesis.public_key"),
         genesis_directory.join("genesis.public_key"),
     )?;
-    let mut sign = Command::new(kagami);
+    let mut sign = kagami.command()?;
     sign.args(["genesis", "sign"])
         .arg(&manifest_path)
         .arg("--out-file")
@@ -441,7 +439,7 @@ pub(super) async fn prepare(
         .arg("--config")
         .arg(directory.join("peer0.toml"));
     run(
-        &mut sign,
+        sign,
         &root.join("prepare-genesis-sign"),
         deadline,
         "short-epoch genesis signing",

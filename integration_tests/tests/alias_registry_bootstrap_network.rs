@@ -6,6 +6,7 @@
 //! uses the universal registry from genesis, before any private catalog entry.
 //! No unchecked blocks, fabricated certificates, injected WSV or storage reset
 //! may substitute for the original persisted history and Strict daemon replay.
+use iroha_fs::{ProcessCommand as Command, ProcessStdio as Stdio};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
@@ -16,7 +17,6 @@ use std::{
     fs,
     num::{NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -88,9 +88,9 @@ use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use iroha_sumeragi::types::{Hash32, HeightConfig};
 use iroha_test_network::{
-    NetworkBuilder, NetworkPeer, ReleasePrebuiltBinary,
-    genesis_participant_committee_key_instructions, init_instruction_registry,
-    resolve_release_prebuilt_binary, unexecuted_genesis_factory_with_post_topology,
+    BinaryKind, NetworkBuilder, NetworkPeer, genesis_participant_committee_key_instructions,
+    init_instruction_registry, resolve_release_prebuilt_binary,
+    unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR};
 use tokio::time::{Instant, sleep, timeout};
@@ -737,9 +737,11 @@ fn required_canonical_path(name: &str, directory: bool) -> Result<PathBuf> {
 
 fn bounded_tool_output(mut command: Command, label: &str) -> Result<Vec<u8>> {
     command.stdin(Stdio::null());
-    let output = command
-        .output()
-        .wrap_err_with(|| format!("failed to execute {label}"))?;
+    let output = integration_tests::process::output_with_timeout(
+        command,
+        integration_tests::process::process_timeout(),
+    )
+    .wrap_err_with(|| format!("failed to execute {label}"))?;
     ensure!(output.status.success(), "{label} failed");
     ensure!(
         output.stdout.len() <= MAX_RELEASE_TOOL_OUTPUT_BYTES
@@ -867,7 +869,7 @@ fn verify_clean_release_source(repo_root: &Path) -> Result<ReleaseSourceIdentity
         "release PATH must resolve only the pinned Git and Python runtime"
     );
 
-    let mut seal = Command::new(&python);
+    let mut seal = Command::new(&python)?;
     seal.args(["-I", "-S"])
         .arg(repo_root.join("scripts/seal_workspace_source.py"))
         .arg("--verify")
@@ -880,7 +882,7 @@ fn verify_clean_release_source(repo_root: &Path) -> Result<ReleaseSourceIdentity
         "sealed workspace verifier emitted unexpected output"
     );
 
-    let mut capture = Command::new(&python);
+    let mut capture = Command::new(&python)?;
     capture
         .args(["-I", "-S"])
         .arg(repo_root.join("scripts/compute_workspace_source_manifest.py"))
@@ -928,9 +930,9 @@ fn required_prebuilt_binaries() -> Result<()> {
         "prebuilt bundle source anchor differs from the clean qualification source"
     );
     for (name, kind) in [
-        ("TEST_NETWORK_BIN_IROHAD", ReleasePrebuiltBinary::Irohad),
-        ("TEST_NETWORK_BIN_IROHA", ReleasePrebuiltBinary::Iroha),
-        ("KAGAMI_BIN", ReleasePrebuiltBinary::Kagami),
+        ("TEST_NETWORK_BIN_IROHAD", BinaryKind::Irohad),
+        ("TEST_NETWORK_BIN_IROHA", BinaryKind::Iroha),
+        ("KAGAMI_BIN", BinaryKind::Kagami),
     ] {
         let path = PathBuf::from(required_exact_env(name)?);
         ensure!(
@@ -940,7 +942,7 @@ fn required_prebuilt_binaries() -> Result<()> {
         let resolved = resolve_release_prebuilt_binary(kind)?
             .ok_or_else(|| eyre!("source-bound release prebuilt contract is not active"))?;
         ensure!(
-            path == resolved,
+            path.as_os_str() == resolved.diagnostic_path()?.as_os_str(),
             "{name} is not the exact canonical SHA-256/size/mode/profile/target/toolchain-bound release binary"
         );
     }

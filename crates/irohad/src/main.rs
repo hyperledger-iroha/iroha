@@ -12,6 +12,10 @@ pub mod authenticated_genesis;
 pub mod beacon_bootstrap;
 /// Read-only `--check-config --json` and `--check-storage` compatibility probes.
 mod compatibility_probe;
+/// The supervising parent owns the stdin pipe until graceful shutdown.
+#[path = "main/input_close.rs"]
+mod input_close;
+use input_close::spawn_input_close_shutdown;
 /// Field-level explanation of a signed genesis policy mismatch for `--check-config`.
 mod genesis_policy_diagnostics;
 /// Iroha server command-line interface and node bootstrap entrypoint.
@@ -179,7 +183,7 @@ use startup_artifact::{
     read_genesis_unlocked_with_bytes,
 };
 #[cfg(target_os = "windows")]
-use std::os::windows::{ffi::OsStrExt, fs::MetadataExt as _};
+use std::os::windows::fs::MetadataExt as _;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -6641,9 +6645,7 @@ fn filesystem_identity(path: &Path) -> Option<String> {
 }
 #[cfg(target_os = "windows")]
 fn filesystem_identity(path: &Path) -> Option<String> {
-    let volume_mount_point = windows_volume_mount_point(path)?;
-    let volume_name = windows_volume_name_for_mount_point(&volume_mount_point)?;
-    Some(normalize_windows_volume_identity(&volume_name))
+    iroha_fs::windows::observe_volume_identity(path).ok()
 }
 #[cfg(unix)]
 fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
@@ -6661,18 +6663,7 @@ fn statvfs_fragment_size(fragment_size: u64, block_size: u64) -> Option<u64> {
 }
 #[cfg(target_os = "windows")]
 fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
-    let wide_path = windows_wide_path(path);
-    let mut free_bytes_available = 0_u64;
-    let mut total_bytes = 0_u64;
-    let ok = unsafe {
-        GetDiskFreeSpaceExW(
-            wide_path.as_ptr(),
-            &mut free_bytes_available,
-            &mut total_bytes,
-            std::ptr::null_mut(),
-        )
-    };
-    (ok != 0).then_some((free_bytes_available, total_bytes))
+    iroha_fs::windows::observe_volume_space(path).ok()
 }
 #[cfg(not(any(unix, target_os = "windows")))]
 fn filesystem_space(_path: &Path) -> Option<(u64, u64)> {
@@ -6681,83 +6672,6 @@ fn filesystem_space(_path: &Path) -> Option<(u64, u64)> {
 #[cfg(not(any(unix, target_os = "windows")))]
 fn filesystem_identity(_path: &Path) -> Option<String> {
     None
-}
-#[cfg(any(target_os = "windows", test))]
-fn normalize_windows_volume_mount_point(volume_mount_point: &str) -> String {
-    let mut normalized = volume_mount_point.replace('/', "\\");
-    if !normalized.ends_with('\\') {
-        normalized.push('\\');
-    }
-    normalized
-}
-#[cfg(any(target_os = "windows", test))]
-fn normalize_windows_volume_identity(volume_name: &str) -> String {
-    let mut normalized = normalize_windows_volume_mount_point(volume_name);
-    normalized.make_ascii_lowercase();
-    format!("volume:{normalized}")
-}
-#[cfg(any(target_os = "windows", test))]
-fn windows_string_from_wide_buffer(buffer: &[u16]) -> Option<String> {
-    let end = buffer.iter().position(|&unit| unit == 0)?;
-    Some(String::from_utf16_lossy(&buffer[..end]))
-}
-#[cfg(target_os = "windows")]
-const WINDOWS_FILESYSTEM_PROBE_BUFFER_LEN: usize = 32_768;
-#[cfg(target_os = "windows")]
-#[allow(non_snake_case)]
-unsafe extern "system" {
-    fn GetDiskFreeSpaceExW(
-        lp_directory_name: *const u16,
-        lp_free_bytes_available_to_caller: *mut u64,
-        lp_total_number_of_bytes: *mut u64,
-        lp_total_number_of_free_bytes: *mut u64,
-    ) -> i32;
-    fn GetVolumeNameForVolumeMountPointW(
-        lpsz_volume_mount_point: *const u16,
-        lpsz_volume_name: *mut u16,
-        cch_buffer_length: u32,
-    ) -> i32;
-    fn GetVolumePathNameW(
-        lpsz_file_name: *const u16,
-        lpsz_volume_path_name: *mut u16,
-        cch_buffer_length: u32,
-    ) -> i32;
-}
-#[cfg(target_os = "windows")]
-fn windows_wide_path(path: &Path) -> Vec<u16> {
-    path.as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
-}
-#[cfg(target_os = "windows")]
-fn windows_wide_string(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-#[cfg(target_os = "windows")]
-fn windows_query_volume_string<F>(mut query: F) -> Option<String>
-where
-    F: FnMut(*mut u16, u32) -> i32,
-{
-    let mut buffer = vec![0_u16; WINDOWS_FILESYSTEM_PROBE_BUFFER_LEN];
-    (query(buffer.as_mut_ptr(), buffer.len() as u32) != 0)
-        .then(|| windows_string_from_wide_buffer(&buffer))
-        .flatten()
-}
-#[cfg(target_os = "windows")]
-fn windows_volume_mount_point(path: &Path) -> Option<String> {
-    let wide_path = windows_wide_path(path);
-    windows_query_volume_string(|buffer, len| unsafe {
-        GetVolumePathNameW(wide_path.as_ptr(), buffer, len)
-    })
-    .map(|mount_point| normalize_windows_volume_mount_point(&mount_point))
-}
-#[cfg(target_os = "windows")]
-fn windows_volume_name_for_mount_point(volume_mount_point: &str) -> Option<String> {
-    let wide_mount_point = windows_wide_string(volume_mount_point);
-    windows_query_volume_string(|buffer, len| unsafe {
-        GetVolumeNameForVolumeMountPointW(wide_mount_point.as_ptr(), buffer, len)
-    })
 }
 pub(crate) fn apply_ivm_acceleration_config(
     accel: &iroha_config::parameters::actual::Acceleration,
@@ -9630,36 +9544,6 @@ async fn run_node(
         };
     }
     supervisor_fut.await.change_context(MainError::IrohaRun)
-}
-/// Shut the daemon down once `input` reaches end-of-file (`lifecycle.exit_on_stdin_close`).
-///
-/// A supervising parent holds the write end of the child's stdin pipe. When the parent exits for
-/// any reason, including SIGKILL, the pipe closes and the node shuts down cleanly through the same
-/// signal a panic uses. Bytes written to the pipe are discarded; a read error also shuts down.
-fn spawn_input_close_shutdown(
-    input: impl std::io::Read + Send + 'static,
-    signal: ShutdownSignal,
-) -> std::io::Result<()> {
-    std::thread::Builder::new()
-        .name("stdin-close-shutdown".to_owned())
-        .spawn(move || {
-            drain_until_eof(input);
-            iroha_logger::info!("standard input closed, shutting down...");
-            signal.send();
-        })
-        .map(drop)
-}
-/// Read and discard `input` until end-of-file or a read error.
-fn drain_until_eof(mut input: impl std::io::Read) {
-    let mut buffer = [0_u8; 256];
-    loop {
-        match input.read(&mut buffer) {
-            Ok(0) => return,
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => return,
-        }
-    }
 }
 #[cfg(all(test, feature = "daemon", unix))]
 #[path = "main/node_file_tests.rs"]

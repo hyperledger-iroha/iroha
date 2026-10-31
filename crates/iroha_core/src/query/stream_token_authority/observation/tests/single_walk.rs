@@ -228,6 +228,18 @@ fn misplaced_check_membership_and_an_uncertified_later_tip_reject() {
 
 #[test]
 fn history_relation_requires_its_exact_view_complete_window_and_floor() {
+    // Pin the ordinary libtest stack budget even when the invoking environment raises
+    // RUST_MIN_STACK. Both source-bound receipts and nested fixed proof decoding must fit.
+    std::thread::Builder::new()
+        .name("stream-token-history-default-stack".into())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(check_history_relation_window_and_floor)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn check_history_relation_window_and_floor() {
     use crate::query::stream_token_authority::historical_execution::{
         PreparedStreamTokenHistoryV1, authenticate_stream_token_history_to_floor_v1,
     };
