@@ -11,7 +11,7 @@ fn pairing_layout() -> Layout {
 #[test]
 fn maximum_query_committee_layout_matches_original_constructor_and_inherited_refusal() {
     let pairs: Vec<_> = (0..iroha_data_model::sumeragi::epoch::MAX_VALIDATORS)
-        .map(|index| tests::key_pair(u8::try_from(index).unwrap()))
+        .map(|index| tests::key_pair(u8::try_from(index + 1).unwrap()))
         .collect();
     let members = tests::query_members(&pairs);
     let demand = query_committee_allocation_bytes(&members).unwrap();

@@ -6,7 +6,6 @@ use iroha_data_model::{
     Level, NetworkId,
     block::BlockHeader,
     isi::{InstructionBox, Log, instruction_wire_id},
-    proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     transaction::{
         Executable, FeePaymentIntent, TransactionBuilder,
         executable::IvmBytecode,
@@ -165,24 +164,6 @@ fn original_signed_source_and_every_consumed_byte_remain_borrowed() {
         .unwrap();
     custody.finish().unwrap();
     assert_eq!(norito::encode_canonical(&tx).unwrap(), before);
-}
-
-#[test]
-fn original_wrapped_transaction_carrier_has_one_consuming_scope() {
-    let proof = ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        ProofBox::new("halo2/ipa".into(), vec![9; 48]),
-        VerifyingKeyId::new("halo2/ipa", "custody"),
-    );
-    let tx = builder(Executable::Instructions(vec![instruction()].into()))
-        .with_proof_attachments([proof])
-        .unwrap()
-        .sign(key(1).private_key());
-    let mut custody = AttachmentCustody::new(&tx).unwrap();
-    custody
-        .transaction(|frame| consume_action(frame, &tx, 0))
-        .unwrap();
-    custody.finish().unwrap();
 }
 
 #[test]

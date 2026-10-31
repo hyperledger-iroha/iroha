@@ -3620,8 +3620,11 @@ struct NexusConsensusAxtV1 {
 /// settings. Current private-payment validity comes from committed policy, and local sidecar
 /// capacity cannot change this signed contract. Other historical configurations cannot be
 /// reconstructed by substituting today's defaults for their authenticated original values.
+///
+/// The borrowed Nexus authority encoder serializes this same value, so both encodings of the
+/// consensus preimage stay byte-identical.
 #[derive(Encode)]
-struct NexusConsensusAtomicPrivateSettlementV1 {
+pub struct NexusConsensusAtomicPrivateSettlementV1 {
     proof_profile_version: u16,
     max_participants: u16,
     max_expiry_blocks: u64,
@@ -3640,7 +3643,8 @@ struct NexusConsensusAtomicPrivateSettlementV1 {
 }
 impl NexusConsensusAtomicPrivateSettlementV1 {
     /// Exact signed V1 baseline, independent of mutable defaults and operational configuration.
-    fn frozen_v1() -> Self {
+    #[must_use]
+    pub fn frozen_v1() -> Self {
         Self {
             proof_profile_version: 1,
             max_participants: 255,

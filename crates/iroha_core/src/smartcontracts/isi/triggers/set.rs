@@ -180,41 +180,6 @@ impl BorrowedTriggerSource<'_> {
         self.metadata
     }
 }
-/// Validate a fixed runtime-consent literal without general JSON parsing or a decoder budget.
-/// Binary DTO restoration already owns canonical Json bytes and must not collapse a fresh
-/// decoder refusal into its String error API. The bounded writer charges visits before calling.
-fn canonical_runtime_capture(capture: &Json) -> bool {
-    let raw = capture.get().as_bytes();
-    if raw.len() != 76 || raw[0] != b'"' || raw[75] != b'"' {
-        return false;
-    }
-    core::str::from_utf8(&raw[1..75]).is_ok_and(|literal| {
-        <Hash as json::JsonObjectKeyOwned>::from_json_key_text(literal).is_ok()
-    })
-}
-
-/// Author consent explicitly for tests that construct a trigger below registration.
-/// The fixture uses the default founded World and its actual executor, never a restore fallback.
-#[cfg(test)]
-fn capture_fixture_runtime_consent<F>(action: &mut SpecializedAction<F>) {
-    let state = crate::state::State::new_for_testing(
-        crate::state::World::default(),
-        crate::kura::Kura::blank_kura_for_testing(),
-        crate::query::store::LiveQueryStore::start_test(),
-    );
-    let header = BlockHeader::new(NonZeroU64::new(1).expect("height"), None, None, 0, 0);
-    let mut block = state.block(header);
-    let tx = block.transaction();
-    let expectation =
-        crate::runtime::expectation::capture_executable(&action.executable, &tx.world)
-            .expect("default fixture runtime closure");
-    let digest = crate::runtime::expectation::digest_owned(&expectation, &tx.world)
-        .expect("fixture execution-consent digest");
-    action.metadata.insert(
-        super::runtime_expectation::metadata_key().clone(),
-        Json::new(digest),
-    );
-}
 impl norito::core::SerializePayload for BorrowedTriggerSource<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         self.full.serialize(writer)
@@ -1007,57 +972,6 @@ impl Set {
     }
 }
 
-/// Validate the immutable runtime-consent digest in both authenticated action images.
-/// A missing capture cannot be reconstructed from the runtime doing the restore: that would
-/// silently approve new semantics for an already registered trigger.
-fn validate_runtime_expectation_history<F: mv::Value>(
-    field: &'static str,
-    triggers: &mut Storage<TriggerId, LoadedAction<F>>,
-) -> Result<(), json::Error> {
-    let history = triggers.history();
-    for (previous, id, action) in history
-        .current()
-        .iter()
-        .map(|(id, action)| (false, id, action))
-        .chain(
-            history
-                .iter_before_block()
-                .map(|(id, action)| (true, id, action)),
-        )
-    {
-        let invalid = || json::Error::InvalidField {
-            field: field.into(),
-            message: format!(
-                "trigger `{id}` has missing or malformed runtime expectation metadata in {} state",
-                if previous { "predecessor" } else { "current" },
-            ),
-        };
-        let capture = action
-            .metadata
-            .get(super::runtime_expectation::metadata_key())
-            .ok_or_else(invalid)?;
-        if !canonical_runtime_capture(capture) {
-            return Err(invalid());
-        }
-        norito::core::classify_decode_attempt(|| {
-            capture
-                .try_into_any_norito::<Hash>()
-                .map_err(|error| match error {
-                    norito::Error::Json(original) => original.into_core_error(),
-                    original => original,
-                })
-        })
-        .map_err(|error| {
-            if error.local_refusal().is_some() {
-                json::Error::from_decode_resource(error.into_error())
-            } else {
-                invalid()
-            }
-        })?;
-    }
-    Ok(())
-}
-
 impl json::JsonDeserialize for Set {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let mut visitor = json::MapVisitor::new(parser)?;
@@ -1144,10 +1058,6 @@ impl json::JsonDeserialize for Set {
                 })?;
             }
         }
-        validate_runtime_expectation_history("data_triggers", &mut data_triggers)?;
-        validate_runtime_expectation_history("pipeline_triggers", &mut pipeline_triggers)?;
-        validate_runtime_expectation_history("time_triggers", &mut time_triggers)?;
-        validate_runtime_expectation_history("by_call_triggers", &mut by_call_triggers)?;
         let active_data_trigger_ids = Self::collect_active_ids(&mut data_triggers);
         let active_pipeline_trigger_ids = Self::collect_active_ids(&mut pipeline_triggers);
         let active_time_trigger_ids = Self::collect_active_ids(&mut time_triggers);
@@ -4173,25 +4083,6 @@ fn load_trigger_entries<F>(
     Ok(entries)
 }
 
-/// Require original consent for every retained action in a decoded binary trigger snapshot.
-fn validate_runtime_expectation_entries<F>(
-    field: &str,
-    entries: &[(TriggerId, LoadedAction<F>)],
-) -> Result<(), String> {
-    for (id, action) in entries {
-        if !action
-            .metadata
-            .get(super::runtime_expectation::metadata_key())
-            .is_some_and(canonical_runtime_capture)
-        {
-            return Err(format!(
-                "{field} trigger `{id}` has missing or malformed runtime expectation metadata"
-            ));
-        }
-    }
-    Ok(())
-}
-
 impl TryFrom<SetDto> for Set {
     type Error = String;
     #[allow(clippy::too_many_lines)]
@@ -4267,10 +4158,6 @@ impl TryFrom<SetDto> for Set {
             &mut duplicate_ids,
             &mut missing_contracts,
         )?;
-        validate_runtime_expectation_entries("data", &data)?;
-        validate_runtime_expectation_entries("pipeline", &pipeline)?;
-        validate_runtime_expectation_entries("time", &time)?;
-        validate_runtime_expectation_entries("by_call", &by_call)?;
         let mut orphaned_ids = 0usize;
         let mut mismatched_ids = 0usize;
         for (id, event_type) in ids_raw {
@@ -4540,7 +4427,6 @@ mod dto_tests {
             )
             .expect("test data-trigger action satisfies its authority invariant");
             action.metadata = global_data_trigger_scope_metadata_for_testing(&authority);
-            capture_fixture_runtime_consent(&mut action);
             let trig = SpecializedTrigger::new(data_id, action);
             tx.add_data_trigger(trig).expect("add data trigger");
             // Pipeline trigger with BlockEventFilter variant
@@ -4558,14 +4444,13 @@ mod dto_tests {
                 dm::InstructionBox::from(log),
                 dm::InstructionBox::from(set_kv),
             ]));
-            let mut action2 = SpecializedAction::new(
+            let action2 = SpecializedAction::new(
                 exec2,
                 dm::Repeats::Exactly(3),
                 authority.clone(),
                 pipe_filter,
             )
             .expect("test pipeline-trigger action satisfies its authority invariant");
-            capture_fixture_runtime_consent(&mut action2);
             let trig2 = SpecializedTrigger::new(pipe_id, action2);
             tx.add_pipeline_trigger(trig2)
                 .expect("add pipeline trigger");
@@ -4587,7 +4472,6 @@ mod dto_tests {
                 max_retries: std::num::NonZeroU32::new(2).expect("nonzero"),
                 retry_after_ms: std::num::NonZeroU64::new(750).expect("nonzero"),
             });
-            capture_fixture_runtime_consent(&mut action3);
             let trig3 = SpecializedTrigger::new(time_id, action3);
             tx.add_time_trigger(trig3).expect("add time trigger");
             // Execute-by-call trigger with IVM executable
@@ -4595,10 +4479,9 @@ mod dto_tests {
             let call_filter = dm::ExecuteTriggerEventFilter::new();
             let ivm_code = IvmBytecode::from_compiled(vec![0xAA, 0xBB]);
             let exec4 = dm::Executable::Ivm(ivm_code);
-            let mut action4 =
+            let action4 =
                 SpecializedAction::new(exec4, dm::Repeats::Exactly(1), authority, call_filter)
                     .expect("test by-call action satisfies its authority invariant");
-            capture_fixture_runtime_consent(&mut action4);
             let trig4 = SpecializedTrigger::new(call_id, action4);
             tx.add_by_call_trigger(trig4).expect("add by-call trigger");
             tx.apply();
@@ -4811,7 +4694,6 @@ mod dto_tests {
         );
     }
     include!("set_snapshot_predecessor_tests.rs");
-    include!("set_runtime_expectation_tests.rs");
 
     #[test]
     fn set_roundtrips_rebuild_active_trigger_ids() {
@@ -4824,22 +4706,20 @@ mod dto_tests {
             let mut tx = block.transaction();
             let empty_exec =
                 dm::Executable::Instructions(ConstVec::from(Vec::<dm::InstructionBox>::new()));
-            let mut active_action = SpecializedAction::new(
+            let active_action = SpecializedAction::new(
                 empty_exec.clone(),
                 dm::Repeats::Exactly(1),
                 authority.clone(),
                 dm::ExecuteTriggerEventFilter::new(),
             )
             .expect("test by-call action satisfies its authority invariant");
-            let mut depleted_action = SpecializedAction::new(
+            let depleted_action = SpecializedAction::new(
                 empty_exec,
                 dm::Repeats::Exactly(0),
                 authority,
                 dm::TimeEventFilter(dm::ExecutionTime::PreCommit),
             )
             .expect("test time-trigger action satisfies its authority invariant");
-            capture_fixture_runtime_consent(&mut active_action);
-            capture_fixture_runtime_consent(&mut depleted_action);
             tx.add_by_call_trigger(SpecializedTrigger::new(active_id.clone(), active_action))
                 .expect("add active by-call trigger");
             tx.add_time_trigger(SpecializedTrigger::new(
@@ -4873,14 +4753,13 @@ mod dto_tests {
         let data_id: dm::TriggerId = "data_missing".parse().unwrap();
         let call_id: dm::TriggerId = "call_valid".parse().unwrap();
         let orphan_id: dm::TriggerId = "orphan".parse().unwrap();
-        let mut authorized_call = SpecializedAction::new(
+        let authorized_call = SpecializedAction::new(
             dm::Executable::Ivm(valid_code.clone()),
             dm::Repeats::Exactly(1),
             authority.clone(),
             dm::ExecuteTriggerEventFilter::new(),
         )
         .expect("the retained call is authored against the fixture runtime");
-        capture_fixture_runtime_consent(&mut authorized_call);
         let data_action = LoadedActionDto {
             executable: ExecutableRefDto::Ivm(missing_hash),
             repeats: dm::Repeats::Exactly(1),
@@ -4981,7 +4860,6 @@ mod dto_tests {
             )
             .expect("test scheduled trigger action satisfies its authority invariant");
             action.retry_policy = Some(retry_policy);
-            capture_fixture_runtime_consent(&mut action);
             tx.add_time_trigger(SpecializedTrigger::new(trigger_id.clone(), action))
                 .expect("add time trigger");
             assert!(tx.set_time_trigger_retry_state(

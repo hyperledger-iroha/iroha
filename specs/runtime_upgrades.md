@@ -26,12 +26,13 @@ and its admission check are deleted.
 
 ## Lifecycle
 
-1. **Propose.** `ProposeRuntimeUpgradeProposal { action: RuntimeUpgradeActionV1, provenance }`
+1. **Propose.** The baseline `ProposeRuntimeUpgradeProposal { action: RuntimeUpgradeActionV1 }`
    submits `Schedule(change_set)` or `Cancel(id)` to SORA Parliament. It needs the unit permission
    `CanProposeRuntimeChangeSet`. Admission reads the committed policy
    `runtime_upgrade_policy_v1` (`RuntimeUpgradePolicyV1`); a root without it admits no change set.
-   `provenance` holds the release signers' endorsements the committed provenance policy requires
-   (below).
+   The release addition `ProposeEndorsedRuntimeUpgradeProposal { action, provenance }` carries the
+   release signers' endorsements the committed provenance policy requires (below); the baseline
+   proposal keeps its frozen layout and checks no provenance.
    A change set must name this network and the universal root (data-space roots are a TODO of
    §11), give the policy's block notice (the disable notice if it restricts, deactivates, unbinds
    or retires anything) and apply to the selection that scheduled change sets will leave at its
@@ -79,7 +80,11 @@ World fields after it (design §4, "Add an instruction", "Add storage"):
   cells it adds (a cell with the canonical bytes of its initial value and the installer that writes
   them). The baseline is everything compiled that no addition claims. The pinned inventory
   (`runtime_baseline_catalog.json`) lists only the baseline, so a new instruction or field fails it
-  until it is declared.
+  until it is declared. Every baseline instruction's payload layout is pinned too
+  (`runtime_baseline_instruction_layouts.tsv`, checked by `iroha_data_model`'s
+  `baseline_instruction_layouts_stay_frozen`), because an interface descriptor names only the
+  payload's nominal type: a changed layout under an unchanged wire ID fails that pin. This release
+  declares one addition, `iroha.runtime.endorsed_change_set_proposal.v1`.
 - **Definitions.** Each addition publishes one native implementation, one interface per wire ID it
   adds and one storage definition per field; a cell's definition carries its initial bytes. Like
   the baseline bundle it declares a conservative superset of dependencies, every storage definition
@@ -225,39 +230,21 @@ A restriction never removes their settlement authority:
 
 ## Deferred consent
 
-`iroha_core::runtime::expectation` captures the resolved bindings and their transitive immutable
-definitions, including the kernel, commitment, services and host profiles. Cyclic calls are visited
-once. A domain-separated canonical digest of this closure and the exact installed executor code
-is committed with each deferred action; loaded runtime caches do not enter it:
+Not implemented. Multisig proposals and triggers execute with the frozen baseline's semantics:
+registration and proposal store no captured closure, and approval and trigger execution check
+none, so a network that installed the baseline (Taira) replays and restores its pending proposals
+and registered triggers unchanged.
 
-- A multisig proposal occurrence owns its digest under `multisig/proposal-expectation/`. Approval
-  checks it before recording a vote or executing. Changed semantics require a fresh proposal nonce
-  and new approvals; the old occurrence can still be cancelled or expire. Pruning removes both
-  records. Raw contract storage cannot access the native `multisig/` namespace.
-- Trigger registration commits the digest in reserved `__runtime_expectation_v1` metadata. A
-  caller cannot supply, replace or remove it. Data callbacks with changed or restricted semantics
-  skip the matched event without rejecting its originating transaction or consuming a repetition.
-  By-call execution rejects before effects; Time and Pipeline execution keep their existing
-  persistent retry, exhaustion and quarantine policies. Restoring semantics never replays an event
-  skipped during suspension.
-- Restrictions are checked independently of the digest. Local codec/resource refusals retain the
-  execution deferral; they are not a reason to skip a callback or commit a rejection.
-
-The baseline native implementation declares a conservative superset of callees, so one native
-capture can include the entire baseline. Opaque IVM, contract-call and custom-instruction captures
-cover the complete callable binding set; expanding that surface requires renewed consent too.
-Explicitly following current bindings and narrower authenticated dynamic-call manifests remain
-unimplemented.
+TODO(design §8.2): capturing the resolved closure of each multisig occurrence and trigger
+incarnation, and refusing changed or restricted semantics, changes what the baseline's
+registration, proposal, approval and trigger execution write and decide. It ships as a release
+addition that rebinds those interfaces, activated by a change set; its activation must first
+certify or drain the deferred work already registered without a capture, because no fallback
+manufactures consent from the current selection.
 
 Migration cursors and contract-created obligations still need kernel registration. Escrows and AMX
 participations do not yet retain a captured completion capability that dispatch honors after a
 rebinding. These protections do not close the whole obligation lifecycle of design §7.2.
-
-Persisted pending proposals and triggers require their original capture. There is no restore-time
-fallback that manufactures consent from the current selection. A predecessor snapshot containing
-uncaptured deferred work cannot be imported unchanged: adoption must explicitly certify its
-preserved context or first drain/cancel that work. This is a populated-State acceptance change even
-though no World table was added, and is not an encoding-neutral live deployment.
 
 ## Unsupported transition effects
 
@@ -289,12 +276,17 @@ publishes. `SetParameter` rejects an empty, unsorted or repeated signer list, a 
 above the number of signers, and a payload over 16 KiB or not canonical. A signer endorses a change
 set with `ChangeSetEndorsementV1 { change_set, signer, signature }`, a signature over
 `iroha:runtime:change-set-endorsement:v1\0` followed by the change-set identity. While the policy is
-committed, a proposal that schedules a change set needs valid endorsements of that identity from
-`threshold` distinct trusted signers, and carries at most one endorsement per trusted signer;
-endorsements of another change set, from other keys or with bad signatures do not count. A
-cancellation, or a proposal under a root without the policy, carries no endorsements. Admission
-checks them when the proposal executes; they are not stored with the proposal, whose transaction
-keeps them in the block history.
+committed, an endorsed proposal (`ProposeEndorsedRuntimeUpgradeProposal`) that schedules a change
+set needs valid endorsements of that identity from `threshold` distinct trusted signers, and carries
+at most one endorsement per trusted signer; endorsements of another change set, from other keys or
+with bad signatures do not count. A cancellation, or a proposal under a root without the policy,
+carries no endorsements. Admission checks them when the proposal executes; they are not stored with
+the proposal, whose transaction keeps them in the block history.
+
+The endorsed proposal is the release addition `iroha.runtime.endorsed_change_set_proposal.v1`
+(`catalog/additions.rs`). The baseline `ProposeRuntimeUpgradeProposal` keeps its frozen semantics
+and checks no provenance, so the policy binds a root's proposals only once a change set activates
+the addition and governance restricts the baseline proposal.
 
 ## Torii
 
@@ -304,7 +296,7 @@ keeps them in the block history.
 | `GET /v1/runtime/abi/hash` | `{ policy: "V1", abi_hash_hex }` |
 | `GET /v1/runtime/metrics` | ABI version and change sets by status (`scheduled`, `activated`, `lapsed`, `canceled`) |
 | `GET /v1/runtime/upgrades` | Committed selection and its identity, committee keys and digest, every change-set record |
-| `POST /v1/runtime/upgrades/propose` | Body: `{ change_set, provenance }`, the `ChangeSetV1` and its `ChangeSetEndorsementV1`s (empty without a provenance policy). Drafts the `Schedule` proposal for local signing |
+| `POST /v1/runtime/upgrades/propose` | Body: `{ change_set, provenance }`, the `ChangeSetV1` and its `ChangeSetEndorsementV1`s (empty without a provenance policy). Drafts the `Schedule` proposal for local signing: the baseline proposal without endorsements, the endorsed proposal (a release addition) with them |
 | `POST /v1/runtime/upgrades/cancel/{id}` | Drafts the `Cancel` proposal for local signing |
 | `POST /v1/runtime/upgrades/attest/{id}` | The node signs its support with its validator key and drafts the `AttestRuntimeSupportV1` instruction; refused unless its release executes the successor and its key is a committee member |
 | `GET /v1/runtime/release` | Build, release digest, and whether the release executes the committed selection and each scheduled successor, naming the first definition it lacks |

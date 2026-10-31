@@ -24,6 +24,14 @@ pub struct Fixture {
     rustc: PathBuf,
 }
 
+/// Ownership branches this host launches: development always, and retained release
+/// programs only where original-descriptor execution is qualified.
+const LAUNCHABLE: &[bool] = if cfg!(any(windows, target_os = "linux", target_os = "android")) {
+    &[false, true]
+} else {
+    &[false]
+};
+
 fn probe_bytes() -> &'static [u8] {
     static PROBE: OnceLock<Vec<u8>> = OnceLock::new();
     PROBE.get_or_init(|| {
@@ -87,7 +95,7 @@ fn main() {
 
 impl Fixture {
     pub(crate) fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::native_program_fixture::temporary_root();
         let owner = OwnerDirectory::open_or_create(root.path().join("bundles")).unwrap();
         let build = root.path().join("build");
         fs::create_dir(&build).unwrap();
@@ -207,7 +215,7 @@ fn await_release(bundle: &Weak<Bundle>) {
 
 #[test]
 fn synchronous_output_and_cached_selection_preserve_both_modes() {
-    for retained in [false, true] {
+    for &retained in LAUNCHABLE {
         let fixture = Fixture::new();
         let (program, weak) = fixture.select(retained);
         assert_eq!(program.is_release(), retained);
@@ -240,7 +248,7 @@ fn synchronous_output_and_cached_selection_preserve_both_modes() {
 
 #[test]
 fn synchronous_taken_stdin_keeps_explicit_eof_and_child_owned_bundle() {
-    for retained in [false, true] {
+    for &retained in LAUNCHABLE {
         let fixture = Fixture::new();
         let (program, weak) = fixture.select(retained);
         let mut command = program.command().unwrap();
@@ -277,7 +285,7 @@ fn asynchronous_output_and_original_termination_support_both_modes() {
         .enable_all()
         .build()
         .unwrap();
-    for retained in [false, true] {
+    for &retained in LAUNCHABLE {
         let fixture = Fixture::new();
         let (program, weak) = fixture.select(retained);
         runtime.block_on(async {
@@ -306,6 +314,7 @@ fn asynchronous_output_and_original_termination_support_both_modes() {
     }
 }
 
+#[cfg(any(windows, target_os = "linux", target_os = "android"))]
 #[test]
 fn cancelled_wait_and_destroyed_runtime_keep_qualified_original_until_eof() {
     use tokio::io::AsyncBufReadExt as _;
@@ -349,6 +358,7 @@ fn cancelled_wait_and_destroyed_runtime_keep_qualified_original_until_eof() {
     drop(output);
 }
 
+#[cfg(any(windows, target_os = "linux", target_os = "android"))]
 #[test]
 fn dropping_synchronous_supervisor_closes_owned_stdin_before_release_reaping() {
     let fixture = Fixture::new();
@@ -364,6 +374,20 @@ fn dropping_synchronous_supervisor_closes_owned_stdin_before_release_reaping() {
     drop(program);
     drop(child);
     await_release(&weak);
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+#[test]
+fn unqualified_host_refuses_retained_launch_after_custody_and_releases_bundle() {
+    let fixture = Fixture::new();
+    let (program, weak) = fixture.select(true);
+    program.revalidate().unwrap();
+    assert_eq!(
+        program.command().unwrap_err().kind(),
+        io::ErrorKind::Unsupported
+    );
+    drop(program);
+    await_release(&weak.unwrap());
 }
 
 #[test]
@@ -439,7 +463,7 @@ fn io_only_runtime_wait_preserves_both_original_process_branches() {
     #[cfg(unix)]
     builder.enable_io();
     let runtime = builder.build().unwrap();
-    for release in [false, true] {
+    for &release in LAUNCHABLE {
         let fixture = Fixture::new();
         let (program, weak) = fixture.select(release);
         runtime.block_on(async {
@@ -502,7 +526,7 @@ fn descriptor_facade_retains_original_inputs_for_both_resolved_branches() {
         );
         return;
     }
-    for retained in [false, true] {
+    for &retained in LAUNCHABLE {
         let fixture = Fixture::new();
         let (program, _) = fixture.select(retained);
         let source = fixture.root.path().join("descriptor-input");

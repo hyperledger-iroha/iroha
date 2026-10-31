@@ -32,7 +32,7 @@ fn terminal_reader_reuses_actual_retired_records_without_retaining_a_lock_or_ver
     let now = current_unix_ms().unwrap();
     let configure = configure(&service.config, now);
     let enroll = enroll(&service.config, now);
-    let root = tempfile::tempdir().unwrap();
+    let root = private_tempdir();
     let parent = iroha_fs::PrivateDirectory::open(root.path()).unwrap();
     let configured = root.path().join("configure");
     let enrolled = root.path().join("enroll");
@@ -150,7 +150,7 @@ fn terminal_reader_reuses_actual_retired_records_without_retaining_a_lock_or_ver
 fn terminal_reader_reads_mutations_lazily_and_preserves_original_error_authority() {
     let (service, transport) = service();
     let request = configure(&service.config, current_unix_ms().unwrap());
-    let root = tempfile::tempdir().unwrap();
+    let root = private_tempdir();
     let parent = iroha_fs::PrivateDirectory::open(root.path()).unwrap();
     let path = root.path().join("original");
     service
@@ -244,7 +244,7 @@ fn terminal_reader_reads_mutations_lazily_and_preserves_original_error_authority
 fn terminal_reader_preserves_inherited_decoder_recipe_and_does_not_cache_partial_phases() {
     let (service, transport) = service();
     let request = enroll(&service.config, current_unix_ms().unwrap());
-    let root = tempfile::tempdir().unwrap();
+    let root = private_tempdir();
     let parent = iroha_fs::PrivateDirectory::open(root.path()).unwrap();
     let path = root.path().join("original");
     let mut reader = CustodyPreparationReader::new(&service);
@@ -324,7 +324,7 @@ fn terminal_plan_timestamp_reuse_keeps_fresh_locks_and_expected_plan_comparisons
     let now = current_unix_ms().unwrap();
     let configure = configure(&service.config, now);
     let enroll = enroll(&service.config, now);
-    let root = tempfile::tempdir().unwrap();
+    let root = private_tempdir();
     let parent = iroha_fs::PrivateDirectory::open(root.path()).unwrap();
     let configured = root.path().join("configure");
     let enrolled = root.path().join("enroll");
@@ -416,7 +416,7 @@ fn terminal_plan_timestamp_is_replaced_with_changed_request_bytes() {
     let request = configure(&service.config, current_unix_ms().unwrap());
     let mut changed = request.clone();
     changed.deadline_unix_ms -= 1_000;
-    let root = tempfile::tempdir().unwrap();
+    let root = private_tempdir();
     let parent = iroha_fs::PrivateDirectory::open(root.path()).unwrap();
     let original_path = root.path().join("original");
     let changed_path = root.path().join("changed");
@@ -604,7 +604,7 @@ fn terminal_plan_timestamp_is_replaced_with_changed_request_bytes() {
 fn terminal_plan_timestamp_preserves_inherited_and_late_decoder_work() {
     let (service, transport) = service();
     let request = enroll(&service.config, current_unix_ms().unwrap());
-    let root = tempfile::tempdir().unwrap();
+    let root = private_tempdir();
     let parent = iroha_fs::PrivateDirectory::open(root.path()).unwrap();
     let path = root.path().join("original");
     service
@@ -698,7 +698,7 @@ fn terminal_plan_timestamp_preserves_inherited_and_late_decoder_work() {
 fn terminal_commitment_reuse_keeps_fresh_retirement_inventory_and_dispatch_checks() {
     let (service, transport) = service();
     let request = configure(&service.config, current_unix_ms().unwrap());
-    let root = tempfile::tempdir().unwrap();
+    let root = private_tempdir();
     let parent = iroha_fs::PrivateDirectory::open(root.path()).unwrap();
     let path = root.path().join("original");
     service
@@ -800,7 +800,7 @@ fn terminal_commitment_reuse_keeps_fresh_retirement_inventory_and_dispatch_check
 fn terminal_commitment_preserves_inherited_and_late_decoder_recipe() {
     let (service, transport) = service();
     let request = enroll(&service.config, current_unix_ms().unwrap());
-    let root = tempfile::tempdir().unwrap();
+    let root = private_tempdir();
     let parent = iroha_fs::PrivateDirectory::open(root.path()).unwrap();
     let path = root.path().join("original");
     service
@@ -899,7 +899,7 @@ fn terminal_inventory_scope_reduces_actual_walks_and_preserves_late_decoder_work
         let now = current_unix_ms().unwrap();
         let configure = configure(&service.config, now);
         let enroll = enroll(&service.config, now);
-        let root = tempfile::tempdir().unwrap();
+        let root = private_tempdir();
         let parent = iroha_fs::PrivateDirectory::open(root.path()).unwrap();
         let configured = root.path().join("configure");
         let enrolled = root.path().join("enroll");
@@ -1035,7 +1035,7 @@ fn terminal_optional_child_scope_reduces_native_open_work_and_keeps_fresh_expect
     let now = current_unix_ms().unwrap();
     let configure = configure(&service.config, now);
     let enroll = enroll(&service.config, now);
-    let root = tempfile::tempdir().unwrap();
+    let root = private_tempdir();
     let parent = iroha_fs::PrivateDirectory::open(root.path()).unwrap();
     let configured = root.path().join("configure");
     let enrolled = root.path().join("enroll");

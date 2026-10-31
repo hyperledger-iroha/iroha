@@ -11678,13 +11678,22 @@ mod manifest_tests {
     #[test]
     fn moderation_bounded_reader_rejects_symlink_input() {
         let temp = TempDir::new().expect("tempdir");
-        let target = temp.path().join("target");
-        let linked = temp.path().join("linked");
+        let root = canonical_temp_path(&temp);
+        let target = root.join("target");
+        let linked = root.join("linked");
         fs::write(&target, b"manifest").expect("write target");
         std::os::unix::fs::symlink(&target, &linked).expect("create symlink");
+        assert_eq!(
+            read_file_bounded(&target, 1024, "test input").expect("regular input"),
+            b"manifest"
+        );
+        // Retained no-follow custody refuses the link itself, before any byte is read.
         let error = read_file_bounded(&linked, 1024, "test input")
             .expect_err("symlink input must be rejected");
-        assert!(error.contains("non-symlink"), "unexpected error: {error}");
+        assert!(
+            error.starts_with("failed to retain test input"),
+            "unexpected error: {error}"
+        );
     }
     #[test]
     fn proxy_set_mode_updates_config_file() {

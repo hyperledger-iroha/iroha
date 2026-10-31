@@ -105,8 +105,9 @@ fn server_reply_case(mode: ServerMode, outcome: ServerOutcome) {
     let binding = token_signer_binding();
     let metadata = make_server_observation(network_id(), &binding, &backends).unwrap();
     let metadata_digest = metadata.metadata_digest;
+    // The shared signer custody binding admits only its own chain.
     let state = singleton_state(
-        "stream-token-server-custody",
+        "stream-token-mutation-test-chain",
         binding.clone(),
         metadata,
         backends,
@@ -133,7 +134,7 @@ fn server_reply_case(mode: ServerMode, outcome: ServerOutcome) {
         })
     });
     let handshake = make_handshake_request(
-        "stream-token-server-custody",
+        "stream-token-mutation-test-chain",
         network_id(),
         vec![binding.clone()],
         [0xa1; 32],

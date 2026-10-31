@@ -1427,14 +1427,6 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         ],
     },
     OtherDomains {
-        usage: Use::Record,
-        reason: "Digests of captured deferred runtime consent (specs/live_runtime_upgrades.md §8.2): one multisig occurrence's or trigger incarnation's resolved bindings and transitive immutable definitions, with the installed executor's consent hash. Each digests one canonical expectation record that the deferred action stores and rechecks; none commits to State content",
-        literals: &[
-            r"iroha:runtime:executor-consent:v1\0",
-            r"iroha:runtime:expectation:v1\0",
-        ],
-    },
-    OtherDomains {
         usage: Use::Name,
         reason: "Exact wire identities of the runtime lifecycle instructions that are not governance proposals (specs/live_runtime_upgrades.md §6, §7.1): a validator's support attestation of a scheduled change set and the emergency panel's containment, including their built-in dispatch entries. They select instruction layouts; the attestation's and endorsements' own signature domains authenticate them, and the identifiers compute no State digest",
         literals: &[

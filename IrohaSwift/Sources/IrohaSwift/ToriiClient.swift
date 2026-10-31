@@ -7676,9 +7676,14 @@ public struct ToriiRuntimeInstruction: Codable, Sendable {
 /// runtime change set. Sign and submit `txInstructions` locally; admission happens when the
 /// signed proposal executes.
 public struct ToriiRuntimeUpgradeActionResponse: Decodable, Sendable {
-    /// Wire identifier of the drafted `ProposeRuntimeUpgradeProposal` instruction.
+    /// Wire identifier of the drafted `ProposeRuntimeUpgradeProposal` instruction, the baseline
+    /// proposal Torii drafts when no endorsements accompany the change set.
     public static let proposalInstructionWireId =
         "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal"
+    /// Wire identifier of the drafted `ProposeEndorsedRuntimeUpgradeProposal` instruction, the
+    /// release addition that carries release signers' endorsements.
+    public static let endorsedProposalInstructionWireId =
+        "iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal"
 
     /// Always `true` for a drafted instruction.
     public let ok: Bool
@@ -7706,11 +7711,12 @@ public struct ToriiRuntimeUpgradeActionResponse: Decodable, Sendable {
         }
         let instructions = try container.decode([ToriiRuntimeInstruction].self, forKey: .txInstructions)
         guard instructions.count == 1,
-              instructions[0].wireId == Self.proposalInstructionWireId else {
+              instructions[0].wireId == Self.proposalInstructionWireId
+                || instructions[0].wireId == Self.endorsedProposalInstructionWireId else {
             throw DecodingError.dataCorruptedError(
                 forKey: .txInstructions,
                 in: container,
-                debugDescription: "runtime upgrade draft must contain exactly one \(Self.proposalInstructionWireId) instruction"
+                debugDescription: "runtime upgrade draft must contain exactly one \(Self.proposalInstructionWireId) or \(Self.endorsedProposalInstructionWireId) instruction"
             )
         }
         ok = true

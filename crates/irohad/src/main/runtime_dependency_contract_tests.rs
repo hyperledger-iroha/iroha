@@ -98,7 +98,18 @@ fn standard_launcher_forwards_external_sorafs_runtime_dependencies() {
     );
     assert!(
         compact_source.contains(
-            "enabledSoraFSgatewaycompliancerequirestheexactdeployment-ownedauthenticatedfeedtransport"
+            "sorafs_gateway_compliance_transport::resolve(&compliance.feed_transport_provider,&compliance.feeds,sorafs_gateway_compliance_feed_transport.take(),)"
+        ),
+        "enabled gateway compliance must resolve its configured transport before Torii startup"
+    );
+    let compact_compliance_transport: String =
+        include_str!("../sorafs_gateway_compliance_transport.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+    assert!(
+        compact_compliance_transport.contains(
+            "returninjected.ok_or(\"configuredexternalcompliancefeedtransportisabsent\");"
         ),
         "enabled gateway compliance must fail before Torii startup when its deployment transport is absent"
     );

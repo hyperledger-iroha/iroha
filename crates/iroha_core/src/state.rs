@@ -43970,21 +43970,6 @@ impl StateTransaction<'_, '_> {
                 ) {
                     continue;
                 }
-                // A suspended callback must not reject the unrelated transaction whose data
-                // event matched it. The event is consumed; restoring the runtime never replays
-                // events skipped while this incarnation's consent was stale or restricted.
-                match crate::smartcontracts::isi::triggers::check_trigger_runtime(
-                    action.metadata(),
-                    action.executable(),
-                    &self.world,
-                    self._curr_block.height().get(),
-                ) {
-                    Ok(()) => {}
-                    Err(Error::Runtime(_)) => continue,
-                    // A local refusal is not a governance suspension. Retain its execution
-                    // deferral and refuse this attempt without consuming a committed event.
-                    Err(error) => return Err(ValidationFail::from(error).into()),
-                }
                 (action.executable().clone(), action.authority().clone())
             };
             if self.data_trigger_firings_in_tx >= MAX_DATA_TRIGGER_FIRINGS_PER_TRANSACTION {
@@ -44576,19 +44561,6 @@ impl StateTransaction<'_, '_> {
         _step_index: u32,
         nft_seq_base_override: Option<u64>,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
-        self.world
-            .triggers
-            .inspect_by_id(id, |action| {
-                crate::smartcontracts::isi::triggers::check_trigger_runtime(
-                    action.metadata(),
-                    executable,
-                    &self.world,
-                    self._curr_block.height().get(),
-                )
-            })
-            .ok_or_else(|| Error::from(FindError::Trigger(id.clone())))
-            .and_then(core::convert::identity)
-            .map_err(ValidationFail::from)?;
         let (res, _outcome_override): (_, Option<TriggerCompletedOutcome>) = match executable {
             ExecutableRef::Instructions(instructions) => {
                 let instruction_groups = std::collections::BTreeMap::from([(

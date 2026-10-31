@@ -2279,6 +2279,10 @@ impl Queue {
                     .as_any()
                     .downcast_ref::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>()
                     .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal>()
+                    .is_some()
         };
         match tx.as_accepted().executable() {
             Some(Executable::Instructions(instructions)) => instructions.iter().any(contains),

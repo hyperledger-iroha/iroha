@@ -741,16 +741,16 @@ not a date: it happens once everything its first selection needs is implemented 
    block start, the unsupported-node stop with a reason naming the selection, stable rejection
    codes and lifecycle events, handshake host profiles, and native escrow obligations, whose
    continuations and completions run through admission closure and completion-only and which no
-   activation strands. Deferred consent now captures the resolved transitive closure for multisig
-   occurrences and trigger incarnations; changed or restricted semantics prevent execution before
-   effects. Native escrow activation also preserves its original completion closure instead of
+   activation strands. Deferred consent (8.2) is not built: capturing the resolved closure of
+   multisig occurrences and trigger incarnations changes what the baseline's registration,
+   proposal, approval and trigger execution write and decide, so it ships as a release addition
+   rebinding those interfaces, never inside the baseline. Native escrow activation also preserves its original completion closure instead of
    treating any active replacement as settlement authority. AMX participations are obligations
    too: an undecided global transaction and an unsettled participant escrow keep completing
-   through admission closure and completion-only, and no activation strands them. The baseline
-   capture is conservative; opaque code captures the entire callable surface. Still open: kernel
-   registration of contract-created obligations and migration cursors, retained completion
-   capabilities across rebinding, explicit current-binding consent and narrower authenticated
-   dynamic-call manifests.
+   through admission closure and completion-only, and no activation strands them. Still open: the
+   deferred-consent addition, kernel registration of contract-created obligations and migration
+   cursors, retained completion capabilities across rebinding, explicit current-binding consent
+   and narrower authenticated dynamic-call manifests.
 4. **Governance.** Parliament's Core integration (still a TODO in
    `parameter/parliament_lifecycle.rs`) with its committed timing policy, and the runtime emergency
    panel. Neither gets a temporary substitute on Taira. The panel's containment is implemented
@@ -786,9 +786,9 @@ not a date: it happens once everything its first selection needs is implemented 
 
 Storage retirement, cell initialization and migration activation are refused by the successor
 resolver and lapse if encountered in an already scheduled record. They cannot be attested merely
-because the remaining definitions are compiled. Deferred-consent captures are required in restored
-State; State adopted from a predecessor must explicitly account for its triggers and pending
-proposals that lack them, never infer earlier consent from the new release's selection.
+because the remaining definitions are compiled. The deferred-consent addition must account
+explicitly for the triggers and pending proposals registered before it activates, which carry no
+capture; it never infers earlier consent from the current selection.
 
 Minamoto adopts the foundation only after every gate passes on Taira.
 

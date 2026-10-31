@@ -38,6 +38,9 @@ fn kotodama_create_and_grant_role_enables_mint() {
     let prog = compiler.compile_source(src).expect("compile");
     let caller = literal_account();
     let mut wsv = MockWorldStateView::new();
+    // Permissions apply only to a linked account, so link the caller before it
+    // registers the domain that owns the bootstrap asset definition.
+    wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     assert!(wsv.register_domain(
         &caller,

@@ -58,8 +58,13 @@ fn build_submit_ballot_inline_rejects_runtime_bytes() {
         }
     "#;
     let err = english_compiler().compile_source(src).unwrap_err();
+    // Diagnostics name the source builtin and the runtime parameter, never the
+    // compiler-internal builtin spelling.
     assert!(
-        err.contains("build_submit_ballot_inline requires literal ciphertext"),
+        err.contains("error[E_BALLOT_LITERAL_REQUIRED]")
+            && err.contains(
+                "ledger::governance::build_submit_ballot requires compile-time literal `ciphertext`; entrypoint parameter `cipher` is only available at runtime"
+            ),
         "expected literal ciphertext error, got: {err}"
     );
 }
@@ -89,7 +94,8 @@ fn build_submit_ballot_inline_rejects_wrong_nullifier_length() {
     "#;
     let err = english_compiler().compile_source(src).unwrap_err();
     assert!(
-        err.contains("build_submit_ballot_inline nullifier must be 32 bytes"),
+        err.contains("error[E_BALLOT_NULLIFIER]")
+            && err.contains("ledger::governance::build_submit_ballot nullifier must be 32 bytes"),
         "expected nullifier length error, got: {err}"
     );
 }

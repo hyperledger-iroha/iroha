@@ -7601,6 +7601,10 @@ fn ledger_builtin_codegen_emits_exactly_the_registry_operation_syscalls() {
             Builtin::EscrowResolveDispute,
             "ledger::escrow::resolve_dispute(offer, buyer_amount: amount, seller_amount: amount)",
         ),
+        (
+            Builtin::PresentX509,
+            "let _queued = ledger::credentials::present_x509(request: evidence)",
+        ),
         // Non-ledger builtins whose registry set must also match codegen.
         (
             Builtin::VerifySignature,

@@ -57,19 +57,34 @@ fn kotodama_transfer_domain() {
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile kotodama");
     let mut wsv = MockWorldStateView::new();
-    let _wonderland_domain: DomainId =
+    let wonderland: DomainId =
         iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain id");
     let alice: AccountId = AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("public key"),
     );
+    let bob = iroha_data_model::account::AccountId::parse_encoded(
+        "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+    )
+    .expect("parse destination account literal");
     wsv.add_account_unchecked(alice.clone());
+    // Only the current owner may transfer a domain, so the authority owns it first.
+    wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
+    assert!(wsv.register_domain(&alice, wonderland.clone()));
     let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
     common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run()
-        .expect("transfer_domain should validate TLVs and queue ISI");
+        .expect("transfer_domain should validate TLVs and move ownership");
+    let host = vm
+        .host_mut_any()
+        .expect("host")
+        .downcast_mut::<WsvHost>()
+        .expect("downcast WsvHost");
+    // Ownership moved: the former owner can no longer transfer it, the destination can.
+    assert!(!host.wsv.transfer_domain(&alice, &wonderland, alice.clone()));
+    assert!(host.wsv.transfer_domain(&bob, &wonderland, alice));
 }

@@ -11,7 +11,6 @@ pub mod catalog;
 pub(crate) mod change_set;
 pub(crate) mod containment;
 pub(crate) mod envelope;
-pub(crate) mod expectation;
 pub(crate) mod obligations;
 
 use iroha_data_model::runtime::{

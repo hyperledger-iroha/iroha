@@ -14,6 +14,23 @@ fn tempdir() -> Result<TempDir, std::io::Error> {
         .prefix("sorafs-manifest-builder-cli-")
         .tempdir_in(canonical_temp_base())
 }
+/// A raw 32-byte council signing seed in an owner-only file, as the builder requires before it
+/// signs a completed manifest.
+fn council_signing_key_file(dir: &std::path::Path) -> PathBuf {
+    use std::io::Write as _;
+
+    let path = dir.join("council.seed");
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options
+        .open(&path)
+        .expect("create council signing key")
+        .write_all(&[0x5c; 32])
+        .expect("write council signing key");
+    path
+}
 #[test]
 fn manifest_builder_directory_outputs_match_explicit_file_commitments() {
     use norito::{decode_from_bytes, json::Value};
@@ -49,6 +66,7 @@ fn manifest_builder_directory_outputs_match_explicit_file_commitments() {
         fs::write(path, &entry.data).expect("fixture file");
     }
     let (plan, payload) = CarBuildPlan::from_files(entries).expect("explicit reference plan");
+    let council_key = council_signing_key_file(temp.path());
     let mut expected_archive = Vec::new();
     let stats = CarWriter::new(&plan, &payload)
         .expect("reference writer")
@@ -64,6 +82,10 @@ fn manifest_builder_directory_outputs_match_explicit_file_commitments() {
         command
             .arg(&site)
             .arg("--retention-epoch=1")
+            .arg(format!(
+                "--council-signing-key-file={}",
+                council_key.display()
+            ))
             .arg(format!("--manifest-out={}", manifest_path.display()))
             .arg(format!("--json-out={}", report_path.display()));
         if archive_output {

@@ -319,12 +319,12 @@ fn native_configuration_does_not_activate_when_unselected() {
 fn emergency_fast_skips_native_stream_credentials_on_every_platform() {
     let source = include_str!("../../../main.rs");
     let assembly = source
-        .split("let mut sorafs_stream_token_signer_client =")
-        .nth(1)
+        .split_once("let mut sorafs_stream_token_signer_client =")
         .unwrap()
-        .split("let sorafs_stream_token_gateway_admission =")
-        .next()
-        .unwrap();
+        .1
+        .split_once("let sorafs_stream_token_gateway_runtime =")
+        .expect("the gateway runtime assembly follows native stream-token custody")
+        .0;
     let compact: String = assembly
         .chars()
         .filter(|value| !value.is_whitespace())

@@ -1030,17 +1030,32 @@ mod state_snapshot_decode_error_tests {
         let world = World::try_with_execution_budget([], [], [], &budget).unwrap();
         let retained_bytes = budget.reserved_bytes();
         let undo_scope_bytes = iroha_allocation::OwnedAllocationScope::allocation_layout().size();
-        assert!(retained_bytes >= undo_scope_bytes);
         crate::resource_coherence::validate_restored_policy(&world.view(), 0).unwrap();
-        // The original undo scope fits this policy, but World's retained owners
-        // occupy the entire pool. A zero limit would instead mean ExceedsLimit.
+        // The undo cut admits its complete control demand, refund scope included, before any
+        // writer. Measure that demand against a limit that cannot hold it.
         budget.set_limit_bytes(retained_bytes);
+        let demand = match validate_resource_policy_versions(&world, 0, &budget).unwrap_err() {
+            StateRestoreError::Admission(StateAdmissionError::Storage(
+                StateStorageAdmissionError::World(mv::storage::AdmittedStorageError::Allocation(
+                    iroha_allocation::AllocationRefusal::ExceedsLimit {
+                        requested_bytes, ..
+                    },
+                )),
+            )) => requested_bytes,
+            other => panic!("the complete undo demand exceeds the retained-only limit: {other:?}"),
+        };
+        assert!(demand > undo_scope_bytes);
+        assert_eq!(budget.reserved_bytes(), retained_bytes);
+        // Fund the limit for the demand but occupy it: the refusal is now a capacity wait.
+        let limit = retained_bytes + demand;
+        budget.set_limit_bytes(limit);
+        let blocker = budget.try_reserve_bytes(demand).unwrap();
         let iroha_allocation::AllocationRefusal::Capacity {
             release: original_release,
             ..
-        } = budget.try_reserve_bytes(undo_scope_bytes).unwrap_err()
+        } = budget.try_reserve_bytes(demand).unwrap_err()
         else {
-            panic!("original World owners occupy the undo-scope capacity");
+            panic!("the occupied pool refuses the undo demand by capacity");
         };
         let refused = validate_resource_policy_versions(&world, 0, &budget).unwrap_err();
         let StateRestoreError::Admission(StateAdmissionError::Storage(
@@ -1056,11 +1071,12 @@ mod state_snapshot_decode_error_tests {
         else {
             panic!("expected original undo allocation capacity refusal: {refused:?}");
         };
-        assert_eq!(requested_bytes, undo_scope_bytes);
-        assert_eq!(reserved_bytes, retained_bytes);
-        assert_eq!(limit_bytes, retained_bytes);
+        assert_eq!(requested_bytes, demand);
+        assert_eq!(reserved_bytes, limit);
+        assert_eq!(limit_bytes, limit);
         assert_eq!(release, original_release);
-        assert_eq!(budget.reserved_bytes(), retained_bytes);
+        assert_eq!(budget.reserved_bytes(), limit);
+        drop(blocker);
         budget.set_limit_bytes(64 * 1024 * 1024);
         validate_resource_policy_versions(&world, 0, &budget).unwrap();
         assert_eq!(budget.reserved_bytes(), retained_bytes);

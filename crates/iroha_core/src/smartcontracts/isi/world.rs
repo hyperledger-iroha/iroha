@@ -3287,79 +3287,100 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let required_permission: Permission = CanProposeRuntimeChangeSet.into();
-            if !has_exact_permission(&state_transaction.world, authority, &required_permission) {
+            propose_runtime_upgrade(self.action, None, authority, state_transaction)
+        }
+    }
+    impl Execute for gov::ProposeEndorsedRuntimeUpgradeProposal {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            propose_runtime_upgrade(
+                self.action,
+                Some(&self.provenance),
+                authority,
+                state_transaction,
+            )
+        }
+    }
+    /// Submit a runtime-upgrade proposal to SORA Parliament. `provenance` is the endorsements
+    /// of the release addition's endorsed proposal; the baseline proposal carries none and
+    /// skips the provenance check ([`crate::runtime::change_set::admit_proposal`]).
+    fn propose_runtime_upgrade(
+        action: iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1,
+        provenance: Option<&[iroha_data_model::runtime::lifecycle::ChangeSetEndorsementV1]>,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let required_permission: Permission = CanProposeRuntimeChangeSet.into();
+        if !has_exact_permission(&state_transaction.world, authority, &required_permission) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "not permitted: CanProposeRuntimeChangeSet required".into(),
+            ));
+        }
+        let (notice, proposed_ms) =
+            crate::runtime::change_set::admit_proposal(&action, provenance, state_transaction)?;
+        let h_now = state_transaction._curr_block.height().get();
+        if let iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Schedule(change_set) =
+            &action
+        {
+            let id = change_set
+                .id()
+                .map_err(|error| InstructionExecutionError::Conversion(error.to_string()))?;
+            crate::runtime::containment::record_review(
+                &mut state_transaction.world,
+                id,
+                change_set,
+                h_now,
+            );
+        }
+        let payload = RuntimeUpgradeProposal {
+            proposal_operator: authority.clone(),
+            action: action.clone(),
+            notice,
+            proposed_ms,
+        };
+        let kind = ProposalKind::RuntimeUpgrade(payload.clone());
+        let id = kind.fingerprint();
+        if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+            let Some(existing_payload) = existing.as_runtime_upgrade() else {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanProposeRuntimeChangeSet required".into(),
+                    "governance proposal id collision".into(),
+                ));
+            };
+            if existing_payload.proposal_operator != payload.proposal_operator
+                || existing_payload.action != payload.action
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "governance proposal id collision".into(),
                 ));
             }
-            let (notice, proposed_ms) = crate::runtime::change_set::admit_proposal(
-                &self.action,
-                &self.provenance,
-                state_transaction,
-            )?;
-            let h_now = state_transaction._curr_block.height().get();
-            if let iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Schedule(
-                change_set,
-            ) = &self.action
-            {
-                let id = change_set
-                    .id()
-                    .map_err(|error| InstructionExecutionError::Conversion(error.to_string()))?;
-                crate::runtime::containment::record_review(
-                    &mut state_transaction.world,
-                    id,
-                    change_set,
-                    h_now,
-                );
-            }
-            let payload = RuntimeUpgradeProposal {
-                proposal_operator: authority.clone(),
-                action: self.action.clone(),
-                notice,
-                proposed_ms,
-            };
-            let kind = ProposalKind::RuntimeUpgrade(payload.clone());
-            let id = kind.fingerprint();
-            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
-                let Some(existing_payload) = existing.as_runtime_upgrade() else {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "governance proposal id collision".into(),
-                    ));
-                };
-                if existing_payload.proposal_operator != payload.proposal_operator
-                    || existing_payload.action != payload.action
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "governance proposal id collision".into(),
-                    ));
-                }
-                ensure_certificate_only_proposal_v1(id, existing, state_transaction)?;
-                return Ok(());
-            }
-            let created_height = h_now;
-            let record = crate::state::GovernanceProposalRecord {
-                proposer: authority.clone(),
-                kind,
-                created_height,
-                status: crate::state::GovernanceProposalStatus::Proposed,
-            };
-            ensure_certificate_only_proposal_v1(id, &record, state_transaction)?;
-            state_transaction
-                .world
-                .put_governance_proposal(id, record)
-                .map_err(governance_proposal_storage_error)?;
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
-                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
-                        id,
-                        proposer: authority.clone(),
-                        contract_address: None,
-                    },
-                ),
-            ));
-            Ok(())
+            ensure_certificate_only_proposal_v1(id, existing, state_transaction)?;
+            return Ok(());
         }
+        let created_height = h_now;
+        let record = crate::state::GovernanceProposalRecord {
+            proposer: authority.clone(),
+            kind,
+            created_height,
+            status: crate::state::GovernanceProposalStatus::Proposed,
+        };
+        ensure_certificate_only_proposal_v1(id, &record, state_transaction)?;
+        state_transaction
+            .world
+            .put_governance_proposal(id, record)
+            .map_err(governance_proposal_storage_error)?;
+        state_transaction.world.emit_events(Some(
+            iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
+                iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                    id,
+                    proposer: authority.clone(),
+                    contract_address: None,
+                },
+            ),
+        ));
+        Ok(())
     }
     impl Execute for gov::ProposeSccpRouteGovernance {
         fn execute(
@@ -24451,7 +24472,6 @@ AccountEvent::PermissionRemoved(change))
                     network_id,
                     effective_height,
                 ),
-                provenance: Vec::new(),
             };
             let unrelated_contract =
                 ContractAddress::derive(&network_id, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)

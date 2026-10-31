@@ -21,7 +21,8 @@ use super::*;
 #[test]
 fn release_files_use_native_private_custody_and_no_clobber_publication() {
     let root = tempfile::tempdir().unwrap();
-    let private = root.path().join("private");
+    // Release inputs refuse symlinked ancestors such as macOS `/var` -> `/private/var`.
+    let private = root.path().canonicalize().unwrap().join("private");
     let directory = iroha_fs::PrivateDirectory::open_or_create(&private).unwrap();
     directory
         .write_atomic("seed", &[0x63; 32], iroha_fs::PublishMode::CreateNew)

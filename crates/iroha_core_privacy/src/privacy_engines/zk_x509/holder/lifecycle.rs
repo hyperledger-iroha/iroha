@@ -432,6 +432,9 @@ mod tests {
         let mut commitments = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
         let mut roots = Storage::<PrivacyRootKeyV1, PrivacyRootProvenanceV1>::new();
         let mut root_heads = Storage::<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>::new();
+        // A successor CA root is appended to its namespace's retained window, so the
+        // head commits the attained history cardinality rather than a fresh bootstrap.
+        let mut retained = std::collections::BTreeMap::<_, u32>::new();
         for anchor in anchors {
             commitments.insert(
                 PrivacyCommitmentKeyV1::zk_x509_trust_anchor_revision(
@@ -472,10 +475,18 @@ mod tests {
             )
             .expect("CA governance provenance");
             roots.insert(key, provenance.clone());
+            let retained_root_count = retained.entry(namespace).or_insert(0);
+            *retained_root_count += 1;
             root_heads.insert(
                 PrivacyRootHeadKeyV1::new(namespace, role).expect("CA head key"),
-                PrivacyRootHeadRecordV1::new(key.epoch(), key.root(), provenance, None, 1)
-                    .expect("CA head"),
+                PrivacyRootHeadRecordV1::new(
+                    key.epoch(),
+                    key.root(),
+                    provenance,
+                    None,
+                    *retained_root_count,
+                )
+                .expect("CA head"),
             );
         }
         for policy in policies {

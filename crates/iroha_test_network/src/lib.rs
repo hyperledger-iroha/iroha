@@ -15766,7 +15766,8 @@ mod tests {
         for (peer, expected) in network.peers().iter().zip(modes) {
             assert_eq!(peer.parliament_beacon_signer_mode, Some(expected));
             let child_args = |peer: &NetworkPeer| {
-                let mut command = ResolvedProgram::development("iroha3d".into())
+                // Commands select one absolute executable; this one is never launched.
+                let mut command = ResolvedProgram::development(env::temp_dir().join("iroha3d"))
                     .command()
                     .unwrap();
                 peer.append_parliament_beacon_signer_mode_arg(&mut command);

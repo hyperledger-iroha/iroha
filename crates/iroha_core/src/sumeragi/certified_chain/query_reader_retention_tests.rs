@@ -13,7 +13,10 @@ fn maximum_epoch() -> ValidatorEpochContextV1 {
     config.validator_keys = Some(
         (0..MAX_VALIDATORS)
             .map(|index| {
-                KeyPair::from_seed(vec![u8::try_from(index).unwrap(); 32], Algorithm::BlsNormal)
+                KeyPair::from_seed(
+                    vec![u8::try_from(index + 1).unwrap(); 32],
+                    Algorithm::BlsNormal,
+                )
             })
             .collect(),
     );

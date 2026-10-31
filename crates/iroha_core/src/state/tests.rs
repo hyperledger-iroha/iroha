@@ -931,7 +931,7 @@ state_test! { sync missed_protocol_schedule_rolls_back_a_due_policy_start_hook
     let_row! { error = catch_unwind(AssertUnwindSafe(|| { let _block = state.block(header); })) .expect_err("missed protocol schedule must abort block construction") };
     let_row! { panic_text = error .downcast_ref::<String>() .map(String::as_str) .or_else(|| error.downcast_ref::<&str>().copied()) .unwrap_or("") };
     assert!(
-        panic_text.contains("persisted privacy protocol policy table is invalid at block height 400")
+        panic_text.contains("privacy protocol policy schedule is invalid")
             && panic_text.contains("effective height 399 is not after committed height 399"),
         "{panic_text}"
     );

@@ -3679,8 +3679,9 @@ mod tests {
     }
     #[test]
     fn runtime_provider_slot_wire_ids_are_stable_and_ordered() {
-        let mut seen = [false; 61];
-        for (expected, slot) in (1_u16..=60)
+        // Wire IDs 53 and 60 (the retired Parliament TLE release signer) stay unassigned.
+        let mut seen = [false; 60];
+        for (expected, slot) in (1_u16..=59)
             .filter(|id| *id != 53)
             .zip(IrohaRuntimeProviderSlotV1::ALL)
         {
@@ -3706,7 +3707,7 @@ mod tests {
                 .all(|(index, present)| *present == (index + 1 != 53)),
             "the V1 slot inventory must contain exactly the registered wire IDs"
         );
-        for unknown in [0, 53, 61, u16::MAX] {
+        for unknown in [0, 53, 60, u16::MAX] {
             assert_eq!(
                 IrohaRuntimeProviderSlotV1::from_wire_id(unknown),
                 None,

@@ -1622,15 +1622,18 @@ mod tests {
     #[test]
     fn unsafe_directories_are_refused() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let open = dir.path().join("open");
+        // The retained root reports its canonical path; macOS temporary directories live
+        // under the `/var` symlink.
+        let base = dir.path().canonicalize().expect("canonical tempdir");
+        let open = base.join("open");
         fs::create_dir(&open).expect("mkdir");
         fs::set_permissions(&open, fs::Permissions::from_mode(0o755)).expect("chmod");
         assert_eq!(
             SccpJournalRoot::open(&open),
             Err(JournalError::Unsafe(open.clone()))
         );
-        let link = dir.path().join("link");
-        let private = dir.path().join("private");
+        let link = base.join("link");
+        let private = base.join("private");
         fs::create_dir(&private).expect("mkdir");
         fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).expect("chmod");
         symlink(&private, &link).expect("symlink");

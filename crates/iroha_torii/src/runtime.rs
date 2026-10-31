@@ -1595,9 +1595,17 @@ fn runtime_proposal_draft(
     action: iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1,
     provenance: Vec<iroha_data_model::runtime::lifecycle::ChangeSetEndorsementV1>,
 ) -> ProposeUpgradeResponse {
-    let boxed: iroha_data_model::isi::InstructionBox =
-        iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal { action, provenance }
-            .into();
+    // Without endorsements the baseline proposal suffices; endorsements travel only in the
+    // release addition's endorsed proposal, which a root executes once a change set activates it.
+    let boxed: iroha_data_model::isi::InstructionBox = if provenance.is_empty() {
+        iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal { action }.into()
+    } else {
+        iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal {
+            action,
+            provenance,
+        }
+        .into()
+    };
     ProposeUpgradeResponse {
         ok: true,
         tx_instructions: vec![instruction_box_to_tx_instr(&boxed)],
@@ -2569,10 +2577,14 @@ mod tests {
         let framed = hex::decode(&draft.payload_hex).expect("framed instruction hex");
         let decoded = iroha_data_model::isi::decode_instruction_from_pair(&draft.wire_id, &framed)
             .expect("canonical instruction");
+        assert_eq!(
+            draft.wire_id,
+            "iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal"
+        );
         let proposal = decoded
             .as_any()
-            .downcast_ref::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>()
-            .expect("a runtime-upgrade proposal");
+            .downcast_ref::<iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal>()
+            .expect("an endorsed runtime-upgrade proposal");
         assert_eq!(
             proposal.action,
             RuntimeUpgradeActionV1::Schedule(change_set)

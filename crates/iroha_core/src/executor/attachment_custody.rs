@@ -10,6 +10,9 @@
 //! TODO(I.2, I.3, I.4): complete typed native consumers, raw/proved-root custody
 //! and their same atomic State attempt. Unsupported-consumer admission remains
 //! closed. Consumption is bookkeeping, never proof acceptance or an effect.
+//! TODO(I.1, M.2): transaction-level proof carriers gain a custody scope with
+//! their first consuming route; until then admission refuses them and no
+//! invocation binding matches a `Transaction` declaration.
 
 use iroha_data_model::{
     account::AccountId,
@@ -91,7 +94,6 @@ pub enum CustodyError {
 )]
 #[derive(Clone, Copy)]
 enum InvocationBinding {
-    Transaction,
     Direct {
         instruction_index: u32,
     },
@@ -112,7 +114,6 @@ impl InvocationBinding {
     }
     fn matches(self, declared: &ActionInvocationBindingV1) -> bool {
         match (self, declared) {
-            (Self::Transaction, ActionInvocationBindingV1::Transaction) => true,
             (
                 Self::Direct {
                     instruction_index: actual,
@@ -246,18 +247,6 @@ impl<'tx> AttachmentCustody<'tx> {
         } else {
             self.attempt.refuse(CustodyError::ForeignOwner)
         }
-    }
-
-    /// Visit the transaction-level carrier scope under the original signer.
-    pub(crate) fn transaction<T, E: From<CustodyError>>(
-        &mut self,
-        visit: impl FnOnce(&mut Invocation<'_, 'tx>) -> Result<T, E>,
-    ) -> Result<T, E> {
-        self.invoke(
-            InvocationBinding::Transaction,
-            self.owner.source.authority(),
-            visit,
-        )
     }
 
     /// Visit an already authorized direct native instruction at its exact position.

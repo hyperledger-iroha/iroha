@@ -1311,6 +1311,7 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         iroha_data_model::isi::governance::ProposeContractEmergencyHold,
         iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
+        iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeSorafsProviderGovernance,
         iroha_data_model::isi::governance::ProposeValidationFeePolicy,
@@ -4037,6 +4038,10 @@ fn tx_contains_runtime_upgrade_instruction(tx: &SignedTransaction) -> bool {
             || instruction
                 .as_any()
                 .downcast_ref::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>()
+                .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal>()
                 .is_some()
     };
     match tx.instructions() {
@@ -7983,10 +7988,7 @@ pub mod tests {
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([ProposeRuntimeUpgradeProposal {
-            action,
-            provenance: Vec::new(),
-        }])
+        .with_instructions([ProposeRuntimeUpgradeProposal { action }])
         .sign(keypair.private_key());
         let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
         assert_eq!(prepared.entrypoint_hash, signed.hash_as_entrypoint());
@@ -9237,6 +9239,8 @@ pub mod tests {
             TypeId::of::<AttestRuntimeSupportV1>(),
             TypeId::of::<ContainRuntimeV1>(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>(),
+            TypeId::of::<iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal>(
+            ),
             TypeId::of::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>(),
             TypeId::of::<
                 iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
@@ -9298,7 +9302,6 @@ pub mod tests {
         );
         let runtime_upgrade = ProposeRuntimeUpgradeProposal {
             action: crate::runtime::change_set::test_support::schedule(test_network_id(), 42),
-            provenance: Vec::new(),
         };
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             runtime_upgrade
