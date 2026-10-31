@@ -12,6 +12,10 @@ pub mod joined_trace;
 use super::privacy_outer_hash::PRIVACY_OUTER_DIGEST_BYTES_V1;
 use super::privacy_outer_hash::{PrivacyOuterDomainPrefixV1, PrivacyOuterLastFieldStreamV1};
 pub mod retained_commitment;
+#[path = "aggregate_stark/retained_scalar_commitment.rs"]
+pub(crate) mod retained_scalar_commitment;
+#[path = "aggregate_stark/row_streams.rs"]
+mod row_streams;
 #[path = "aggregate_stark/streaming_commitment.rs"]
 mod streaming_commitment;
 use super::transparent_stark::map_digest_stream_error_v1;
@@ -35,6 +39,8 @@ use fastpq_isi::FASTPQ_QUERY_COUNT_V1;
 use iroha_data_model::privacy::PrivacyProtocolIdV1;
 use rand::TryRng;
 use rayon::prelude::*;
+use row_streams::RowStreamsV1;
+pub(crate) use row_streams::initial_payload_v1 as streaming_row_state_payload_v1;
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 const FRI_MASK_LEAF_DOMAIN_V1: &[u8] = b"iroha:privacy:aggregate-stark:fri-mask-oracle-leaf:v1";
@@ -2047,7 +2053,7 @@ where
 /// Fixed finalization scratch, including named worker temporaries and prefixes.
 /// The row-state allocation itself remains charged separately by its caller.
 pub fn streaming_row_finalization_payload_bound_v1() -> Result<usize, AggregateStarkErrorV1> {
-    streaming_commitment::payload_bound_v1()
+    streaming_commitment::initial_payload_bound_v1()
 }
 /// Result of one column-streamed vector-row commitment pass.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2072,7 +2078,7 @@ pub struct StreamingRowCommitmentV1 {
     failed: bool,
     context: TransparentStarkDigestContextV1,
     node_role: &'static [u8],
-    digest_streams: Vec<PrivacyOuterLastFieldStreamV1>,
+    digest_streams: RowStreamsV1,
     opening_indices: Vec<usize>,
     opened_rows: BTreeMap<usize, Vec<F>>,
 }
@@ -2109,13 +2115,7 @@ impl StreamingRowCommitmentV1 {
         let value_bytes = width
             .checked_mul(core::mem::size_of::<u64>())
             .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-        let mut digest_streams = Vec::new();
-        digest_streams
-            .try_reserve_exact(rows)
-            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        if digest_streams.capacity() != rows {
-            return Err(AggregateStarkErrorV1::AllocationFailure);
-        }
+        let mut digest_streams = RowStreamsV1::with_capacity_v1(rows)?;
         {
             let catalog = crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1();
             let domain = context
@@ -2123,20 +2123,15 @@ impl StreamingRowCommitmentV1 {
                 .map_err(map_transparent_error_v1)?;
             let prefix = PrivacyOuterDomainPrefixV1::new(domain)
                 .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-            for row_index in 0..rows {
-                digest_streams.push(
-                    prefix
-                        .last_field_stream_at_with_counter(
-                            row_index as u64,
-                            u64::from(u16::from_be_bytes(group)),
-                            &[&group, &width_u16],
-                            value_bytes,
-                        )
-                        .map_err(map_digest_stream_error_v1)
-                        .map_err(map_transparent_error_v1)?,
-                );
-            }
+            digest_streams.initialize_v1(
+                &prefix,
+                rows,
+                u64::from(u16::from_be_bytes(group)),
+                &[&group, &width_u16],
+                value_bytes,
+            )?;
         }
+
         let mut opened_rows = BTreeMap::new();
         for &index in opening_indices {
             let mut values = Vec::new();
@@ -2175,10 +2170,29 @@ impl StreamingRowCommitmentV1 {
         &mut self,
         columns: &[C],
     ) -> Result<(), AggregateStarkErrorV1> {
-        const ROWS_PER_CHUNK: usize = 1024;
+        self.absorb_columns_with_packing_v1::<64, C>(columns)
+    }
+
+    /// Initial joined commitments alone may coalesce two completed eight-column
+    /// batches. Their additional output owner and packing scratch are charged
+    /// by the separate initial-commit admission; selected replay stays at eight.
+    pub(crate) fn absorb_initial_columns_v1<C: AsRef<[F]> + Sync>(
+        &mut self,
+        columns: &[C],
+    ) -> Result<(), AggregateStarkErrorV1> {
+        self.absorb_columns_with_packing_v1::<128, C>(columns)
+    }
+
+    fn absorb_columns_with_packing_v1<const PACKED_BYTES: usize, C: AsRef<[F]> + Sync>(
+        &mut self,
+        columns: &[C],
+    ) -> Result<(), AggregateStarkErrorV1> {
+        const {
+            assert!(PACKED_BYTES == 64 || PACKED_BYTES == 128);
+        }
         if self.failed
             || columns.is_empty()
-            || columns.len() > MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            || columns.len() > PACKED_BYTES / core::mem::size_of::<u64>()
             || self
                 .received_columns
                 .checked_add(columns.len())
@@ -2189,42 +2203,16 @@ impl StreamingRowCommitmentV1 {
         {
             return Err(AggregateStarkErrorV1::InvalidLayout);
         }
-        if columns.iter().any(|column| {
-            column
-                .as_ref()
-                .iter()
-                .any(|value| F::canonical(value.0).is_none())
-        }) {
+        let noncanonical = |column: &C| !canonical_field_column_v1(column.as_ref());
+        if if self.rows >= 1 << 22 {
+            columns.par_iter().any(noncanonical)
+        } else {
+            columns.iter().any(noncanonical)
+        } {
             return Err(AggregateStarkErrorV1::NonCanonicalField);
         }
         self.failed = true;
-        let failure = self
-            .digest_streams
-            .par_chunks_mut(ROWS_PER_CHUNK)
-            .enumerate()
-            .map(|(chunk_index, streams)| {
-                let mut packed = zeroize::Zeroizing::new(
-                    [0_u8; MASKED_TRACE_LDE_COLUMN_BATCH_V1 * core::mem::size_of::<u64>()],
-                );
-                for (offset, stream) in streams.iter_mut().enumerate() {
-                    let row = chunk_index * ROWS_PER_CHUNK + offset;
-                    for (column, values) in columns.iter().enumerate() {
-                        packed[column * 8..(column + 1) * 8]
-                            .copy_from_slice(&values.as_ref()[row].0.to_be_bytes());
-                    }
-                    if let Err(error) = stream.update(&packed[..columns.len() * 8]) {
-                        return Some((row, error));
-                    }
-                }
-                None
-            })
-            .reduce(
-                || None,
-                |left, right| match (left, right) {
-                    (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
-                    (left, right) => left.or(right),
-                },
-            );
+        let failure = self.digest_streams.absorb_v1::<PACKED_BYTES, C>(columns);
         if let Some((_, error)) = failure {
             return Err(map_transparent_error_v1(map_digest_stream_error_v1(error)));
         }
@@ -2267,7 +2255,7 @@ impl StreamingRowCommitmentV1 {
         let mut cut = retained_commitment::RetainedMerkleCutV1::new_v1(self.rows)?;
         let mut accumulator =
             StreamingMerkleAccumulatorV1::new(self.context, self.node_role, self.rows, &[])?;
-        streaming_commitment::finish_rows_retaining_v1(
+        streaming_commitment::finish_owned_rows_retaining_v1(
             &mut accumulator,
             &mut self.digest_streams,
             &mut cut,
@@ -2303,7 +2291,7 @@ impl StreamingRowCommitmentV1 {
             self.rows,
             &self.opening_indices,
         )?;
-        streaming_commitment::finish_rows_v1(&mut accumulator, &mut self.digest_streams)?;
+        streaming_commitment::finish_owned_rows_v1(&mut accumulator, &mut self.digest_streams)?;
         let commitment = accumulator.finish()?;
         Ok(StreamingRowCommitmentResultV1 {
             commitment,
@@ -2330,6 +2318,9 @@ pub struct StreamingTraceMaskSetV1 {
     lde_log2: u8,
     masks: Vec<ReplayableTraceMaskV1>,
 }
+#[path = "aggregate_stark/initial_evaluated_column.rs"]
+pub(crate) mod initial_evaluated_column;
+
 /// Owner of one secret-bearing field column that overwrites every cell on
 /// every return path.
 pub struct ZeroizingFieldColumnV1(Vec<F>);
@@ -2360,7 +2351,7 @@ impl ZeroizingFieldColumnV1 {
             )
         };
         let column = Self(fields);
-        if column.iter().any(|value| F::canonical(value.0).is_none()) {
+        if !canonical_field_column_v1(&column) {
             return Err(AggregateStarkErrorV1::NonCanonicalField);
         }
         Ok(column)
@@ -2398,6 +2389,33 @@ impl Drop for ZeroizingFieldColumnV1 {
 fn zeroize_field_column_v1(values: &mut [F]) {
     for value in values {
         value.zeroize_v1();
+    }
+}
+
+/// Validate disjoint borrowed tiles before any caller publishes field values.
+fn canonical_field_column_v1(values: &[F]) -> bool {
+    const TILE: usize = 1 << 14;
+    let valid = |tile: &[F]| tile.iter().all(|value| F::canonical(value.0).is_some());
+    // Full common-domain columns benefit from tiling; measured native-log19
+    // columns are faster on the original serial scan.
+    if values.len() >= 1 << 22 && rayon::current_num_threads() > 1 {
+        values.par_chunks(TILE).all(valid)
+    } else {
+        valid(values)
+    }
+}
+
+/// Release completed batches after their last successful use. Each original
+/// owner still erases itself serially; error and unwind paths schedule no work.
+/// No private allocation is added and the existing hashing pool is already live.
+fn drop_completed_field_columns_v1(columns: Vec<ZeroizingFieldColumnV1>) {
+    if columns.len() > 1
+        && columns.iter().any(|column| column.len() >= 1 << 16)
+        && rayon::current_num_threads() > 1
+    {
+        columns.into_par_iter().for_each(drop);
+    } else {
+        drop(columns);
     }
 }
 /// Owner of one secret-bearing quartic-extension column that overwrites every
@@ -2963,6 +2981,60 @@ pub fn streaming_composition_commitment_v1(
     chunks: &[Vec<E>],
     opening_indices: &[usize],
 ) -> Result<StreamingMerkleCommitmentV1, AggregateStarkErrorV1> {
+    composition_commitment_with_cut_v1(domains, lane, chunks, opening_indices, false, None)
+        .map(|result| result.0)
+}
+
+pub(crate) fn retain_composition_commitment_v1(
+    domains: &AggregateStarkDomainsV1,
+    lane: usize,
+    chunks: &[Vec<E>],
+) -> Result<
+    (
+        StreamingMerkleCommitmentV1,
+        Option<retained_scalar_commitment::RetainedScalarCutV1>,
+    ),
+    AggregateStarkErrorV1,
+> {
+    composition_commitment_with_cut_v1(domains, lane, chunks, &[], true, None)
+}
+
+pub(crate) fn open_retained_composition_v1(
+    domains: &AggregateStarkDomainsV1,
+    lane: usize,
+    chunks: &[Vec<E>],
+    opening_indices: &[usize],
+    expected: PrivacyOuterDigestV1,
+    cut: Option<&retained_scalar_commitment::RetainedScalarCutV1>,
+) -> Result<StreamingMerkleCommitmentV1, AggregateStarkErrorV1> {
+    composition_commitment_with_cut_v1(
+        domains,
+        lane,
+        chunks,
+        opening_indices,
+        false,
+        Some((cut, expected)),
+    )
+    .map(|result| result.0)
+}
+
+fn composition_commitment_with_cut_v1(
+    domains: &AggregateStarkDomainsV1,
+    lane: usize,
+    chunks: &[Vec<E>],
+    opening_indices: &[usize],
+    retain: bool,
+    replay: Option<(
+        Option<&retained_scalar_commitment::RetainedScalarCutV1>,
+        PrivacyOuterDigestV1,
+    )>,
+) -> Result<
+    (
+        StreamingMerkleCommitmentV1,
+        Option<retained_scalar_commitment::RetainedScalarCutV1>,
+    ),
+    AggregateStarkErrorV1,
+> {
     domains.validate()?;
     let rows = chunks
         .first()
@@ -2972,16 +3044,80 @@ pub fn streaming_composition_commitment_v1(
     if chunks.iter().any(|chunk| chunk.len() != rows) {
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
-    streaming_merkle_commitment_v1(
-        domains.digest_context,
-        domains.composition_node,
-        rows,
-        opening_indices,
-        (0..rows).map(|index| {
-            let values = chunks.iter().map(|chunk| chunk[index]).collect::<Vec<_>>();
-            composition_leaf_hash_unchecked_v1(domains, lane, index, &values)
-        }),
-    )
+    // Selected replay must not skip canonicality checks on unopened source cells.
+    if chunks
+        .par_iter()
+        .any(|chunk| chunk.par_iter().any(|value| !value.is_canonical()))
+    {
+        return Err(AggregateStarkErrorV1::NonCanonicalField);
+    }
+    let lane_bytes = u16::try_from(lane)
+        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
+        .to_be_bytes();
+    let width = u16::try_from(chunks.len())
+        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
+        .to_be_bytes();
+    let payload = chunks
+        .len()
+        .checked_mul(32)
+        .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+    let catalog = TransparentStarkDigestContextV1::catalog_v1();
+    let domain = domains
+        .digest_context
+        .domain_v1(
+            &catalog,
+            domains.composition_leaf,
+            b"composition-vector-leaf",
+            0,
+            0,
+            0,
+        )
+        .map_err(map_transparent_error_v1)?;
+    let prefix =
+        PrivacyOuterDomainPrefixV1::new(domain).ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+    let leaf = |index: usize| {
+        let mut stream = prefix
+            .last_field_stream_at_with_counter(
+                index as u64,
+                lane as u64,
+                &[&lane_bytes, &width],
+                payload,
+            )
+            .map_err(map_digest_stream_error_v1)
+            .map_err(map_transparent_error_v1)?;
+        for chunk in chunks {
+            let bytes = zeroize::Zeroizing::new(chunk[index].to_be_bytes());
+            stream
+                .update(&bytes[..])
+                .map_err(map_digest_stream_error_v1)
+                .map_err(map_transparent_error_v1)?;
+        }
+        stream
+            .finalize_in_place_v1()
+            .map_err(map_digest_stream_error_v1)
+            .map_err(map_transparent_error_v1)
+    };
+    if let Some((cut, expected)) = replay {
+        retained_scalar_commitment::open_v1(
+            domains.digest_context,
+            domains.composition_node,
+            rows,
+            opening_indices,
+            expected,
+            cut,
+            leaf,
+        )
+        .map(|commitment| (commitment, None))
+    } else {
+        retained_scalar_commitment::commit_v1(
+            domains.digest_context,
+            domains.composition_node,
+            rows,
+            opening_indices,
+            retain,
+            leaf,
+        )
+    }
 }
 fn composition_chunks_from_coefficients_v1(
     coefficients: &[E],
@@ -3775,27 +3911,101 @@ pub fn streaming_fri_commitment_v1(
     values: &[E],
     opening_indices: &[usize],
 ) -> Result<StreamingMerkleCommitmentV1, AggregateStarkErrorV1> {
+    fri_commitment_with_cut_v1(
+        domains,
+        commitment_layout,
+        lane,
+        round,
+        values,
+        opening_indices,
+        false,
+        None,
+    )
+    .map(|result| result.0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fri_commitment_with_cut_v1(
+    domains: &AggregateStarkDomainsV1,
+    commitment_layout: AggregateFriCommitmentLayoutV1,
+    lane: usize,
+    round: usize,
+    values: &[E],
+    opening_indices: &[usize],
+    retain: bool,
+    replay: Option<(
+        Option<&retained_scalar_commitment::RetainedScalarCutV1>,
+        PrivacyOuterDigestV1,
+    )>,
+) -> Result<
+    (
+        StreamingMerkleCommitmentV1,
+        Option<retained_scalar_commitment::RetainedScalarCutV1>,
+    ),
+    AggregateStarkErrorV1,
+> {
     domains.validate()?;
     let leaf_count = commitment_layout.leaf_count(values.len())?;
-    streaming_merkle_commitment_v1(
-        domains.digest_context,
-        domains.fri_node,
-        leaf_count,
-        opening_indices,
-        (0..leaf_count).map(|index| match commitment_layout {
-            AggregateFriCommitmentLayoutV1::Scalar => {
-                fri_leaf_hash_unchecked_v1(domains, lane, round, index, values[index])
-            }
-            AggregateFriCommitmentLayoutV1::Paired => fri_pair_leaf_hash_v1(
-                domains,
-                lane,
-                round,
-                index,
-                values[index],
-                values[index + leaf_count],
-            ),
-        }),
-    )
+    if values.par_iter().any(|value| !value.is_canonical()) {
+        return Err(AggregateStarkErrorV1::NonCanonicalField);
+    }
+    let lane_bytes = u16::try_from(lane)
+        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
+        .to_be_bytes();
+    let round_bytes = u16::try_from(round)
+        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
+        .to_be_bytes();
+    let phase: &[u8] = match commitment_layout {
+        AggregateFriCommitmentLayoutV1::Scalar => b"fri-layer-leaf",
+        AggregateFriCommitmentLayoutV1::Paired => b"fri-layer-pair-leaf",
+    };
+    let catalog = TransparentStarkDigestContextV1::catalog_v1();
+    let domain = domains
+        .digest_context
+        .domain_v1(&catalog, domains.fri_leaf, phase, round as u64, 0, 0)
+        .map_err(map_transparent_error_v1)?;
+    let prefix =
+        PrivacyOuterDomainPrefixV1::new(domain).ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+    let leaf = |index: usize| {
+        let mut bytes = zeroize::Zeroizing::new([0u8; 64]);
+        let low = zeroize::Zeroizing::new(values[index].to_be_bytes());
+        bytes[..32].copy_from_slice(&low[..]);
+        let length = if commitment_layout == AggregateFriCommitmentLayoutV1::Paired {
+            let high = zeroize::Zeroizing::new(values[index + leaf_count].to_be_bytes());
+            bytes[32..].copy_from_slice(&high[..]);
+            64
+        } else {
+            32
+        };
+        prefix
+            .hash_at_with_counter(
+                index as u64,
+                lane as u64,
+                &[&lane_bytes, &round_bytes, &bytes[..length]],
+            )
+            .ok_or(AggregateStarkErrorV1::InvalidLayout)
+    };
+    if let Some((cut, expected)) = replay {
+        retained_scalar_commitment::open_v1(
+            domains.digest_context,
+            domains.fri_node,
+            leaf_count,
+            opening_indices,
+            expected,
+            cut,
+            leaf,
+        )
+        .map(|commitment| (commitment, None))
+    } else {
+        retained_scalar_commitment::commit_v1(
+            domains.digest_context,
+            domains.fri_node,
+            leaf_count,
+            opening_indices,
+            retain,
+            leaf,
+        )
+    }
 }
 /// Absorb the complete relation domain and ordered group layout before roots.
 pub fn absorb_layout_v1(
@@ -5316,6 +5526,30 @@ pub struct AggregateStreamingFriLaneMaterialV1 {
     /// Exact terminal evaluations.
     pub(crate) terminal_values: Vec<E>,
 }
+/// Private scalar cuts retained alongside the unchanged public FRI material.
+pub(crate) struct AggregateRetainedStreamingFriLaneV1 {
+    pub(crate) material: AggregateStreamingFriLaneMaterialV1,
+    cuts: Vec<Option<retained_scalar_commitment::RetainedScalarCutV1>>,
+}
+impl AggregateRetainedStreamingFriLaneV1 {
+    pub(crate) fn cut_payload_bytes_v1(&self) -> Result<usize, AggregateStarkErrorV1> {
+        if self.cuts.capacity() != self.cuts.len() {
+            return Err(AggregateStarkErrorV1::InvalidProofShape);
+        }
+        let initial = self
+            .cuts
+            .capacity()
+            .checked_mul(core::mem::size_of::<
+                Option<retained_scalar_commitment::RetainedScalarCutV1>,
+            >())
+            .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+        self.cuts.iter().flatten().try_fold(initial, |total, cut| {
+            total
+                .checked_add(cut.allocated_payload_bytes_v1()?)
+                .ok_or(AggregateStarkErrorV1::InvalidLayout)
+        })
+    }
+}
 /// Post-query openings and frontiers for one streamed FRI lane.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AggregateStreamingFriLaneOpeningsV1 {
@@ -5334,6 +5568,46 @@ pub fn build_streaming_fri_lane_v1(
     base_values: Vec<E>,
     transcript: &mut TransparentTranscriptV1,
 ) -> Result<AggregateStreamingFriLaneMaterialV1, AggregateStarkErrorV1> {
+    build_streaming_fri_lane_with_cuts_v1(
+        parameters,
+        domains,
+        layout,
+        lane,
+        base_values,
+        transcript,
+        false,
+    )
+    .map(|retained| retained.material)
+}
+
+pub(crate) fn build_retained_streaming_fri_lane_v1(
+    parameters: AggregateStarkParametersV1,
+    domains: &AggregateStarkDomainsV1,
+    layout: &AggregateProofLayoutV1,
+    lane: usize,
+    base_values: Vec<E>,
+    transcript: &mut TransparentTranscriptV1,
+) -> Result<AggregateRetainedStreamingFriLaneV1, AggregateStarkErrorV1> {
+    build_streaming_fri_lane_with_cuts_v1(
+        parameters,
+        domains,
+        layout,
+        lane,
+        base_values,
+        transcript,
+        true,
+    )
+}
+
+fn build_streaming_fri_lane_with_cuts_v1(
+    parameters: AggregateStarkParametersV1,
+    domains: &AggregateStarkDomainsV1,
+    layout: &AggregateProofLayoutV1,
+    lane: usize,
+    base_values: Vec<E>,
+    transcript: &mut TransparentTranscriptV1,
+    retain: bool,
+) -> Result<AggregateRetainedStreamingFriLaneV1, AggregateStarkErrorV1> {
     let base_values = ZeroizingExtensionFieldColumnV1(base_values);
     layout.validate(parameters)?;
     domains.validate()?;
@@ -5341,6 +5615,14 @@ pub fn build_streaming_fri_lane_v1(
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
     let fri_rounds = layout.fri_rounds(parameters)?;
+    let mut cuts = Vec::new();
+    if retain {
+        cuts.try_reserve_exact(fri_rounds)
+            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+        if cuts.capacity() != fri_rounds {
+            return Err(AggregateStarkErrorV1::AllocationFailure);
+        }
+    }
     let mut roots = Vec::new();
     roots
         .try_reserve_exact(
@@ -5358,14 +5640,19 @@ pub fn build_streaming_fri_lane_v1(
     let mut domain_root =
         goldilocks_primitive_root_v1(layout.common_lde_log2).map_err(map_transparent_error_v1)?;
     for round in 0..fri_rounds {
-        let commitment = streaming_fri_commitment_v1(
+        let (commitment, cut) = fri_commitment_with_cut_v1(
             domains,
             parameters.fri_commitment_layout,
             lane,
             round,
             &current,
             &[],
+            retain,
+            None,
         )?;
+        if retain {
+            cuts.push(cut);
+        }
         absorb_fri_root_v1(transcript, domains, lane, round, &commitment.root)?;
         let beta = transcript
             .challenge_fp4(domains.fri_beta_label)
@@ -5401,10 +5688,13 @@ pub fn build_streaming_fri_lane_v1(
     )?;
     absorb_fri_root_v1(transcript, domains, lane, fri_rounds, &terminal.root)?;
     roots.push(terminal.root);
-    Ok(AggregateStreamingFriLaneMaterialV1 {
-        roots,
-        betas,
-        terminal_values: current.into_vec_v1(),
+    Ok(AggregateRetainedStreamingFriLaneV1 {
+        material: AggregateStreamingFriLaneMaterialV1 {
+            roots,
+            betas,
+            terminal_values: current.into_vec_v1(),
+        },
+        cuts,
     })
 }
 /// Replay a committed FRI lane after transcript queries are fixed, retaining
@@ -5418,6 +5708,50 @@ pub fn open_streaming_fri_lane_v1(
     material: &AggregateStreamingFriLaneMaterialV1,
     query_indices: &[usize],
 ) -> Result<AggregateStreamingFriLaneOpeningsV1, AggregateStarkErrorV1> {
+    open_streaming_fri_lane_with_cuts_v1(
+        parameters,
+        domains,
+        layout,
+        lane,
+        base_values,
+        material,
+        query_indices,
+        None,
+    )
+}
+
+pub(crate) fn open_retained_streaming_fri_lane_v1(
+    parameters: AggregateStarkParametersV1,
+    domains: &AggregateStarkDomainsV1,
+    layout: &AggregateProofLayoutV1,
+    lane: usize,
+    base_values: Vec<E>,
+    retained: &AggregateRetainedStreamingFriLaneV1,
+    query_indices: &[usize],
+) -> Result<AggregateStreamingFriLaneOpeningsV1, AggregateStarkErrorV1> {
+    open_streaming_fri_lane_with_cuts_v1(
+        parameters,
+        domains,
+        layout,
+        lane,
+        base_values,
+        &retained.material,
+        query_indices,
+        Some(&retained.cuts),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_streaming_fri_lane_with_cuts_v1(
+    parameters: AggregateStarkParametersV1,
+    domains: &AggregateStarkDomainsV1,
+    layout: &AggregateProofLayoutV1,
+    lane: usize,
+    base_values: Vec<E>,
+    material: &AggregateStreamingFriLaneMaterialV1,
+    query_indices: &[usize],
+    cuts: Option<&[Option<retained_scalar_commitment::RetainedScalarCutV1>]>,
+) -> Result<AggregateStreamingFriLaneOpeningsV1, AggregateStarkErrorV1> {
     let base_values = ZeroizingExtensionFieldColumnV1(base_values);
     layout.validate(parameters)?;
     domains.validate()?;
@@ -5425,6 +5759,7 @@ pub fn open_streaming_fri_lane_v1(
     if lane >= parameters.security_lanes
         || base_values.len() != layout.common_lde_size()
         || material.roots.len() != fri_rounds + 1
+        || cuts.is_some_and(|cuts| cuts.len() != fri_rounds)
         || material.betas.len() != fri_rounds
         || material.terminal_values.len() != parameters.terminal_size()?
         || query_indices.len() != parameters.query_count
@@ -5469,13 +5804,15 @@ pub fn open_streaming_fri_lane_v1(
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let commitment = streaming_fri_commitment_v1(
+        let (commitment, _) = fri_commitment_with_cut_v1(
             domains,
             parameters.fri_commitment_layout,
             lane,
             round,
             &current,
             &opening_indices,
+            false,
+            cuts.map(|cuts| (cuts[round].as_ref(), material.roots[round])),
         )?;
         if commitment.root != material.roots[round] {
             return Err(AggregateStarkErrorV1::InternalInvariant);
@@ -8059,7 +8396,7 @@ mod tests {
                     .unwrap();
                     // Internal corruption models an unexpected late hasher error.
                     // The public preflight succeeds; other row chunks may finish.
-                    actual.digest_streams[1025].update(&[0; 8]).unwrap();
+                    actual.digest_streams.corrupt_remaining_v1(1025, 8);
                     let columns = [vec![F(3); 2048], vec![F(5); 2048]];
                     assert!(actual.absorb_columns_v1(&columns).is_err());
                     assert!(actual.failed);

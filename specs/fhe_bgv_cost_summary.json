@@ -37,7 +37,7 @@
     "unit": "bits",
     "value": 295
    },
-   "profile_identity": "3ab33fd9d135717b5fb830fd7a5515c8a378e09496d9ea4c9560c4d3961bf1b0",
+   "profile_identity": "4cf0499f36a25168946861e6b79c12899cea0b95d5c43c310b3b70fa88e2d19e",
    "scalar_slots": {
     "class": "projection",
     "unit": "count",
@@ -121,12 +121,12 @@
     "ciphertext_frame_bytes_lowest_level": {
      "class": "projection",
      "unit": "bytes",
-     "value": 262220
+     "value": 204876
     },
     "ciphertext_frame_bytes_top_level": {
      "class": "projection",
      "unit": "bytes",
-     "value": 1572940
+     "value": 1228876
     },
     "evaluation_keys_frame_bytes": {
      "class": "projection",
@@ -256,7 +256,7 @@
     "unit": "bits",
     "value": 1079
    },
-   "profile_identity": "a218a403aa48ae5b17e8a22e2f0bb68698e549ca58cdadc3c40352f198f7b20e",
+   "profile_identity": "f3f7fbc6865c0458a5a61564646b4466f5e81073dd3af03d0933e4ff3ac17d86",
    "scalar_slots": {
     "class": "projection",
     "unit": "count",
@@ -340,12 +340,12 @@
     "ciphertext_frame_bytes_lowest_level": {
      "class": "projection",
      "unit": "bytes",
-     "value": 1048748
+     "value": 819372
     },
     "ciphertext_frame_bytes_top_level": {
      "class": "projection",
      "unit": "bytes",
-     "value": 23068844
+     "value": 18022572
     },
     "evaluation_keys_frame_bytes": {
      "class": "projection",
@@ -475,7 +475,7 @@
     "unit": "bits",
     "value": 1569
    },
-   "profile_identity": "87ee13ea7b82f543bf9bdf1b2b90d4180b64338fb76878d3c49fb5d6ae3c4a7e",
+   "profile_identity": "63b39a10ee05c7344cb7fe3d136c83811c0821d6613ee8cae4e00c475c48b798",
    "scalar_slots": {
     "class": "projection",
     "unit": "count",
@@ -559,12 +559,12 @@
     "ciphertext_frame_bytes_lowest_level": {
      "class": "projection",
      "unit": "bytes",
-     "value": 1048812
+     "value": 819436
     },
     "ciphertext_frame_bytes_top_level": {
      "class": "projection",
      "unit": "bytes",
-     "value": 33554668
+     "value": 26214636
     },
     "evaluation_keys_frame_bytes": {
      "class": "projection",
@@ -1369,12 +1369,12 @@
     "ciphertext_frame_bytes_lowest_level": {
      "class": "projection",
      "unit": "bytes",
-     "value": 262260
+     "value": 204916
     },
     "ciphertext_frame_bytes_top_level": {
      "class": "projection",
      "unit": "bytes",
-     "value": 3407988
+     "value": 2662516
     },
     "evaluation_keys_frame_bytes": {
      "class": "projection",
@@ -1695,12 +1695,12 @@
     "ciphertext_frame_bytes_lowest_level": {
      "class": "projection",
      "unit": "bytes",
-     "value": 1048804
+     "value": 983268
     },
     "ciphertext_frame_bytes_top_level": {
      "class": "projection",
      "unit": "bytes",
-     "value": 26214628
+     "value": 24576228
     },
     "evaluation_keys_frame_bytes": {
      "class": "projection",
@@ -2026,12 +2026,12 @@
     "ciphertext_frame_bytes_lowest_level": {
      "class": "projection",
      "unit": "bytes",
-     "value": 1048748
+     "value": 819372
     },
     "ciphertext_frame_bytes_top_level": {
      "class": "projection",
      "unit": "bytes",
-     "value": 23068844
+     "value": 18022572
     },
     "evaluation_keys_frame_bytes": {
      "class": "projection",
@@ -2126,6 +2126,7 @@
   }
  },
  "measurement_notes": [
+  "The sixteen pinned October5 harness manifests listed in ARCHIVED_WORD_FRAME_RUNS recorded the retired u64-residue byte layout. Their runs[*].sizes and measured encoding comparison remain historical values tied to the recorded source/artifact; current candidate and measured-profile size projections use the sole prime-width packed ciphertext layout.",
   "Single-threaded scalar reference path; no accelerated kernel exists for 50 to 60-bit moduli.",
   "Raw harness runs stay under the ignored dist/zk-resource-harness/; only this summary is tracked.",
   "The host ran other builds during the runs; the recorded system load is part of each run. Each configuration ran several times; run_spread gives the fastest and the slowest, and every derived time uses the run with the median evaluation time.",
@@ -2754,7 +2755,7 @@
    "ram_lfe.ciphertext_bytes": {
     "class": "projection",
     "unit": "bytes",
-    "value": 1572940
+    "value": 1228876
    },
    "ram_lfe.evaluation_key_bytes": {
     "class": "projection",
@@ -2843,7 +2844,7 @@
    "ram_lfe.ciphertext_bytes": {
     "class": "projection",
     "unit": "bytes",
-    "value": 23068844
+    "value": 18022572
    },
    "ram_lfe.evaluation_key_bytes": {
     "class": "projection",
@@ -2932,7 +2933,7 @@
    "ram_lfe.ciphertext_bytes": {
     "class": "projection",
     "unit": "bytes",
-    "value": 33554668
+    "value": 26214636
    },
    "ram_lfe.evaluation_key_bytes": {
     "class": "projection",

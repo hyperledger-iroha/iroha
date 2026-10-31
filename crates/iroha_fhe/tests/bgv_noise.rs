@@ -51,7 +51,7 @@ fn oracle_of(profile: &BgvProfile) -> Oracle {
     Oracle {
         log_degree: parameters.log_degree,
         degree: parameters.degree(),
-        t: parameters.plaintext_modulus,
+        t: profile.master_plaintext_modulus(),
         main: parameters.main_primes.clone(),
         main_roots: parameters.main_roots.clone(),
         special: parameters.special_primes.clone(),
@@ -64,8 +64,15 @@ fn oracle_of(profile: &BgvProfile) -> Oracle {
 fn profile(shape: (u32, u64, (u32, usize), (u32, usize), usize)) -> BgvProfile {
     let (log_degree, plaintext_modulus, main, special, digit_primes) = shape;
     BgvProfile::new(
-        BgvParameters::derive(log_degree, plaintext_modulus, main, special, digit_primes)
-            .expect("parameters"),
+        BgvParameters::derive(
+            log_degree,
+            plaintext_modulus,
+            1,
+            main,
+            special,
+            digit_primes,
+        )
+        .expect("parameters"),
     )
     .expect("profile")
 }
@@ -136,10 +143,11 @@ fn worst_case_coins_attain_the_fresh_bound_exactly_and_still_decrypt() {
         let public =
             fixtures::public_key_from_coins(&profile, &secret, &mask, &errors).expect("public");
         // The largest centered plaintext coefficient in position zero.
-        let half = (profile.plaintext_modulus() - 1) / 2;
+        let half = (profile.master_plaintext_modulus() - 1) / 2;
         let mut message = vec![3_u64; degree];
         message[0] = half;
-        let plaintext = Plaintext::new(&profile, message.clone()).expect("plaintext");
+        let plaintext = Plaintext::new(&profile, profile.master_plaintext(), message.clone())
+            .expect("plaintext");
         let ciphertext =
             fixtures::encrypt_from_coins(&profile, &public, &plaintext, &aligned, &errors, &errors)
                 .expect("ciphertext");
@@ -163,7 +171,8 @@ fn worst_case_coins_attain_the_fresh_bound_exactly_and_still_decrypt() {
         let negative_public =
             fixtures::public_key_from_coins(&profile, &secret, &mask, &negated).expect("public");
         message[0] = half + 1;
-        let plaintext = Plaintext::new(&profile, message.clone()).expect("plaintext");
+        let plaintext = Plaintext::new(&profile, profile.master_plaintext(), message.clone())
+            .expect("plaintext");
         let ciphertext = fixtures::encrypt_from_coins(
             &profile,
             &negative_public,
@@ -256,6 +265,7 @@ fn noise_equal_to_the_capacity_decrypts_and_one_step_beyond_does_not() {
                 .collect();
             let at_capacity = Ciphertext::from_canonical_words(
                 &profile,
+                profile.master_plaintext(),
                 level,
                 2,
                 &canonical,
@@ -275,6 +285,7 @@ fn noise_equal_to_the_capacity_decrypts_and_one_step_beyond_does_not() {
             assert_eq!(
                 Ciphertext::from_canonical_words(
                     &profile,
+                    profile.master_plaintext(),
                     level,
                     2,
                     &canonical,
@@ -290,6 +301,7 @@ fn noise_equal_to_the_capacity_decrypts_and_one_step_beyond_does_not() {
                 ciphertext_words_with_inner(&oracle, &coefficients, level, &value, &mut generator);
             let beyond = Ciphertext::from_canonical_words(
                 &profile,
+                profile.master_plaintext(),
                 level,
                 2,
                 &canonical,
@@ -328,6 +340,7 @@ fn a_sum_that_lands_exactly_on_the_capacity_is_admitted_and_decrypts() {
     let build = |value: &[BigInt], bound: &BigInt, generator: &mut Generator| {
         Ciphertext::from_canonical_words(
             &profile,
+            profile.master_plaintext(),
             level,
             2,
             &ciphertext_words_with_inner(&oracle, &coefficients, level, value, generator),
@@ -418,6 +431,7 @@ fn the_modulus_switch_bound_is_attained_within_one_unit() {
         assert!(&declared - &noise_before < dropped);
         let ciphertext = Ciphertext::from_canonical_words(
             &profile,
+            profile.master_plaintext(),
             level,
             2,
             &canonical,
@@ -522,7 +536,12 @@ impl Sequence<'_> {
             // Any polynomial, with the worst-case bound.
             0 => {
                 let values: Vec<u64> = (0..degree).map(|_| self.generator.next() % t).collect();
-                let plaintext = Plaintext::new(self.profile, values.clone()).expect("plaintext");
+                let plaintext = Plaintext::new(
+                    self.profile,
+                    self.profile.master_plaintext(),
+                    values.clone(),
+                )
+                .expect("plaintext");
                 let bound = plaintext.bound();
                 (
                     plaintext,
@@ -533,7 +552,9 @@ impl Sequence<'_> {
             // A constant, with the bound of every constant.
             1 => {
                 let value = self.generator.next() % t;
-                let plaintext = Plaintext::constant(self.profile, value).expect("plaintext");
+                let plaintext =
+                    Plaintext::constant(self.profile, self.profile.master_plaintext(), value)
+                        .expect("plaintext");
                 let mut values = vec![BigInt::from(0); degree];
                 values[0] = big(value);
                 let bound = plaintext.bound();
@@ -556,8 +577,13 @@ impl Sequence<'_> {
                     })
                     .sum();
                 let bound = PlaintextBound { linf: 3, l1 };
-                let plaintext = Plaintext::with_public_bound(self.profile, values.clone(), bound)
-                    .expect("plaintext");
+                let plaintext = Plaintext::with_public_bound(
+                    self.profile,
+                    self.profile.master_plaintext(),
+                    values.clone(),
+                    bound,
+                )
+                .expect("plaintext");
                 (
                     plaintext,
                     values.iter().map(|&value| big(value)).collect(),
@@ -750,7 +776,8 @@ fn run_random_sequences(
             let values: Vec<u64> = (0..profile.degree())
                 .map(|_| sequence.generator.next() % oracle.t)
                 .collect();
-            let plaintext = Plaintext::new(&profile, values.clone()).expect("plaintext");
+            let plaintext = Plaintext::new(&profile, profile.master_plaintext(), values.clone())
+                .expect("plaintext");
             let result = fixtures::encrypt(&profile, &key_set.public, &plaintext, &mut entropy);
             let tracked = sequence
                 .settle(

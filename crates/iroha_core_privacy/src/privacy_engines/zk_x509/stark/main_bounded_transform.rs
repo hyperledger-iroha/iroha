@@ -1,10 +1,13 @@
-//! Admitted clearing word staging for fixed, private quotient and native replay transforms.
+//! Admitted staging for fixed, private quotient and native replay transforms.
 //!
-//! Existing F matrices keep their allocations. A single bounded word batch and
-//! the complete Metal allowance fit outside all arithmetic, source, replay/cache,
+//! Existing F matrices keep their allocations. Prepared staging and the complete
+//! Metal allowance fit outside all arithmetic, source, replay/cache,
 //! scratch and runtime reservations. Private coefficient folding precedes the
-//! forward-only adapter; native replay uses inverse-only before masking, and
-//! the fixed path also supports inverse/shift recovery.
+//! prepared forward adapter; native replay publishes its prepared inverse directly
+//! into existing field slices before masking. Only forward publication may group
+//! sixteen already allocated columns under its separate full payload charge.
+//! Fixed transitions use the same prepared forward limit; their recovery inverses
+//! and native replay retain the original eight-column policy.
 
 use super::super::super::private_table::{PrivateTableV1, zeroize_words_v1};
 use super::*;
@@ -40,6 +43,194 @@ pub(super) const SHARED_POWERS_ALLOWANCE_V1: usize = 2
 // The measured registered log5 domain regressed for both widths. Retain the
 // original arithmetic there; the next registered native domain is public log8.
 const SHARED_POWERS_MIN_ROWS_V1: usize = 1 << 8;
+// Independent public row tiles expose parallelism beyond the eight-column cap.
+// No second matrix, work queue of private values, or parallel reduction exists.
+const HOST_TILE_ROWS_V1: usize = 1 << 14;
+const HOST_PARALLEL_ROWS_V1: usize = 1 << 16;
+
+// Only an isolated diagnostic can select the original serial scan/copy and
+// column-parallel scaling. The ordinary test and production route is unchanged.
+#[cfg(test)]
+thread_local! {
+    static HOST_TILES_OVERRIDE_V1: core::cell::Cell<Option<bool>> = const {
+        core::cell::Cell::new(None)
+    };
+    static FORWARD_GROUP_LIMIT_OVERRIDE_V1: core::cell::Cell<Option<usize>> = const {
+        core::cell::Cell::new(None)
+    };
+}
+
+#[cfg(test)]
+pub(super) fn with_forward_group_limit_for_testing_v1<T>(
+    limit: usize,
+    operation: impl FnOnce() -> T,
+) -> T {
+    assert!([8, 16].contains(&limit));
+    struct Restore(Option<usize>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FORWARD_GROUP_LIMIT_OVERRIDE_V1.with(|value| value.set(self.0));
+        }
+    }
+    let _restore =
+        Restore(FORWARD_GROUP_LIMIT_OVERRIDE_V1.with(|value| value.replace(Some(limit))));
+    operation()
+}
+
+fn forward_group_limit_v1() -> usize {
+    #[cfg(test)]
+    if let Some(limit) = FORWARD_GROUP_LIMIT_OVERRIDE_V1.with(|value| value.get()) {
+        return limit;
+    }
+    // Complete sixteen-column forward cycles passed parity and beat two
+    // eight-column dispatches. Admission still charges their full shared
+    // backing and metadata; source replay and native inverse widths stay eight.
+    fastpq_prover::goldilocks_transform::MAX_GOLDILOCKS_PREPARED_FORWARD_COLUMNS_V1
+}
+
+#[cfg(test)]
+fn with_host_tiles_for_testing_v1<T>(enabled: bool, operation: impl FnOnce() -> T) -> T {
+    struct Restore(Option<bool>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            HOST_TILES_OVERRIDE_V1.with(|value| value.set(self.0));
+        }
+    }
+    let _restore = Restore(HOST_TILES_OVERRIDE_V1.with(|value| value.replace(Some(enabled))));
+    operation()
+}
+
+fn use_host_tiles_v1(rows: usize) -> bool {
+    #[cfg(test)]
+    if HOST_TILES_OVERRIDE_V1.with(|value| value.get()) == Some(false) {
+        return false;
+    }
+    rows >= HOST_PARALLEL_ROWS_V1 && rayon::current_num_threads() > 1
+}
+
+fn canonical_field_columns_v1(columns: &[Vec<F>]) -> bool {
+    if use_host_tiles_v1(columns.first().map_or(0, Vec::len)) {
+        columns.par_iter().all(|column| {
+            column
+                .par_chunks(HOST_TILE_ROWS_V1)
+                .all(|tile| tile.iter().all(|value| F::canonical(value.0).is_some()))
+        })
+    } else {
+        columns
+            .iter()
+            .flatten()
+            .all(|value| F::canonical(value.0).is_some())
+    }
+}
+
+fn canonical_word_columns_v1(columns: &[Vec<u64>]) -> bool {
+    if use_host_tiles_v1(columns.first().map_or(0, Vec::len)) {
+        columns.par_iter().all(|column| {
+            column
+                .par_chunks(HOST_TILE_ROWS_V1)
+                .all(|tile| tile.iter().all(|&word| F::canonical(word).is_some()))
+        })
+    } else {
+        columns
+            .iter()
+            .flatten()
+            .all(|&word| F::canonical(word).is_some())
+    }
+}
+
+fn copy_fields_to_words_v1(words: &mut [Vec<u64>], fields: &[Vec<F>]) {
+    let copy = |target: &mut [u64], source: &[F]| {
+        for (target, value) in target.iter_mut().zip(source) {
+            *target = value.0;
+        }
+    };
+    if use_host_tiles_v1(words.first().map_or(0, Vec::len)) {
+        words
+            .par_iter_mut()
+            .zip(fields.par_iter())
+            .for_each(|(target, source)| {
+                target
+                    .par_chunks_mut(HOST_TILE_ROWS_V1)
+                    .zip(source.par_chunks(HOST_TILE_ROWS_V1))
+                    .for_each(|(target, source)| copy(target, source));
+            });
+    } else {
+        for (target, source) in words.iter_mut().zip(fields) {
+            copy(target, source);
+        }
+    }
+}
+
+fn copy_words_to_fields_v1(fields: &mut [Vec<F>], words: &[Vec<u64>]) {
+    let copy = |target: &mut [F], source: &[u64]| {
+        for (target, &word) in target.iter_mut().zip(source) {
+            *target = F(word);
+        }
+    };
+    if use_host_tiles_v1(words.first().map_or(0, Vec::len)) {
+        fields
+            .par_iter_mut()
+            .zip(words.par_iter())
+            .for_each(|(target, source)| {
+                target
+                    .par_chunks_mut(HOST_TILE_ROWS_V1)
+                    .zip(source.par_chunks(HOST_TILE_ROWS_V1))
+                    .for_each(|(target, source)| copy(target, source));
+            });
+    } else {
+        for (target, source) in fields.iter_mut().zip(words) {
+            copy(target, source);
+        }
+    }
+}
+
+fn scale_word_columns_v1(words: &mut [Vec<u64>], diagonal: F) {
+    if diagonal == F::ONE {
+        return;
+    }
+    let scale = |first: usize, values: &mut [u64]| {
+        let mut power = diagonal.pow(first as u128);
+        for word in values {
+            *word = F(*word).mul(power).0;
+            power = power.mul(diagonal);
+        }
+    };
+    if use_host_tiles_v1(words.first().map_or(0, Vec::len)) {
+        words.par_iter_mut().for_each(|column| {
+            column
+                .par_chunks_mut(HOST_TILE_ROWS_V1)
+                .enumerate()
+                .for_each(|(tile, values)| scale(tile * HOST_TILE_ROWS_V1, values));
+        });
+    } else {
+        words.par_iter_mut().for_each(|column| scale(0, column));
+    }
+}
+
+/// Scale disjoint field tiles in their existing allocations. Each tile starts
+/// at the exact public exponent, so worker scheduling cannot change a value.
+fn scale_field_columns_v1(columns: &mut [Vec<F>], diagonal: F) {
+    if diagonal == F::ONE {
+        return;
+    }
+    let scale = |first: usize, values: &mut [F]| {
+        let mut power = diagonal.pow(first as u128);
+        for value in values {
+            *value = value.mul(power);
+            power = power.mul(diagonal);
+        }
+    };
+    if use_host_tiles_v1(columns.first().map_or(0, Vec::len)) {
+        columns.par_iter_mut().for_each(|column| {
+            column
+                .par_chunks_mut(HOST_TILE_ROWS_V1)
+                .enumerate()
+                .for_each(|(tile, values)| scale(tile * HOST_TILE_ROWS_V1, values));
+        });
+    } else {
+        columns.par_iter_mut().for_each(|column| scale(0, column));
+    }
+}
 
 impl MainBoundedTransformPolicyV1 {
     pub(super) const fn cpu_v1() -> Self {
@@ -128,6 +319,7 @@ impl MainBoundedTransformPolicyV1 {
                     [&[F]; aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1],
                 >())
             })
+            .and_then(|n| n.checked_add(super::main_quotient_cache::GROUPING_METADATA_BYTES_V1))
             .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
         Ok(Self {
             available: self
@@ -178,6 +370,32 @@ impl MainBoundedTransformPolicyV1 {
             .into_iter()
             .find(|&columns| required_v1(rows, columns).is_ok_and(|bytes| bytes <= self.available))
             .unwrap_or(0)
+    }
+
+    /// Wider forward staging spends only the existing public residual allowance.
+    /// Native source batches and ordinary/inverse transform limits remain eight.
+    pub(super) fn forward_columns_v1(self, rows: usize) -> usize {
+        if self.backend != Some(Backend::Metal) {
+            return 0;
+        }
+        [16, 8, 4, 2, 1]
+            .into_iter()
+            .filter(|&columns| columns <= forward_group_limit_v1())
+            .find(|&columns| {
+                super::main_native_transform::required_forward_payload_v1(rows, columns)
+                    .is_ok_and(|bytes| bytes <= self.available)
+            })
+            .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_forward_test_v1(rows: usize, columns: usize) -> Self {
+        Self {
+            available: super::main_native_transform::required_forward_payload_v1(rows, columns)
+                .unwrap(),
+            backend: Some(Backend::Metal),
+            public_powers_reserved: false,
+        }
     }
 
     /// Use the separately reserved public allowance, never private residual slack.
@@ -240,7 +458,8 @@ impl MainBoundedTransformPolicyV1 {
         Ok((Some(forward), Some(inverse)))
     }
 
-    /// Apply the fixed-coset inverse/diagonal/forward transition with shared staging.
+    /// Preserve the original word transition only as a test oracle/fault seam.
+    #[cfg(test)]
     pub(super) fn apply_with_v1(
         self,
         columns: &mut [Vec<F>],
@@ -262,8 +481,54 @@ impl MainBoundedTransformPolicyV1 {
         )
     }
 
+    /// Transform the unpublished fixed owner without a second word matrix.
+    /// Recovery retains its eight-column limit; the final forward group may
+    /// contain sixteen already charged output columns. Each prepared token is
+    /// consumed and erased before the next stage, so staging allowances do not
+    /// overlap. A failed stage is terminal for the enclosing fixed owner.
+    pub(super) fn apply_exact_v1(
+        self,
+        columns: &mut [Vec<F>],
+        root: F,
+        diagonal: F,
+        recovery: bool,
+        mut uncertain: impl FnMut() -> bool,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        check_completion_v1(uncertain())?;
+        validate_private_columns_with_limit_v1(
+            columns,
+            root,
+            fastpq_prover::goldilocks_transform::MAX_GOLDILOCKS_PREPARED_FORWARD_COLUMNS_V1,
+        )?;
+        if F::canonical(diagonal.0).is_none() || diagonal == F::ZERO {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        if recovery {
+            for batch in columns.chunks_mut(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
+                self.exact_for_use_v1(
+                    batch,
+                    root,
+                    Direction::Inverse,
+                    TransformUseV1::Fixed,
+                    &mut uncertain,
+                )?;
+            }
+        }
+        check_completion_v1(uncertain())?;
+        scale_field_columns_v1(columns, diagonal);
+        self.exact_for_use_v1(
+            columns,
+            root,
+            Direction::Forward,
+            TransformUseV1::Fixed,
+            &mut uncertain,
+        )?;
+        check_completion_v1(uncertain())
+    }
+
     /// Complete forward transforms of already shifted/folded private columns.
     /// CPU fallback is deterministic and may not bypass quarantined completion.
+    #[cfg(test)]
     pub(super) fn forward_with_v1(
         self,
         columns: &mut [Vec<F>],
@@ -283,6 +548,7 @@ impl MainBoundedTransformPolicyV1 {
 
     /// Interpolate native evaluations before original masks are applied.
     /// This is inverse-only: no diagonal or subsequent forward pass occurs.
+    #[cfg(test)]
     pub(super) fn inverse_with_v1(
         self,
         columns: &mut [Vec<F>],
@@ -300,6 +566,156 @@ impl MainBoundedTransformPolicyV1 {
         )
     }
 
+    /// Native interpolation uses one closed production transaction. Existing
+    /// word callbacks are available only through the test injection adapter.
+    pub(super) fn inverse_native_with_v1(
+        self,
+        columns: &mut [Vec<F>],
+        root: F,
+        transform: &mut impl super::main_native_transform::MainNativeTransformV1,
+        mut uncertain: impl FnMut() -> bool,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        transform.inverse_v1(self, columns, root, &mut uncertain)
+    }
+
+    pub(super) fn inverse_native_exact_v1(
+        self,
+        columns: &mut [Vec<F>],
+        root: F,
+        uncertain: impl FnMut() -> bool,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        self.private_exact_v1(columns, root, Direction::Inverse, uncertain)
+    }
+
+    /// Publish a complete forward group directly into its final field allocations.
+    pub(super) fn forward_exact_v1(
+        self,
+        columns: &mut [Vec<F>],
+        root: F,
+        mut uncertain: impl FnMut() -> bool,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        self.private_exact_v1(columns, root, Direction::Forward, &mut uncertain)?;
+        // Preserve the old forward adapter's final completion refusal. Its
+        // enclosing quotient owner clears the entire matrix on any error.
+        check_completion_v1(uncertain())
+    }
+
+    fn private_exact_v1(
+        self,
+        columns: &mut [Vec<F>],
+        root: F,
+        direction: Direction,
+        uncertain: impl FnMut() -> bool,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        let usage = if direction == Direction::Forward {
+            TransformUseV1::PrivateQuotient
+        } else {
+            TransformUseV1::PrivateNativeReplay
+        };
+        self.exact_for_use_v1(columns, root, direction, usage, uncertain)
+    }
+
+    fn exact_for_use_v1(
+        self,
+        columns: &mut [Vec<F>],
+        root: F,
+        direction: Direction,
+        usage: TransformUseV1,
+        mut uncertain: impl FnMut() -> bool,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        check_completion_v1(uncertain())?;
+        let forward = direction == Direction::Forward;
+        let maximum = if forward {
+            fastpq_prover::goldilocks_transform::MAX_GOLDILOCKS_PREPARED_FORWARD_COLUMNS_V1
+        } else {
+            aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+        };
+        let rows = validate_private_columns_with_limit_v1(columns, root, maximum)?;
+        let width = if forward {
+            self.forward_columns_v1(rows)
+        } else {
+            self.columns_v1(rows)
+        };
+        if width == 0 {
+            return self.private_cpu_v1(columns, root, direction, usage, &mut uncertain);
+        }
+        for batch in columns.chunks_mut(width) {
+            check_completion_v1(uncertain())?;
+            let prepared = if forward {
+                super::main_native_transform::prepare_forward_and_publish_v1(
+                    batch,
+                    root,
+                    self.available,
+                    &mut uncertain,
+                )
+            } else {
+                super::main_native_transform::prepare_and_publish_v1(
+                    batch,
+                    root,
+                    self.available,
+                    &mut uncertain,
+                )
+            }?;
+            match prepared {
+                super::main_native_transform::MainNativePreparedV1::Published =>
+                {
+                    #[cfg(test)]
+                    match usage {
+                        TransformUseV1::Fixed => {
+                            super::super::super::prover_observation::completed_fixed_backend_v1(
+                                true,
+                                direction == Direction::Inverse,
+                                batch.len(),
+                            );
+                        }
+                        TransformUseV1::PrivateQuotient => {
+                            super::super::super::prover_observation::completed_quotient_backend_v1(
+                                true,
+                                batch.len(),
+                            );
+                        }
+                        TransformUseV1::PrivateNativeReplay => {
+                            super::super::super::prover_observation::completed_native_replay_backend_v1(
+                                true,
+                                batch.len(),
+                            );
+                        }
+                    }
+                }
+                super::main_native_transform::MainNativePreparedV1::Cpu => {
+                    self.private_cpu_v1(batch, root, direction, usage, &mut uncertain)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn private_cpu_v1(
+        self,
+        columns: &mut [Vec<F>],
+        root: F,
+        direction: Direction,
+        usage: TransformUseV1,
+        uncertain: &mut impl FnMut() -> bool,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        let cpu = Self {
+            backend: None,
+            ..self
+        };
+        // CPU arithmetic keeps its original bounded eight-column work groups.
+        for batch in columns.chunks_mut(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
+            cpu.private_with_v1(
+                batch,
+                root,
+                direction,
+                usage,
+                |_, _, _| Err(TransformError::DeviceUnavailable),
+                &mut *uncertain,
+            )?;
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn private_with_v1(
         self,
@@ -311,23 +727,7 @@ impl MainBoundedTransformPolicyV1 {
         mut uncertain: impl FnMut() -> bool,
     ) -> Result<(), ZkX509StarkErrorV1> {
         check_completion_v1(uncertain())?;
-        let rows = columns.first().map_or(0, Vec::len);
-        if columns.is_empty()
-            || columns.len() > aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1
-            || rows < 2
-            || !rows.is_power_of_two()
-            || rows > 1 << main_quotient_stripes::MAIN_QUOTIENT_STRIPE_LOG2_V1
-            || columns.iter().any(|column| column.len() != rows)
-            || columns
-                .iter()
-                .flatten()
-                .any(|value| F::canonical(value.0).is_none())
-            || F::canonical(root.0).is_none()
-            || root.pow(rows as u128) != F::ONE
-            || root.pow((rows / 2) as u128) == F::ONE
-        {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
+        let rows = validate_private_columns_v1(columns, root)?;
         let width = self.columns_v1(rows);
         if width == 0 {
             // Table selection uses only the public domain and pre-reserved
@@ -373,7 +773,13 @@ impl MainBoundedTransformPolicyV1 {
                         columns.len(),
                     )
                 }
-                TransformUseV1::Fixed => unreachable!("fixed transitions use the fixed adapter"),
+                TransformUseV1::Fixed => {
+                    super::super::super::prover_observation::completed_fixed_backend_v1(
+                        false,
+                        direction == Direction::Inverse,
+                        columns.len(),
+                    )
+                }
             }
         } else {
             for batch in columns.chunks_mut(width) {
@@ -409,10 +815,7 @@ impl MainBoundedTransformPolicyV1 {
         if columns.is_empty()
             || columns.len() > self.columns_v1(rows)
             || columns.iter().any(|column| column.len() != rows)
-            || columns
-                .iter()
-                .flatten()
-                .any(|value| F::canonical(value.0).is_none())
+            || !canonical_field_columns_v1(columns)
             || F::canonical(diagonal.0).is_none()
             || diagonal == F::ZERO
         {
@@ -424,11 +827,7 @@ impl MainBoundedTransformPolicyV1 {
                     .try_reserve_exact(count)
                     .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)
             })?;
-        for (target, source) in words.iter_mut().zip(columns.iter()) {
-            for (target, value) in target.iter_mut().zip(source) {
-                *target = value.0;
-            }
-        }
+        copy_fields_to_words_v1(&mut words, columns);
         if recovery {
             checked_transform_v1(
                 &mut words,
@@ -439,18 +838,9 @@ impl MainBoundedTransformPolicyV1 {
                 &mut uncertain,
             )?;
         }
-        // Independent columns retain the original CPU path's parallelism;
-        // no reduction order or additional field matrix is introduced.
-        if diagonal != F::ONE {
-            words.par_iter_mut().for_each(|column| {
-                let mut power = F::ONE;
-                for word in column {
-                    // Input copy and every completed transform validate all words.
-                    *word = F(*word).mul(power).0;
-                    power = power.mul(diagonal);
-                }
-            });
-        }
+        // Every public tile starts at its exact power. Input copy and every
+        // completed transform validate all words before this arithmetic.
+        scale_word_columns_v1(&mut words, diagonal);
         checked_transform_v1(
             &mut words,
             root,
@@ -461,13 +851,39 @@ impl MainBoundedTransformPolicyV1 {
         )?;
         // checked_transform_v1 validated the entire returned batch before
         // this copy into existing F allocations; no second field batch lives.
-        for (target, source) in columns.iter_mut().zip(words.iter()) {
-            for (target, word) in target.iter_mut().zip(source) {
-                *target = F(*word);
-            }
-        }
+        copy_words_to_fields_v1(columns, &words);
         Ok(())
     }
+}
+
+fn validate_private_columns_v1(columns: &[Vec<F>], root: F) -> Result<usize, ZkX509StarkErrorV1> {
+    validate_private_columns_with_limit_v1(
+        columns,
+        root,
+        aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
+    )
+}
+
+fn validate_private_columns_with_limit_v1(
+    columns: &[Vec<F>],
+    root: F,
+    maximum: usize,
+) -> Result<usize, ZkX509StarkErrorV1> {
+    let rows = columns.first().map_or(0, Vec::len);
+    if columns.is_empty()
+        || columns.len() > maximum
+        || rows < 2
+        || !rows.is_power_of_two()
+        || rows > 1 << main_quotient_stripes::MAIN_QUOTIENT_STRIPE_LOG2_V1
+        || columns.iter().any(|column| column.len() != rows)
+        || !canonical_field_columns_v1(columns)
+        || F::canonical(root.0).is_none()
+        || root.pow(rows as u128) != F::ONE
+        || root.pow((rows / 2) as u128) == F::ONE
+    {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    Ok(rows)
 }
 
 pub(super) fn check_completion_v1(uncertain: bool) -> Result<(), ZkX509StarkErrorV1> {
@@ -500,7 +916,9 @@ fn checked_transform_v1(
     check_completion_v1(uncertain())?;
     let backend = result.map_err(|error| match error {
         TransformError::CompletionUncertain => ZkX509StarkErrorV1::AcceleratorCompletionUncertain,
-        TransformError::NonCanonicalInput => ZkX509StarkErrorV1::NonCanonicalField,
+        TransformError::NonCanonicalInput | TransformError::NonCanonicalOutput => {
+            ZkX509StarkErrorV1::NonCanonicalField
+        }
         _ => ZkX509StarkErrorV1::ProfileMismatch,
     })?;
     if backend == Backend::Cuda
@@ -510,11 +928,7 @@ fn checked_transform_v1(
     {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
-    if words
-        .iter()
-        .flatten()
-        .any(|word| F::canonical(*word).is_none())
-    {
+    if !canonical_word_columns_v1(words) {
         return Err(ZkX509StarkErrorV1::NonCanonicalField);
     }
     #[cfg(test)]
@@ -619,3 +1033,7 @@ mod scheduler_tests;
 #[cfg(test)]
 #[path = "main_shared_fft_powers_tests.rs"]
 mod shared_power_tests;
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "main_cpu_metal_geometry_tests.rs"]
+mod cpu_metal_geometry_tests;

@@ -982,6 +982,22 @@ pub struct P256CrossTraceWriterSourceStreamV1<'a> {
     terminal: [F; P256_CROSS_TRACE_LANES_V1],
     running: [F; P256_CROSS_TRACE_LANES_V1],
     next_row: usize,
+    end_row: usize,
+    end_running: [F; P256_CROSS_TRACE_LANES_V1],
+    checkpoints: Option<P256CrossTraceWriterCheckpointsV1>,
+}
+/// Private writer prefixes minted only by the original checked recurrence.
+pub(super) struct P256CrossTraceWriterCheckpointsV1(
+    super::private_table::PrivateTableV1<[F; P256_CROSS_TRACE_LANES_V1]>,
+);
+impl P256CrossTraceWriterCheckpointsV1 {
+    pub(super) fn allocated_bytes_v1(&self) -> usize {
+        self.0.capacity() * core::mem::size_of::<[F; P256_CROSS_TRACE_LANES_V1]>()
+    }
+    #[cfg(test)]
+    pub(super) fn corrupt_boundary_for_test_v1(&mut self, boundary: usize) {
+        self.0[boundary][0] = self.0[boundary][0].add(F::ONE);
+    }
 }
 impl core::fmt::Debug for P256CrossTraceWriterSourceStreamV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -992,6 +1008,7 @@ impl Drop for P256CrossTraceWriterSourceStreamV1<'_> {
     fn drop(&mut self) {
         super::private_table::zeroize_fields_v1(&mut self.running);
         super::private_table::zeroize_fields_v1(&mut self.terminal);
+        super::private_table::zeroize_fields_v1(&mut self.end_running);
         for lane in &mut self.challenges.lanes {
             super::private_table::zeroize_fields_v1(&mut lane.terms);
         }
@@ -1155,7 +1172,11 @@ pub fn build_zk_x509_p256_cross_trace_writer_source_v1(
         return Err(P256CrossTraceBusErrorV1::Topology);
     }
     let fixed = Arc::new(P256CrossTraceWriterSourceFixedV1::compile_v1(role)?);
-    let terminal = compute_writer_terminal_v1(value_bus, &fixed, challenges)?;
+    let checkpoints = compute_writer_checkpoints_v1(value_bus, &fixed, challenges)?;
+    let terminal = *checkpoints
+        .0
+        .last()
+        .ok_or(P256CrossTraceBusErrorV1::Topology)?;
     Ok(P256CrossTraceWriterSourceStreamV1 {
         value_bus,
         fixed: P256CrossTraceWriterFixedReplayV1::Compiled(fixed),
@@ -1163,24 +1184,46 @@ pub fn build_zk_x509_p256_cross_trace_writer_source_v1(
         terminal,
         running: [F::ONE; P256_CROSS_TRACE_LANES_V1],
         next_row: 0,
+        end_row: P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1,
+        end_running: terminal,
+        checkpoints: Some(checkpoints),
     })
 }
-fn compute_writer_terminal_v1(
+fn compute_writer_checkpoints_v1(
     value_bus: &P256ValueBusBaseEndpointTraceV1,
     fixed: &P256CrossTraceWriterSourceFixedV1,
     challenges: P256CrossTraceChallengesV1,
-) -> Result<[F; P256_CROSS_TRACE_LANES_V1], P256CrossTraceBusErrorV1> {
-    let mut running = [F::ONE; P256_CROSS_TRACE_LANES_V1];
+) -> Result<P256CrossTraceWriterCheckpointsV1, P256CrossTraceBusErrorV1> {
+    use super::p256_value_bus::P256_VALUE_AUX_REPLAY_CHUNK_ROWS_V1 as CHUNK;
+    let count = P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1 / CHUNK + 1;
+    let mut checkpoints = super::private_table::PrivateTableV1::new(
+        Vec::new(),
+        super::private_table::zeroize_field_rows_v1,
+    );
+    checkpoints
+        .try_reserve_exact(count)
+        .map_err(|_| P256CrossTraceBusErrorV1::Resource)?;
+    if checkpoints.capacity() != count {
+        return Err(P256CrossTraceBusErrorV1::Resource);
+    }
+    checkpoints.resize(count, [F::ZERO; P256_CROSS_TRACE_LANES_V1]);
+    let mut running = zeroize::Zeroizing::new([F::ONE; P256_CROSS_TRACE_LANES_V1]);
+    checkpoints[0] = *running;
     for packed_ordinal in 0..P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1 {
         let fixed_row = fixed.row_v1(packed_ordinal)?;
         let sources = projected_writer_source_values_v1(value_bus, packed_ordinal, fixed_row)?;
-        let row = build_writer_row_v1(fixed_row, sources, running, challenges);
+        let row = zeroize::Zeroizing::new(build_writer_row_v1(
+            fixed_row, sources, *running, challenges,
+        ));
         let final_slot = P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 - 1;
-        running = core::array::from_fn(|lane| {
+        *running = core::array::from_fn(|lane| {
             row.product_before[final_slot][lane].mul(row.selected_power[final_slot][lane])
         });
+        if (packed_ordinal + 1).is_multiple_of(CHUNK) {
+            checkpoints[(packed_ordinal + 1) / CHUNK] = *running;
+        }
     }
-    Ok(running)
+    Ok(P256CrossTraceWriterCheckpointsV1(checkpoints))
 }
 impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
     /// Borrow the exact schedule and terminal already checked during MAIN bind.
@@ -1206,7 +1249,40 @@ impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
             terminal: bound.terminal_v1(),
             running: [F::ONE; P256_CROSS_TRACE_LANES_V1],
             next_row: 0,
+            end_row: P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1,
+            end_running: bound.terminal_v1(),
+            checkpoints: None,
         })
+    }
+    /// Consume the checkpoints of this constructor's original recurrence.
+    pub(super) fn take_checkpoints_v1(
+        &mut self,
+    ) -> Result<P256CrossTraceWriterCheckpointsV1, P256CrossTraceBusErrorV1> {
+        self.checkpoints
+            .take()
+            .ok_or(P256CrossTraceBusErrorV1::Topology)
+    }
+    /// Mint one checked public chunk through the same opaque MAIN capability.
+    pub(super) fn from_bound_main_chunk_v1(
+        bound: &super::p256_aggregate_adapter::P256MainBoundWriterReplayV1<'a>,
+        chunk: usize,
+    ) -> Result<Self, P256CrossTraceBusErrorV1> {
+        use super::p256_value_bus::P256_VALUE_AUX_REPLAY_CHUNK_ROWS_V1 as CHUNK;
+        let mut stream = Self::from_bound_main_v1(bound)?;
+        let checkpoints = &bound.checkpoints_v1().0;
+        let chunks = P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1 / CHUNK;
+        if chunk >= chunks
+            || checkpoints.len() != chunks + 1
+            || checkpoints[0] != [F::ONE; P256_CROSS_TRACE_LANES_V1]
+            || checkpoints[chunks] != stream.terminal
+        {
+            return Err(P256CrossTraceBusErrorV1::Constraint);
+        }
+        stream.running = checkpoints[chunk];
+        stream.next_row = chunk * CHUNK;
+        stream.end_row = stream.next_row + CHUNK;
+        stream.end_running = checkpoints[chunk + 1];
+        Ok(stream)
     }
     /// Restart deterministic row replay without recompiling multiplicities or
     /// recomputing the terminal.
@@ -1218,13 +1294,16 @@ impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
             terminal: self.terminal,
             running: [F::ONE; P256_CROSS_TRACE_LANES_V1],
             next_row: 0,
+            end_row: P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1,
+            end_running: self.terminal,
+            checkpoints: None,
         }
     }
     /// Emit the next exact source-product row, including canonical padding.
     pub(crate) fn next_row_v1(
         &mut self,
     ) -> Result<Option<P256CrossTraceWriterAuxRowV1>, P256CrossTraceBusErrorV1> {
-        if self.next_row == P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1 {
+        if self.next_row == self.end_row {
             return Ok(None);
         }
         let fixed = self.fixed.source_v1().row_v1(self.next_row)?;
@@ -1241,8 +1320,9 @@ impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
         });
         row.terminal = self.terminal;
         self.next_row += 1;
-        if self.next_row == P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1
-            && self.running != self.terminal
+        if (self.next_row == self.end_row && self.running != self.end_running)
+            || (self.next_row == P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1
+                && self.running != self.terminal)
         {
             return Err(P256CrossTraceBusErrorV1::Constraint);
         }
@@ -1264,7 +1344,7 @@ impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
         {
             return Err(P256CrossTraceBusErrorV1::Topology);
         }
-        if self.next_row == P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1 {
+        if self.next_row == self.end_row {
             return Ok(None);
         }
         let fixed = self.fixed.source_v1().row_v1(self.next_row)?;
@@ -1282,8 +1362,9 @@ impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
         let selected = zeroize::Zeroizing::new(selected);
         self.running = after;
         self.next_row += 1;
-        if self.next_row == P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1
-            && self.running != self.terminal
+        if (self.next_row == self.end_row && self.running != self.end_running)
+            || (self.next_row == P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1
+                && self.running != self.terminal)
         {
             return Err(P256CrossTraceBusErrorV1::Constraint);
         }
@@ -1658,6 +1739,9 @@ mod tests {
             terminal: [F(17); P256_CROSS_TRACE_LANES_V1],
             running: [F(19); P256_CROSS_TRACE_LANES_V1],
             next_row: 7,
+            end_row: P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1,
+            end_running: [F(17); P256_CROSS_TRACE_LANES_V1],
+            checkpoints: None,
         };
         assert_eq!(
             format!("{sink:?}"),

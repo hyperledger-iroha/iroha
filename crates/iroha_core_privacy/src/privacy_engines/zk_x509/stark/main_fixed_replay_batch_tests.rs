@@ -216,17 +216,26 @@ fn maximum_arithmetic_fixed_sets_preserve_every_coefficient_and_registration() {
                 continue;
             }
             let root = goldilocks_primitive_root_v1(registration.segment.trace_log2).unwrap();
-            let actual = main_log19_fixed_polynomial_set_v1(&prover, registration, policy).unwrap();
+            let cache_plan = main_resources::MainProverBufferPlanV1::new_v1(layout)
+                .unwrap()
+                .quotient_cache_plan_v1(layout, registration)
+                .unwrap();
+            let mut actual =
+                main_log19_fixed_polynomial_set_v1(&prover, registration, policy, cache_plan)
+                    .unwrap();
             assert_eq!(actual.registration, registration);
-            assert_eq!(actual.columns.len(), registration.segment.fixed_width);
-            for (column, coefficients) in actual.columns.iter().enumerate() {
+            let actual_columns = actual.full_coefficients_for_test_v1().unwrap();
+            assert_eq!(actual_columns.len(), registration.segment.fixed_width);
+            for (column, coefficients) in actual_columns.iter().enumerate() {
                 let mut expected = source.native_fixed_column_v1(registration, column).unwrap();
                 goldilocks_ifft_v1(&mut expected, root).unwrap();
                 assert_eq!(coefficients.as_slice(), &*expected);
             }
             let mut invalid = registration;
             invalid.segment.fixed_width -= 1;
-            assert!(main_log19_fixed_polynomial_set_v1(&prover, invalid, policy).is_err());
+            assert!(
+                main_log19_fixed_polynomial_set_v1(&prover, invalid, policy, cache_plan).is_err()
+            );
             checked += 1;
         }
         assert_eq!(checked, 5);
@@ -256,11 +265,18 @@ fn maximum_sha_fixed_sets_preserve_every_coefficient_and_registration() {
                 continue;
             }
             let root = goldilocks_primitive_root_v1(registration.segment.trace_log2).unwrap();
-            let actual = main_log19_fixed_polynomial_set_v1(&prover, registration, policy).unwrap();
+            let cache_plan = main_resources::MainProverBufferPlanV1::new_v1(layout)
+                .unwrap()
+                .quotient_cache_plan_v1(layout, registration)
+                .unwrap();
+            let mut actual =
+                main_log19_fixed_polynomial_set_v1(&prover, registration, policy, cache_plan)
+                    .unwrap();
             assert_eq!(actual.registration, registration);
-            assert_eq!(actual.columns.len(), registration.segment.fixed_width);
-            assert_eq!(actual.columns.len(), 137);
-            for (column, coefficients) in actual.columns.iter().enumerate() {
+            let actual_columns = actual.full_coefficients_for_test_v1().unwrap();
+            assert_eq!(actual_columns.len(), registration.segment.fixed_width);
+            assert_eq!(actual_columns.len(), 137);
+            for (column, coefficients) in actual_columns.iter().enumerate() {
                 // Exact previous production path; retain every native coefficient.
                 let mut expected = source.native_fixed_column_v1(registration, column).unwrap();
                 goldilocks_ifft_v1(&mut expected, root).unwrap();
@@ -268,7 +284,9 @@ fn maximum_sha_fixed_sets_preserve_every_coefficient_and_registration() {
             }
             let mut invalid = registration;
             invalid.segment.fixed_width -= 1;
-            assert!(main_log19_fixed_polynomial_set_v1(&prover, invalid, policy).is_err());
+            assert!(
+                main_log19_fixed_polynomial_set_v1(&prover, invalid, policy, cache_plan).is_err()
+            );
             checked += 1;
         }
         assert_eq!(checked, 4);
@@ -300,7 +318,7 @@ fn initial_sha_fixed_inverse_cost_preserves_every_native_coefficient() {
     .unwrap();
     let mut native =
         ZeroizingBaseColumnsV1(vec![vec![F::ZERO; rows]; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1]);
-    fixed.fill_fixed_matrix_v1(0, &mut native).unwrap();
+    fixed.fill_fixed_matrix_v1(0, &mut native.0).unwrap();
     let policy =
         main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 215_244_730)
             .unwrap();
@@ -312,11 +330,11 @@ fn initial_sha_fixed_inverse_cost_preserves_every_native_coefficient() {
         for kind in if round % 2 == 0 { [0, 1] } else { [1, 0] } {
             let start = Instant::now();
             if kind == 0 {
-                for column in &mut *scalar {
+                for column in &mut scalar.0 {
                     goldilocks_ifft_v1(column, root).unwrap();
                 }
             } else {
-                main_initial_fixed_coefficients_with_v1(&mut bounded, root, policy, |words, root, direction| {
+                main_initial_fixed_coefficients_with_v1(&mut bounded.0, root, policy, |words, root, direction| {
                     let backend = fastpq_prover::goldilocks_transform::transform_goldilocks_columns_v1(words, root, direction, fastpq_prover::ExecutionMode::Auto)?;
                     if backend == Backend::Metal { metal_columns += words.len(); }
                     Ok(backend)
@@ -336,4 +354,27 @@ fn initial_sha_fixed_inverse_cost_preserves_every_native_coefficient() {
             policy.columns_v1(rows)
         );
     }
+}
+
+#[test]
+fn arithmetic_fixed_owner_kind_mismatch_cannot_borrow_dense_coefficients() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let registration = *layout
+        .registered_segments
+        .iter()
+        .find(|registration| registration.segment.adapter == SegmentAdapterIdV1::P256Arithmetic)
+        .unwrap();
+    let cache_plan = main_resources::MainProverBufferPlanV1::new_v1(&layout)
+        .unwrap()
+        .quotient_cache_plan_v1(&layout, registration)
+        .unwrap();
+    let invalid = ZeroizingMainFixedPolynomialSetV1 {
+        registration,
+        cache_plan,
+        owner: MainFixedCoefficientOwnerV1::Dense(ZeroizingBaseColumnsV1(Vec::new())),
+    };
+    assert!(matches!(
+        invalid.cache_columns_v1(),
+        Err(ZkX509StarkErrorV1::ProfileMismatch)
+    ));
 }

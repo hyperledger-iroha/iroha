@@ -131,3 +131,66 @@ mod simd;
 #[cfg(test)]
 #[path = "keccak_batch_tests.rs"]
 mod tests;
+
+/// Permute two complete Keccak-f1600 states without allocation or framing.
+#[inline]
+pub fn permute_pair_v1(states: &mut [[u64; 25]; 2]) {
+    #[cfg(feature = "simd")]
+    {
+        use keccak::{Backend, BackendClosure, Keccak, ParState1600};
+
+        struct Pair<'a>(&'a mut [[u64; 25]; 2]);
+        impl BackendClosure for Pair<'_> {
+            fn call_once<B: Backend>(self) {
+                let (parallel, tail) = ParState1600::<B>::slice_as_chunks_mut(self.0);
+                parallel.iter_mut().for_each(B::get_par_f1600());
+                tail.iter_mut().for_each(B::get_f1600());
+            }
+        }
+        Keccak::new().with_backend(Pair(states));
+    }
+    #[cfg(not(feature = "simd"))]
+    {
+        keccak::Keccak::new().with_f1600(|permute| states.iter_mut().for_each(permute));
+    }
+}
+
+#[cfg(test)]
+mod paired_permutation_tests {
+    use super::*;
+    use zeroize::Zeroizing;
+
+    #[test]
+    fn paired_permutation_matches_software_and_original_scalar_backends() {
+        for seed in [0_u64, 1, 17, u64::MAX] {
+            let mut actual = Zeroizing::new([[0_u64; 25]; 2]);
+            for (index, word) in actual.iter_mut().flatten().enumerate() {
+                *word = seed.wrapping_add((index as u64).wrapping_mul(0x9e3779b97f4a7c15));
+            }
+            let mut scalar = Zeroizing::new(*actual);
+            keccak::Keccak::new().with_f1600(|permute| scalar.iter_mut().for_each(permute));
+            permute_pair_v1(&mut actual);
+            assert_eq!(*actual, *scalar);
+            // The existing FASTPQ software owner supplies an independent
+            // permutation oracle after one exact136-byte absorbed block.
+            let mut actual = Zeroizing::new([[0_u64; 25]; 2]);
+            let mut software = Zeroizing::new([[0_u64; 25]; 2]);
+            for lane in 0..2 {
+                let input = Zeroizing::new(core::array::from_fn::<_, 136, _>(|index| {
+                    seed.wrapping_add((index * 31 + lane * 47) as u64) as u8
+                }));
+                for (word, bytes) in actual[lane].iter_mut().zip(input.as_chunks::<8>().0) {
+                    *word = u64::from_le_bytes(*bytes);
+                }
+                let mut original = Sha3_256V1::new();
+                original.update(&*input);
+                original.with_absorbed_state_v1(|state, position| {
+                    assert_eq!(position, 0);
+                    software[lane].copy_from_slice(state);
+                });
+            }
+            permute_pair_v1(&mut actual);
+            assert_eq!(*actual, *software);
+        }
+    }
+}

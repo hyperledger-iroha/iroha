@@ -287,6 +287,8 @@ impl Oracle {
         let mut bytes = vec![1_u8];
         bytes.extend_from_slice(&self.log_degree.to_le_bytes());
         bytes.extend_from_slice(&self.t.to_le_bytes());
+        // This independent oracle models the E=1 arithmetic vectors.
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
         for (primes, roots) in [
             (&self.main, &self.main_roots),
             (&self.special, &self.special_roots),

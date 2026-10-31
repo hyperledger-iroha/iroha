@@ -14,10 +14,51 @@ use super::*;
 /// reserve, not an estimate or a portable bound on the process allocator or RSS.
 pub(super) const MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1: usize = 1 << 30;
 
+/// Explicit portion of the existing runtime reserve for every possible stripe
+/// task's reusable residue allocation, independent of the host worker count.
+pub(super) const MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1: usize = 128
+    * (ZK_X509_RFC5280_LOCAL_CONSTRAINT_COUNT_V1 * core::mem::size_of::<F>()
+        + core::mem::size_of::<Vec<F>>());
+/// Complete provider-vector slots, including their enum padding, the temporary
+/// construction array, one variant under construction, and the vector header.
+pub(super) const MAIN_COMPOSITION_PROVIDER_STORAGE_BYTES_V1: usize =
+    (2 * FULL_PROFILE_TRACE_GROUPS_V1 + 1)
+        * core::mem::size_of::<MainProverConstraintProviderV1<'static, 'static>>()
+        + core::mem::size_of::<Vec<MainProverConstraintProviderV1<'static, 'static>>>();
+
+/// One boxed public table, provider storage/construction, and the maximum 128
+/// private row folds, explicitly carved from the unchanged runtime reserve.
+pub(super) const MAIN_COMPOSITION_SHA_FOLD_BYTES_V1: usize =
+    super::super::super::sha_word_stark::wide_fold::ShaWordFoldPowersV1::HEAP_PAYLOAD_BYTES_V1
+        + super::super::super::sha_word_stark::wide_fold::ShaWordFoldPowersV1::CONSTRUCTION_SCRATCH_BYTES_V1
+        + MAIN_COMPOSITION_PROVIDER_STORAGE_BYTES_V1
+        + core::mem::size_of::<Option<MainLog19CompositionRegistrationV1<'static, 'static, 'static>>>()
+        + 128
+    * core::mem::size_of::<
+        super::super::super::sha_word_stark::wide_fold::ShaWordWideFoldV1<'static>,
+    >();
+/// Transient selected-query owner headers; its field payload remains entirely
+/// inside replay_batch, including while the next native source is replayed.
+pub(super) const MAIN_QUERY_REUSE_METADATA_BYTES_V1: usize =
+    main_transform::selected_scratch_metadata_v1();
+/// Retained completed-output control/Arc headers, column descriptors and input views.
+/// Their pages replace existing initial output payload; carve metadata from the
+/// same unchanged runtime reserve even during source callbacks and CPU fallback.
+pub(super) const MAIN_READONLY_OUTPUT_METADATA_BYTES_V1: usize =
+    aggregate::initial_evaluated_column::metadata_payload_v1();
+const _: () = assert!(
+    MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1
+        + MAIN_COMPOSITION_SHA_FOLD_BYTES_V1
+        + MAIN_QUERY_REUSE_METADATA_BYTES_V1
+        + MAIN_READONLY_OUTPUT_METADATA_BYTES_V1
+        <= MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
+);
+
 // Independent current-profile payload pin: masks, cuts, maximum registration,
 // replay batch, CA coefficients/metadata, and two complete cache batches.
 #[cfg(test)]
 pub(super) const CURRENT_FULL_PROFILE_PEAK_V1: usize = 3_872_458_392
+    + MAIN_FIXED_OWNER_METADATA_BYTES_V1
     + core::mem::size_of::<super::super::super::accumulator_stark::stages::CaAwaitingMainAuxiliaryV1>(
     );
 
@@ -143,9 +184,11 @@ impl MainSmallSourceShapeV1 {
 pub(super) struct MainProverBufferPlanV1 {
     pub(super) masks: usize,
     pub(super) retained_cuts: usize,
+    pub(super) retained_oracle_cuts: usize,
     pub(super) selected_replay: usize,
     pub(super) joined_streams: usize,
     pub(super) replay_batch: usize,
+    pub(super) initial_commit_batch: usize,
     pub(super) composition: usize,
     pub(super) quotient_stage: usize,
     pub(super) quotient_cache_reserve: usize,
@@ -250,6 +293,7 @@ impl MainRegistrationQuotientPayloadV1 {
                 core::mem::size_of::<&mut [F]>(),
             ])?,
             core::mem::size_of::<MainFixedReplayScratchV1>(),
+            MAIN_FIXED_OWNER_METADATA_BYTES_V1,
             main_quotient_denominators::MainQuotientDenominatorsV1::payload_bound_v1(
                 segment.trace_log2,
                 stripe,
@@ -388,7 +432,14 @@ impl MainProverBufferPlanV1 {
         // Sources construct serially. The eight-way parallel interpolation
         // starts only after all native columns have clearing owners.
         let scratch = small_scratch
-            .max(super::super::super::rfc5280_stark::zk_x509_rfc_aux_replay_scratch_bytes_v1())
+            .max(
+                super::super::super::rfc5280_stark::zk_x509_rfc_aux_replay_scratch_bytes_v1()
+                    .checked_add(
+                        super::main_retained_rfc::MainRetainedRfcV1::native_preparation_scratch_v1(
+                        ),
+                    )
+                    .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?,
+            )
             .max(P256MainBaseSourceV1::replay_scratch_forecast_v1()?)
             .max(
                 ZkX509ShaBatchFixedProviderV1::replay_scratch_forecast_v1(shape)
@@ -467,7 +518,15 @@ impl MainProverBufferPlanV1 {
         let required = sum(&[
             retained,
             source_scratch,
-            MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1,
+            MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1,
+            MAIN_COMPOSITION_SHA_FOLD_BYTES_V1,
+            MAIN_QUERY_REUSE_METADATA_BYTES_V1,
+            MAIN_READONLY_OUTPUT_METADATA_BYTES_V1,
+            MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
+                - MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1
+                - MAIN_COMPOSITION_SHA_FOLD_BYTES_V1
+                - MAIN_QUERY_REUSE_METADATA_BYTES_V1
+                - MAIN_READONLY_OUTPUT_METADATA_BYTES_V1,
             // A fixed public maximum pair is charged before native sources
             // and in every later phase, even when the current public domain
             // uses no table. No private capacity can select table/fallback.
@@ -547,17 +606,18 @@ impl MainProverBufferPlanV1 {
             .max()
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
         let masks = product(&[total_width, MASK_DEGREE + 1, field])?;
-        let joined_streams = product(&[
-            rows,
-            core::mem::size_of::<
-                crate::privacy_engines::privacy_outer_hash::PrivacyOuterLastFieldStreamV1,
-            >(),
-        ])?;
+        let joined_streams =
+            aggregate::streaming_row_state_payload_v1(rows).map_err(map_aggregate_error_v1)?;
         let retained_cuts = product(&[
             2,
             aggregate::retained_commitment::RetainedMerkleCutV1::payload_bound_v1(rows)
                 .map_err(map_aggregate_error_v1)?,
         ])?;
+        let retained_oracle_cuts = aggregate::retained_scalar_commitment::oracle_payload_bound_v1(
+            AGGREGATE_PARAMETERS_V1,
+            &shared,
+        )
+        .map_err(map_aggregate_error_v1)?;
         let selected_replay = aggregate::retained_commitment::selected_payload_bound_v1(
             rows,
             total_width,
@@ -567,6 +627,8 @@ impl MainProverBufferPlanV1 {
         // Eight original coefficient owners and eight common-domain FFT outputs;
         // two native columns cover source/interpolation or mask-replacement
         // overlap. The latter is smaller than two maximum native columns.
+        // Query evaluation retains these same eight common-domain allocations
+        // through the next source callback; it never retains a second matrix.
         let replay_batch = sum(&[
             product(&[
                 aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
@@ -575,6 +637,14 @@ impl MainProverBufferPlanV1 {
             ])?,
             product(&[aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1, rows, field])?,
             product(&[2, maximum_native, field])?,
+        ])?;
+        // Only initial hashing retains one additional completed eight-column
+        // matrix while the next original source batch is built and transformed.
+        // Its exact owner/packing metadata is included; query/native caps stay eight.
+        let initial_commit_batch = sum(&[
+            replay_batch,
+            aggregate::joined_trace::initial_coalescing_extra_payload_v1(rows)
+                .map_err(map_aggregate_error_v1)?,
         ])?;
         // Keep the former coefficient replay allowance unchanged. Native DEEP
         // charges its Lagrange weights, mask powers, bounded native batch and
@@ -655,9 +725,11 @@ impl MainProverBufferPlanV1 {
         let mut plan = Self {
             masks,
             retained_cuts,
+            retained_oracle_cuts,
             selected_replay,
             joined_streams,
             replay_batch,
+            initial_commit_batch,
             composition,
             quotient_stage,
             quotient_cache_reserve,
@@ -675,7 +747,7 @@ impl MainProverBufferPlanV1 {
                 plan.masks,
                 plan.retained_cuts,
                 plan.joined_streams,
-                plan.replay_batch,
+                plan.initial_commit_batch,
             ])?,
             sum(&[
                 plan.masks,
@@ -687,6 +759,7 @@ impl MainProverBufferPlanV1 {
             sum(&[
                 plan.masks,
                 plan.retained_cuts,
+                plan.retained_oracle_cuts,
                 plan.selected_replay,
                 plan.replay_batch,
                 plan.composition,
@@ -735,3 +808,7 @@ impl MainProverBufferPlanV1 {
         Ok(plan)
     }
 }
+
+#[cfg(test)]
+#[path = "main_initial_coalescing_resource_tests.rs"]
+mod initial_coalescing_resource_tests;

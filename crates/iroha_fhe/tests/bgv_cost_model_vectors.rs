@@ -137,6 +137,7 @@ impl Shape {
         BgvParameters::derive(
             self.log_degree,
             self.plaintext_modulus,
+            1,
             self.main,
             self.special,
             self.digit_primes,
@@ -199,7 +200,7 @@ fn read_shape(section: &Checked<'_>) -> Shape {
 /// Geometry, sizes and work units of one profile section against the crate.
 fn check_profile_lines(section: &Checked<'_>, profile: &BgvProfile) {
     let parameters = profile.parameters();
-    let encoding = SlotEncoding::new(profile).expect("encoding");
+    let encoding = SlotEncoding::new(profile, profile.master_plaintext()).expect("encoding");
     let model = CostModel::new(profile);
     let top = profile.top_level();
     let broadcast = encoding.broadcast_elements().len();
@@ -271,7 +272,9 @@ fn shape_of(candidate: BgvCandidate) -> Shape {
     let parameters = candidate.parameters();
     Shape {
         log_degree: parameters.log_degree,
-        plaintext_modulus: parameters.plaintext_modulus,
+        plaintext_modulus: parameters
+            .plaintext_prime
+            .pow(parameters.plaintext_precision),
         main: (50, parameters.main_primes.len()),
         special: (60, parameters.special_primes.len()),
         digit_primes: parameters.digit_primes,
@@ -381,9 +384,9 @@ fn check_minimal(
 /// every multiplication and once after each load.
 fn equal_workload_fits(profile: &BgvProfile) -> bool {
     fn run(profile: &BgvProfile) -> Result<(), BgvError> {
-        let encoding = SlotEncoding::new(profile)?;
+        let encoding = SlotEncoding::new(profile, profile.master_plaintext())?;
         let mask = encoding.mask_bound();
-        let constant = Plaintext::constant_bound(profile);
+        let constant = Plaintext::constant_bound(profile, profile.master_plaintext());
         let multiply = |lhs: &CiphertextShape, rhs: &CiphertextShape| {
             let level = lhs.level().min(rhs.level());
             let lhs = profile.plan_switch_to_level(lhs, level)?;
@@ -397,11 +400,11 @@ fn equal_workload_fits(profile: &BgvProfile) -> bool {
             }
             profile.plan_switch_down(&current)
         };
-        let encrypted = profile.plan_fresh()?;
+        let encrypted = profile.plan_fresh(profile.master_plaintext())?;
         let condition = load(&encrypted)?;
         let zero_branch = load(&encrypted)?;
         // Right-to-left square-and-multiply to the exponent t - 1.
-        let mut exponent = profile.plaintext_modulus() - 1;
+        let mut exponent = profile.master_plaintext_modulus() - 1;
         let mut base = condition.clone();
         let mut powered: Option<CiphertextShape> = None;
         loop {
@@ -418,7 +421,10 @@ fn equal_workload_fits(profile: &BgvProfile) -> bool {
             base = multiply(&base, &base)?;
         }
         let powered = powered.ok_or(BgvError::Kernel)?;
-        let powered = multiply(&powered, &profile.plan_trivial(powered.level())?)?;
+        let powered = multiply(
+            &powered,
+            &profile.plan_trivial(profile.master_plaintext(), powered.level())?,
+        )?;
         let indicator = profile.plan_add_plain(&powered, constant)?;
         let difference = profile.plan_add_plain(&zero_branch, constant)?;
         let selected = profile.plan_add_plain(&multiply(&indicator, &difference)?, constant)?;
@@ -508,7 +514,7 @@ fn candidate_geometry_sizes_work_units_and_contract_inputs_are_those_of_the_crat
         check_profile_lines(&section, profile);
         // The values proposed for the open inputs of the resource contract.
         let model = CostModel::new(profile);
-        let encoding = SlotEncoding::new(profile).expect("encoding");
+        let encoding = SlotEncoding::new(profile, profile.master_plaintext()).expect("encoding");
         let top = profile.top_level();
         let broadcast = encoding.broadcast_elements().len() as u64;
         let units = |value: Result<u64, BgvError>| value.expect("units");

@@ -58,10 +58,9 @@ use super::{
         SHA_WORD_CAPACITY_FIXED_WIDTH_V1, SHA_WORD_CAPACITY_INPUT_WORD_INDEX_V1,
         SHA_WORD_CAPACITY_INPUT_WORD_V1, SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1,
         SHA_WORD_CAPACITY_MESSAGE_COUNT_V1, SHA_WORD_CAPACITY_MESSAGE_MASK_V1,
-        SHA_WORD_CAPACITY_ROW_ACTIVE_V1, ZkX509ShaWordCapacityFixedScheduleV1,
-        ZkX509ShaWordStarkChallengesV1, ZkX509ShaWordStarkErrorV1,
-        compile_sha_word_capacity_fixed_schedule_v1,
-        evaluate_zk_x509_sha_word_capacity_residues_over_field_v1,
+        SHA_WORD_CAPACITY_ROW_ACTIVE_V1, ShaWordBaseErrorFoldV1, ShaWordHornerFoldV1,
+        ZkX509ShaWordCapacityFixedScheduleV1, ZkX509ShaWordStarkChallengesV1,
+        ZkX509ShaWordStarkErrorV1, compile_sha_word_capacity_fixed_schedule_v1,
     },
 };
 #[cfg(test)]
@@ -3721,10 +3720,202 @@ fn evaluate_sha_batch_relation_v1<A: PolynomialAirFieldV1>(
     segment: u8,
     ca_call_boundaries: Option<&[ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1]>,
 ) -> Result<Vec<A>, ZkX509ShaCallBusStarkErrorV1> {
-    call_challenges.validate()?;
-    rfc_challenges
-        .validate()
-        .map_err(|_| ZkX509ShaCallBusStarkErrorV1::Challenge)?;
+    let expected_count = if ca_call_boundaries.is_some() {
+        ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1
+    } else {
+        ZK_X509_SHA_BATCH_LOCAL_CONSTRAINT_COUNT_V1
+    };
+    let mut residues = Vec::with_capacity(expected_count);
+    evaluate_sha_batch_relation_into_v1(
+        current,
+        next,
+        word_challenges,
+        call_challenges,
+        rfc_challenges,
+        segment,
+        ca_call_boundaries,
+        &mut residues,
+    )?;
+    Ok(residues)
+}
+
+/// Evaluate every local SHA constraint into the caller's reusable allocation.
+/// The caller retains clearing ownership through errors and unwinding.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_zk_x509_sha_batch_local_residues_into_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509ShaBatchRowV1<A>,
+    next: &ZkX509ShaBatchRowV1<A>,
+    word_challenges: ZkX509ShaWordStarkChallengesV1,
+    call_challenges: ZkX509ShaCallBusChallengesV1,
+    rfc_challenges: &ZkX509Rfc5280StarkChallengesV1,
+    segment: u8,
+    residues: &mut Vec<A>,
+) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+    evaluate_sha_batch_relation_into_v1(
+        current,
+        next,
+        word_challenges,
+        call_challenges,
+        rfc_challenges,
+        segment,
+        None,
+        residues,
+    )
+}
+
+/// Evaluate the original local relation with the native provider's shared powers.
+/// The common AIR body validates the family before consuming any base error.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(super) fn evaluate_sha_batch_local_with_powers_into_v1(
+    current: &ZkX509ShaBatchRowV1,
+    next: &ZkX509ShaBatchRowV1,
+    word_challenges: ZkX509ShaWordStarkChallengesV1,
+    call_challenges: ZkX509ShaCallBusChallengesV1,
+    rfc_challenges: &ZkX509Rfc5280StarkChallengesV1,
+    segment: u8,
+    residues: &mut Vec<F>,
+    powers: &super::sha_word_stark::wide_fold::ShaWordFoldPowersV1,
+) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+    evaluate_sha_batch_relation_with_fold_v1(
+        current,
+        next,
+        word_challenges,
+        call_challenges,
+        rfc_challenges,
+        segment,
+        None,
+        residues,
+        powers.row_v1(),
+    )
+}
+
+/// Native rows borrow the original checked post-base families for their lifetime.
+/// Every row-dependent check still executes in the common relation below.
+pub(super) fn evaluate_sha_batch_local_with_bound_context_into_v1(
+    current: &ZkX509ShaBatchRowV1,
+    next: &ZkX509ShaBatchRowV1,
+    capability: super::credential_pre_aux::ValidatedMainCompositionChallengesV1<'_>,
+    segment: u8,
+    residues: &mut Vec<F>,
+    powers: &super::sha_word_stark::wide_fold::ShaWordFoldPowersV1,
+) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+    evaluate_sha_batch_relation_with_context_v1(
+        current,
+        next,
+        ShaBatchEvaluationChallengesV1::Bound(capability),
+        segment,
+        None,
+        residues,
+        powers.row_v1(),
+    )
+}
+
+#[derive(Clone, Copy)]
+enum ShaBatchEvaluationChallengesV1<'a> {
+    Raw(&'a ShaBatchRawChallengesV1<'a>),
+    Bound(super::credential_pre_aux::ValidatedMainCompositionChallengesV1<'a>),
+}
+struct ShaBatchRawChallengesV1<'a> {
+    word: ZkX509ShaWordStarkChallengesV1,
+    call: ZkX509ShaCallBusChallengesV1,
+    rfc: &'a ZkX509Rfc5280StarkChallengesV1,
+}
+impl<'a> ShaBatchEvaluationChallengesV1<'a> {
+    fn checked_v1(
+        self,
+    ) -> Result<
+        (
+            super::sha_word_stark::ShaWordEvaluationChallengesV1<'a>,
+            ZkX509ShaCallBusChallengesV1,
+            &'a ZkX509Rfc5280StarkChallengesV1,
+        ),
+        ZkX509ShaCallBusStarkErrorV1,
+    > {
+        use super::sha_word_stark::ShaWordEvaluationChallengesV1;
+        match self {
+            Self::Raw(raw) => {
+                raw.call.validate()?;
+                raw.rfc
+                    .validate()
+                    .map_err(|_| ZkX509ShaCallBusStarkErrorV1::Challenge)?;
+                Ok((
+                    ShaWordEvaluationChallengesV1::Raw(&raw.word),
+                    raw.call,
+                    raw.rfc,
+                ))
+            }
+            Self::Bound(capability) => Ok((
+                ShaWordEvaluationChallengesV1::Bound(capability),
+                capability.phase_v1().sha(),
+                capability.phase_v1().rfc5280(),
+            )),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_sha_batch_relation_into_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509ShaBatchRowV1<A>,
+    next: &ZkX509ShaBatchRowV1<A>,
+    word_challenges: ZkX509ShaWordStarkChallengesV1,
+    call_challenges: ZkX509ShaCallBusChallengesV1,
+    rfc_challenges: &ZkX509Rfc5280StarkChallengesV1,
+    segment: u8,
+    ca_call_boundaries: Option<&[ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1]>,
+    residues: &mut Vec<A>,
+) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+    evaluate_sha_batch_relation_with_fold_v1(
+        current,
+        next,
+        word_challenges,
+        call_challenges,
+        rfc_challenges,
+        segment,
+        ca_call_boundaries,
+        residues,
+        ShaWordHornerFoldV1::new_v1(word_challenges.base_folding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_sha_batch_relation_with_fold_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509ShaBatchRowV1<A>,
+    next: &ZkX509ShaBatchRowV1<A>,
+    word_challenges: ZkX509ShaWordStarkChallengesV1,
+    call_challenges: ZkX509ShaCallBusChallengesV1,
+    rfc_challenges: &ZkX509Rfc5280StarkChallengesV1,
+    segment: u8,
+    ca_call_boundaries: Option<&[ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1]>,
+    residues: &mut Vec<A>,
+    fold: impl ShaWordBaseErrorFoldV1<A>,
+) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+    evaluate_sha_batch_relation_with_context_v1(
+        current,
+        next,
+        ShaBatchEvaluationChallengesV1::Raw(&ShaBatchRawChallengesV1 {
+            word: word_challenges,
+            call: call_challenges,
+            rfc: rfc_challenges,
+        }),
+        segment,
+        ca_call_boundaries,
+        residues,
+        fold,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_sha_batch_relation_with_context_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509ShaBatchRowV1<A>,
+    next: &ZkX509ShaBatchRowV1<A>,
+    challenge_context: ShaBatchEvaluationChallengesV1<'_>,
+    segment: u8,
+    ca_call_boundaries: Option<&[ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1]>,
+    residues: &mut Vec<A>,
+    fold: impl ShaWordBaseErrorFoldV1<A>,
+) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+    let (word_context, call_challenges, rfc_challenges) = challenge_context.checked_v1()?;
     if current
         .base
         .iter()
@@ -3765,13 +3956,15 @@ fn evaluate_sha_batch_relation_v1<A: PolynomialAirFieldV1>(
         [..SHA_WORD_CAPACITY_FIXED_WIDTH_V1]
         .try_into()
         .expect("word fixed prefix");
-    let mut residues = evaluate_zk_x509_sha_word_capacity_residues_over_field_v1(
+    super::sha_word_stark::evaluate_sha_word_capacity_residues_with_context_v1(
         current_word_base,
         next_word_base,
         current_word_aux,
         next_word_aux,
         word_fixed,
-        word_challenges,
+        word_context,
+        residues,
+        fold,
     )?;
     for bit in 0..ZK_X509_SHA_RFC_LENGTH_BITS_V1 {
         let value = current.base[ZK_X509_SHA_LENGTH_BITS_START_V1 + bit];
@@ -3918,7 +4111,7 @@ fn evaluate_sha_batch_relation_v1<A: PolynomialAirFieldV1>(
             .copied()
             .map(|value| padding.mul(value)),
     );
-    projection_bus::push_residues_v1(current, next, call_challenges, &mut residues);
+    projection_bus::push_residues_v1(current, next, call_challenges, residues);
     let expected_count = if ca_call_boundaries.is_some() {
         ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1
     } else {
@@ -3927,7 +4120,7 @@ fn evaluate_sha_batch_relation_v1<A: PolynomialAirFieldV1>(
     if residues.len() != expected_count {
         return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
     }
-    Ok(residues)
+    Ok(())
 }
 /// Advance four products by one active event with degree-two transitions.
 #[cfg(test)]
@@ -4079,6 +4272,9 @@ fn algebraic_security_bits_v1() -> (f64, f64, f64) {
 #[cfg(test)]
 mod tests {
     include!("sha_base_projection_tests.rs");
+    include!("sha_residue_scratch_tests.rs");
+    include!("sha_wide_fold_tests.rs");
+    include!("sha_validated_context_tests.rs");
     include!("sha_native_aux_cache_source_tests.rs");
     include!("sha_native_base_cache_source_tests.rs");
     include!("sha_fixed_schedule_reuse_tests.rs");

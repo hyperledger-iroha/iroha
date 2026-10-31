@@ -528,10 +528,12 @@ pub(super) fn completed_transform_v1(metal: bool, columns: usize) {
         }
     });
 }
-/// Completed public fixed-column work, recorded after each bounded batch.
-/// Recovery IFFTs are additional work introduced by the bounded matrix owner.
+/// Completed public fixed-column work after one bounded forward group.
+/// A sixteen-column logical recovery group still dispatches inverses in batches
+/// of at most eight; actual backend counters separately enforce those limits.
 pub(super) fn completed_fixed_coset_v1(columns: usize, rows: usize, recovery: bool) {
-    assert!((1..=8).contains(&columns) && rows.is_power_of_two());
+    let maximum = fastpq_prover::goldilocks_transform::MAX_GOLDILOCKS_PREPARED_FORWARD_COLUMNS_V1;
+    assert!((1..=maximum).contains(&columns) && rows.is_power_of_two());
     ACTIVE.with(|active| {
         if let Some(receipt) = active.borrow_mut().as_mut() {
             let columns = columns as u64;
@@ -552,7 +554,12 @@ pub(super) fn completed_fixed_coset_v1(columns: usize, rows: usize, recovery: bo
 
 /// Actual completed fixed-coset arithmetic, separated by direction and backend.
 pub(super) fn completed_fixed_backend_v1(metal: bool, inverse: bool, columns: usize) {
-    assert!((1..=8).contains(&columns));
+    let maximum = if metal && !inverse {
+        fastpq_prover::goldilocks_transform::MAX_GOLDILOCKS_PREPARED_FORWARD_COLUMNS_V1
+    } else {
+        8
+    };
+    assert!((1..=maximum).contains(&columns));
     ACTIVE.with(|active| {
         if let Some(receipt) = active.borrow_mut().as_mut() {
             receipt.fixed_backend_columns[usize::from(metal)][usize::from(inverse)] +=
@@ -572,7 +579,12 @@ pub(super) fn completed_fixed_backend_v1(metal: bool, inverse: bool, columns: us
 
 /// Completed private quotient stripe FFTs; fixed and common-domain counters stay separate.
 pub(super) fn completed_quotient_backend_v1(metal: bool, columns: usize) {
-    assert!((1..=8).contains(&columns));
+    let maximum = if metal {
+        fastpq_prover::goldilocks_transform::MAX_GOLDILOCKS_PREPARED_FORWARD_COLUMNS_V1
+    } else {
+        8
+    };
+    assert!((1..=maximum).contains(&columns));
     ACTIVE.with(|active| {
         if let Some(receipt) = active.borrow_mut().as_mut() {
             receipt.quotient_backend_columns[usize::from(metal)] += columns as u64;
@@ -910,6 +922,37 @@ mod tests {
         ] {
             assert!(text.contains(&format!("fixed_coset_{count}")));
         }
+    }
+
+    #[test]
+    fn fixed_observation_admits_sixteen_only_for_metal_forward_groups() {
+        let observation = ObservationV1::begin_v1();
+        completed_fixed_backend_v1(true, false, 16);
+        completed_fixed_backend_v1(true, true, 8);
+        completed_fixed_backend_v1(true, true, 8);
+        completed_fixed_backend_v1(false, false, 8);
+        completed_fixed_backend_v1(false, true, 8);
+        completed_fixed_coset_v1(16, 32, true);
+        for (metal, inverse) in [(false, false), (false, true), (true, true)] {
+            for width in [9, 16] {
+                assert!(
+                    std::panic::catch_unwind(|| {
+                        completed_fixed_backend_v1(metal, inverse, width);
+                    })
+                    .is_err()
+                );
+            }
+        }
+        assert!(std::panic::catch_unwind(|| completed_fixed_backend_v1(true, false, 17)).is_err());
+        assert!(std::panic::catch_unwind(|| completed_fixed_coset_v1(17, 32, true)).is_err());
+        let receipt = observation.finish_v1();
+        assert_eq!(receipt.fixed_backend_columns, [[8, 8], [16, 16]]);
+        assert_eq!(receipt.fixed_forward_columns, 16);
+        assert_eq!(receipt.fixed_inverse_columns, 16);
+        assert_eq!(receipt.fixed_forward_butterflies, 16 * 16 * 5);
+        assert_eq!(receipt.fixed_inverse_butterflies, 16 * 16 * 5);
+        assert_eq!(receipt.quotient_backend_columns, [0, 0]);
+        assert_eq!(receipt.native_replay_backend_columns, [0, 0]);
     }
 
     #[test]
@@ -1342,7 +1385,7 @@ mod tests {
         completed_fixed_backend_v1(true, false, 3);
         completed_fixed_backend_v1(true, true, 1);
         completed_quotient_backend_v1(false, 8);
-        completed_quotient_backend_v1(true, 3);
+        completed_quotient_backend_v1(true, 16);
         completed_native_replay_backend_v1(false, 8);
         completed_native_replay_backend_v1(true, 4);
         failed_fixed_coset_v1();
@@ -1351,6 +1394,7 @@ mod tests {
         observation.record_proof_bytes_v1(8_123_456);
         let receipt = observation.finish_v1();
         let record = receipt.measurement_v1().unwrap();
+        assert_eq!(receipt.quotient_backend_columns, [8, 16]);
         // Every flat counter of the receipt has the same value in the record:
         // (number of reports, sum of units).
         for (label, expected) in [

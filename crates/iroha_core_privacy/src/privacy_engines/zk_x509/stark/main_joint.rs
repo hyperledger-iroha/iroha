@@ -42,6 +42,7 @@ pub struct MainAwaitingJointPointV1<'a> {
     buffers: main_ca_resources::MainCaJointBufferPlanV1,
     composition: RetainedCompositionMaterialV1,
     composition_roots: Vec<PrivacyOuterDigestV1>,
+    composition_cuts: Vec<Option<aggregate::retained_scalar_commitment::RetainedScalarCutV1>>,
     fri_masks: Vec<aggregate::AggregateFriMaskOracleMaterialV1>,
     fri_mask_roots: Vec<PrivacyOuterDigestV1>,
     auxiliary: JointAuxiliaryBindingV1,
@@ -164,16 +165,15 @@ impl<'a> ZkX509MainCompositionPhaseV1<'a> {
         }
         #[cfg(test)]
         let commitment_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionCommitment);
-        let composition_roots = vec![
-            aggregate::streaming_composition_commitment_v1(
+        let (composition_commitment, composition_cut) =
+            aggregate::retain_composition_commitment_v1(
                 &main_domains_v1(proof_instance),
                 0,
                 &composition.evaluations[0],
-                &[],
             )
-            .map_err(map_aggregate_error_v1)?
-            .root,
-        ];
+            .map_err(map_aggregate_error_v1)?;
+        let composition_roots = vec![composition_commitment.root];
+        let composition_cuts = vec![composition_cut];
         aggregate::absorb_composition_roots_v1(
             &mut self.transcript,
             AGGREGATE_PARAMETERS_V1,
@@ -216,6 +216,7 @@ impl<'a> ZkX509MainCompositionPhaseV1<'a> {
             buffers,
             composition,
             composition_roots,
+            composition_cuts,
             fri_masks,
             fri_mask_roots,
             auxiliary,
@@ -383,6 +384,7 @@ impl MainAwaitingJointOpeningsV1<'_> {
         self.oracles.phase.finish_original_openings_v1(
             self.oracles.composition,
             self.oracles.composition_roots,
+            self.oracles.composition_cuts,
             self.oracles.fri_masks,
             self.oracles.fri_mask_roots,
             self.deep,

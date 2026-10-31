@@ -524,7 +524,7 @@ impl Drop for TestAuthenticatedSnapshotHarnessV1 {
 }
 
 #[path = "vector_arithmetic_plane_openings_v1/ordered_snapshot_v1.rs"]
-mod ordered_snapshot_v1;
+pub(in crate::vega::zk_ams::mkhe) mod ordered_snapshot_v1;
 #[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use ordered_snapshot_v1::SealedQMaskSFileV1;
 #[cfg(test)]

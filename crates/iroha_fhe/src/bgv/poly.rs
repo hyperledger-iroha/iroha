@@ -39,7 +39,11 @@ pub(super) struct RnsPoly {
 
 impl Drop for RnsPoly {
     fn drop(&mut self) {
+        #[cfg(any(test, feature = "bgv-test-fixtures"))]
+        let retired_words = self.words.len();
         self.words.zeroize();
+        #[cfg(any(test, feature = "bgv-test-fixtures"))]
+        clearing_observer::observe_clear(&self.words, retired_words);
     }
 }
 
@@ -190,6 +194,23 @@ impl RnsPoly {
         }
     }
 
+    /// Scale every canonical coefficient by an already-centered public integer.
+    ///
+    /// The fixed scalar is reduced separately for each public limb. The shared
+    /// acceleration adapter retains canonical residues and fixed-time fallback;
+    /// no value-dependent scan or zero/unit shortcut is used.
+    pub(super) fn mul_scalar_assign<'plan>(
+        &mut self,
+        centered: i64,
+        plan_of: impl Fn(usize) -> &'plan NegacyclicPlan,
+    ) {
+        for (index, limb) in self.words.chunks_exact_mut(self.degree).enumerate() {
+            let fixed = plan_of(index).fixed();
+            let scalar = fixed.canonicalize_i64(centered);
+            crate::accel::mul_scalar_mod_with(limb, scalar, fixed);
+        }
+    }
+
     /// `self[i] *= rhs[i]` in evaluation form.
     pub(super) fn pointwise_mul_assign<'plan>(
         &mut self,
@@ -239,8 +260,27 @@ impl RnsPoly {
     }
 }
 
+// One observation counter serves inline and cross-crate fixture tests. It is
+// absent without test configuration and never changes the unconditional wipe.
+#[cfg(any(test, feature = "bgv-test-fixtures"))]
+pub(super) mod clearing_observer {
+    std::thread_local! {
+        static CLEARED_WORDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    // Vec::zeroize may reset its length. Count the original owned payload only
+    // after the production zeroize call; do not inspect freed/spare storage.
+    pub(super) fn observe_clear(words: &[u64], retired_words: usize) {
+        assert!(words.iter().all(|&word| word == 0));
+        CLEARED_WORDS.with(|count| count.set(count.get() + retired_words));
+    }
+    pub(in crate::bgv) fn cleared_words() -> usize {
+        CLEARED_WORDS.with(std::cell::Cell::get)
+    }
+}
+
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
+    pub(in crate::bgv) use super::clearing_observer::cleared_words;
     use super::*;
     use crate::{modular, polynomial};
 
@@ -374,5 +414,24 @@ mod tests {
         let mut wrong = RnsPoly::zero(2, 4);
         assert_eq!(wrong.forward(plan_of), Err(BgvError::Kernel));
         assert_eq!(wrong.inverse(plan_of), Err(BgvError::Kernel));
+    }
+
+    #[test]
+    fn public_scalar_visits_all_limbs_and_matches_constant_polynomial() {
+        let plans = plans();
+        let input = sample(29);
+        for scalar in [-128_i64, -1, 0, 1, 128] {
+            let mut actual = input.clone();
+            actual.mul_scalar_assign(scalar, |i| &plans[i]);
+            for (i, &prime) in PRIMES.iter().enumerate() {
+                let constant = plans[i].fixed().canonicalize_i64(scalar);
+                let expected: Vec<_> = input
+                    .limb(i)
+                    .iter()
+                    .map(|&v| modular::mul_mod_u64(v, constant, prime))
+                    .collect();
+                assert_eq!(actual.limb(i), expected);
+            }
+        }
     }
 }

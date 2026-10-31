@@ -81,6 +81,44 @@ pub fn cyclic_ntt_with<A: ModularArithmetic>(
     Some(())
 }
 
+/// Cyclic product in `A[X] / (X^n - 1)` using the shared transform schedule.
+///
+/// Both slices must have the same nonzero power-of-two length. `root` must
+/// have exactly that order; `inverse_root` and `inverse_degree` must be its
+/// multiplicative inverse and the inverse of the length. The caller validates
+/// these public parameters and the arithmetic's canonical-operand contract.
+/// Zero-padding inputs of degree less than `m` to `n >= 2*m` gives their ordinary product.
+///
+/// The result replaces `lhs`; `rhs` retains its forward transform. This function
+/// allocates nothing and preserves the arithmetic's constant-time behavior.
+/// Callers own admission and clearing of both secret buffers on every exit.
+///
+/// # Returns
+/// `None`, leaving both slices untouched, for unequal, empty or non-power-of-two
+/// lengths. With valid lengths there is no fallible step after mutation begins.
+pub fn cyclic_product_in_place_with<A: ModularArithmetic>(
+    lhs: &mut [u64],
+    rhs: &mut [u64],
+    arithmetic: &A,
+    root: u64,
+    inverse_root: u64,
+    inverse_degree: u64,
+) -> Option<()> {
+    if lhs.is_empty() || lhs.len() != rhs.len() || !lhs.len().is_power_of_two() {
+        return None;
+    }
+    cyclic_ntt_with(lhs, arithmetic, root)?;
+    cyclic_ntt_with(rhs, arithmetic, root)?;
+    for (left, &right) in lhs.iter_mut().zip(rhs.iter()) {
+        *left = arithmetic.mul(*left, right);
+    }
+    cyclic_ntt_with(lhs, arithmetic, inverse_root)?;
+    for value in lhs {
+        *value = arithmetic.mul(*value, inverse_degree);
+    }
+    Some(())
+}
+
 /// Reduce the only element of a length-one transform.
 ///
 /// A transform of length one has no butterfly, so nothing else would reduce an
@@ -486,6 +524,85 @@ mod tests {
             }
         }
         output
+    }
+
+    #[test]
+    fn cyclic_product_matches_independent_schoolbook_and_arithmetic_backends() {
+        let mut seed = 91;
+        for modulus in [97, 30_593, 70_368_744_067_073] {
+            let arithmetic = FixedModulus::derive(modulus).expect("fixed modulus");
+            for length in [1, 2, 4, 8, 16, 32] {
+                let root = if length == 1 {
+                    1
+                } else {
+                    primitive_root_of_order_with_candidate_limit(modulus, length as u64, 4096)
+                        .expect("root")
+                };
+                let inverse_root = mod_inv_prime_u64(root, modulus).unwrap();
+                let inverse_degree = mod_inv_prime_u64(length as u64, modulus).unwrap();
+                let left = random_poly(&mut seed, length, modulus);
+                let right = random_poly(&mut seed, length, modulus);
+                let mut expected = vec![0; length];
+                for (i, &a) in left.iter().enumerate() {
+                    for (j, &b) in right.iter().enumerate() {
+                        let slot = (i + j) % length;
+                        expected[slot] = ((u128::from(expected[slot])
+                            + u128::from(a) * u128::from(b))
+                            % u128::from(modulus)) as u64;
+                    }
+                }
+                let mut actual = left.clone();
+                let mut scratch = right.clone();
+                cyclic_product_in_place_with(
+                    &mut actual,
+                    &mut scratch,
+                    &arithmetic,
+                    root,
+                    inverse_root,
+                    inverse_degree,
+                )
+                .unwrap();
+                assert_eq!(actual, expected);
+                let mut reference = left;
+                let mut reference_scratch = right;
+                cyclic_product_in_place_with(
+                    &mut reference,
+                    &mut reference_scratch,
+                    &WordModulus(modulus),
+                    root,
+                    inverse_root,
+                    inverse_degree,
+                )
+                .unwrap();
+                assert_eq!(actual, reference);
+                assert_eq!(scratch, reference_scratch);
+            }
+        }
+    }
+
+    #[test]
+    fn cyclic_product_rejects_bad_shapes_before_mutation() {
+        for (left, right) in [
+            (vec![], vec![]),
+            (vec![1, 2], vec![3]),
+            (vec![1, 2, 3], vec![4, 5, 6]),
+        ] {
+            let mut lhs = left.clone();
+            let mut rhs = right.clone();
+            assert_eq!(
+                cyclic_product_in_place_with(
+                    &mut lhs,
+                    &mut rhs,
+                    &FixedModulus::derive(97).unwrap(),
+                    1,
+                    1,
+                    1,
+                ),
+                None
+            );
+            assert_eq!(lhs, left);
+            assert_eq!(rhs, right);
+        }
     }
 
     #[test]

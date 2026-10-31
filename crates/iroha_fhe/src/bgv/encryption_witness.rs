@@ -30,6 +30,7 @@ impl<'a> EncryptionWitness<'a> {
     ) -> Result<Self, BgvError> {
         key.check_profile(profile)?;
         plaintext.check_profile(profile)?;
+        profile.plan_fresh(plaintext.plaintext_precision())?;
         let mut coins = Coins::draw(entropy)?;
         let degree = profile.degree();
         let eta = profile.parameters().error_eta;
@@ -212,7 +213,7 @@ mod tests {
     type Refusal = EncryptionWitnessError;
 
     fn profile() -> BgvProfile {
-        BgvProfile::new(BgvParameters::derive(4, 257, (30, 3), (31, 2), 2).expect("parameters"))
+        BgvProfile::new(BgvParameters::derive(4, 257, 1, (30, 3), (31, 2), 2).expect("parameters"))
             .expect("profile")
     }
 
@@ -251,8 +252,12 @@ mod tests {
     fn retained_encryption_matches_ordinary_streams_and_independent_ring_equations() {
         let p = profile();
         let k = key(&p);
-        let m =
-            Plaintext::new(&p, (0..16).map(|i| (i * 37 + 250) % 257).collect()).expect("plaintext");
+        let m = Plaintext::new(
+            &p,
+            p.master_plaintext(),
+            (0..16).map(|i| (i * 37 + 250) % 257).collect(),
+        )
+        .expect("plaintext");
         let mut rng = entropy(3);
         let w = EncryptionWitness::sample(&p, &k, &m, &mut rng).expect("sample");
         assert_eq!(rng.draws(), 1);
@@ -291,9 +296,15 @@ mod tests {
             }
         }
         assert_eq!(c.canonical_words(), expected);
-        let oracle =
-            Ciphertext::from_canonical_words(&p, p.top_level(), 2, &expected, c.noise_bound())
-                .expect("oracle frame");
+        let oracle = Ciphertext::from_canonical_words(
+            &p,
+            p.master_plaintext(),
+            p.top_level(),
+            2,
+            &expected,
+            c.noise_bound(),
+        )
+        .expect("oracle frame");
         assert_eq!(
             c.to_bytes(&p).expect("bytes"),
             oracle.to_bytes(&p).expect("oracle bytes")
@@ -308,7 +319,7 @@ mod tests {
     fn witness_bounds_refuse_equations_with_out_of_range_coins() {
         let p = profile();
         let k = key(&p);
-        let m = Plaintext::constant(&p, 7).expect("message");
+        let m = Plaintext::constant(&p, p.master_plaintext(), 7).expect("message");
         let mut w = EncryptionWitness::sample(&p, &k, &m, &mut entropy(3)).expect("witness");
         for value in [-2, 2, i64::MIN, i64::MAX] {
             w.mask[0] = value;
@@ -357,7 +368,7 @@ mod tests {
     fn witness_lengths_are_checked_before_arithmetic() {
         let p = profile();
         let k = key(&p);
-        let m = Plaintext::constant(&p, 7).expect("message");
+        let m = Plaintext::constant(&p, p.master_plaintext(), 7).expect("message");
         for which in 0..3 {
             let mut w = EncryptionWitness::sample(&p, &k, &m, &mut entropy(3)).expect("witness");
             let c = w.encrypt().expect("ciphertext");
@@ -381,7 +392,7 @@ mod tests {
     fn witness_binds_full_key_plaintext_and_profile_even_for_zero_mask() {
         let p = profile();
         let k = key(&p);
-        let m = Plaintext::constant(&p, 7).expect("message");
+        let m = Plaintext::constant(&p, p.master_plaintext(), 7).expect("message");
         let mut w = EncryptionWitness::sample(&p, &k, &m, &mut entropy(3)).expect("witness");
         w.mask.fill(0);
         let c = w.encrypt().expect("ciphertext");
@@ -399,13 +410,13 @@ mod tests {
             w.check(&p, &changed, &m, &c, usize::MAX),
             Err(Refusal::StatementMismatch)
         );
-        let different = Plaintext::constant(&p, 8).expect("message");
+        let different = Plaintext::constant(&p, p.master_plaintext(), 8).expect("message");
         assert_eq!(
             w.check(&p, &k, &different, &c, usize::MAX),
             Err(Refusal::StatementMismatch)
         );
         let foreign = BgvProfile::new(
-            BgvParameters::derive(4, 257, (30, 2), (31, 2), 2).expect("parameters"),
+            BgvParameters::derive(4, 257, 1, (30, 2), (31, 2), 2).expect("parameters"),
         )
         .expect("other");
         assert_eq!(
@@ -418,30 +429,49 @@ mod tests {
     fn witness_refuses_ciphertext_residue_shape_and_noise_substitutions() {
         let p = profile();
         let k = key(&p);
-        let m = Plaintext::constant(&p, 7).expect("message");
+        let m = Plaintext::constant(&p, p.master_plaintext(), 7).expect("message");
         let w = EncryptionWitness::sample(&p, &k, &m, &mut entropy(3)).expect("witness");
         let c = w.encrypt().expect("ciphertext");
         for index in [0, 47, 48, 95] {
             let mut words = c.canonical_words();
             let q = p.parameters().main_primes[(index / 16) % 3];
             words[index] = (words[index] + 1) % q;
-            let changed = Ciphertext::from_canonical_words(&p, 2, 2, &words, c.noise_bound())
-                .expect("canonical altered");
+            let changed = Ciphertext::from_canonical_words(
+                &p,
+                p.master_plaintext(),
+                2,
+                2,
+                &words,
+                c.noise_bound(),
+            )
+            .expect("canonical altered");
             assert_eq!(
                 w.check(&p, &k, &m, &changed, usize::MAX),
                 Err(Refusal::RelationMismatch)
             );
         }
         let zero = NoiseBound::new(Natural::from_u64(0));
-        let changed = Ciphertext::from_canonical_words(&p, 2, 2, &c.canonical_words(), &zero)
-            .expect("claimed zero noise");
+        let changed = Ciphertext::from_canonical_words(
+            &p,
+            p.master_plaintext(),
+            2,
+            2,
+            &c.canonical_words(),
+            &zero,
+        )
+        .expect("claimed zero noise");
         assert_eq!(
             w.check(&p, &k, &m, &changed, usize::MAX),
             Err(Refusal::RelationMismatch)
         );
         for (level, components) in [(1, 2), (2, 3)] {
             let shape = p
-                .plan_claimed(level, components, p.fresh_noise().clone())
+                .plan_claimed(
+                    p.master_plaintext(),
+                    level,
+                    components,
+                    p.fresh_noise().clone(),
+                )
                 .expect("shape");
             let polys = (0..components)
                 .map(|_| super::super::poly::RnsPoly::zero(level + 1, 16))
@@ -455,7 +485,15 @@ mod tests {
         let mut invalid = c.canonical_words();
         invalid[0] = p.parameters().main_primes[0];
         assert_eq!(
-            Ciphertext::from_canonical_words(&p, 2, 2, &invalid, c.noise_bound()).err(),
+            Ciphertext::from_canonical_words(
+                &p,
+                p.master_plaintext(),
+                2,
+                2,
+                &invalid,
+                c.noise_bound()
+            )
+            .err(),
             Some(BgvError::NonCanonical { index: 0 })
         );
     }
@@ -464,7 +502,7 @@ mod tests {
     fn witness_resource_boundary_precedes_entropy_and_checks_overflow() {
         let p = profile();
         let k = key(&p);
-        let m = Plaintext::constant(&p, 7).expect("message");
+        let m = Plaintext::constant(&p, p.master_plaintext(), 7).expect("message");
         let required = fixtures::encryption_witness_working_bytes(&p).expect("bound");
         assert_eq!(
             required,

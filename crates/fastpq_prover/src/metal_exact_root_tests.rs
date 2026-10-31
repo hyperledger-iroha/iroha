@@ -777,6 +777,31 @@ fn phase_diagnostic_scope_is_opt_in_and_clears_after_unwind() {
 #[test]
 #[ignore = "actual Metal phase timing with CPU parity; run alone in release mode"]
 fn required_metal_exact_root_phase_latency_matches_cpu_with_original_owners() {
+    exact_root_phase_latency_with_wait_strategies(
+        &[ticket_lifetime::TestWaitStrategy::YieldThenNotify],
+        12,
+    );
+}
+
+#[test]
+#[ignore = "actual Metal wait-strategy comparison with full CPU parity; run alone in release mode"]
+fn required_metal_exact_root_active_wait_strategies_match_cpu_with_original_owners() {
+    use ticket_lifetime::TestWaitStrategy;
+    exact_root_phase_latency_with_wait_strategies(
+        &[
+            TestWaitStrategy::YieldThenNotify,
+            TestWaitStrategy::ActiveOneMillisecond,
+            TestWaitStrategy::ActiveTwoMilliseconds,
+            TestWaitStrategy::ActiveSixteenMilliseconds,
+        ],
+        8,
+    );
+}
+
+fn exact_root_phase_latency_with_wait_strategies(
+    strategies: &[ticket_lifetime::TestWaitStrategy],
+    rounds: usize,
+) {
     use rayon::prelude::*;
 
     assert!(!cfg!(debug_assertions), "run in release mode");
@@ -821,52 +846,71 @@ fn required_metal_exact_root_phase_latency_matches_cpu_with_original_owners() {
             }
         })
         .collect::<Vec<_>>();
-    for round in 0..12 {
+    if strategies.len() > 1 {
+        // The controlled comparison excludes one-time pipeline/allocation
+        // warmup for every public shape before any policy receives a sample.
+        for case in &mut cases {
+            transform(&mut case.actual, case.log, case.root, case.inverse).unwrap();
+            assert_eq!(case.actual, case.expected);
+        }
+    }
+    for round in 0..rounds {
         for index in if round % 2 == 0 {
             [0, 1, 2, 3]
         } else {
             [3, 2, 1, 0]
         } {
             let case = &mut cases[index];
-            for (actual, original) in case.actual.iter_mut().zip(&case.original) {
-                actual.copy_from_slice(original);
+            for strategy_offset in 0..strategies.len() {
+                // Rotate and reverse so each policy occupies every position
+                // twice across two rounds per policy.
+                let strategy_index = if round % 2 == 0 {
+                    (round / 2 + strategy_offset) % strategies.len()
+                } else {
+                    (round / 2 + strategies.len() - 1 - strategy_offset) % strategies.len()
+                };
+                let strategy = strategies[strategy_index];
+                for (actual, original) in case.actual.iter_mut().zip(&case.original) {
+                    actual.copy_from_slice(original);
+                }
+                let _strategy = ticket_lifetime::TestWaitStrategyScope::enter(strategy);
+                let scope = PhaseDiagnosticScope::begin();
+                let started = Instant::now();
+                transform(&mut case.actual, case.log, case.root, case.inverse).unwrap();
+                let outer = started.elapsed();
+                let record = scope.finish();
+                assert_eq!(case.actual, case.expected);
+                assert!(record.gpu_seconds > 0.0);
+                let cleanup = record
+                    .wait_and_cleanup
+                    .saturating_sub(record.ticket_wait + record.copy_back);
+                let final_return = outer.saturating_sub(record.total);
+                let ms = |duration: Duration| duration.as_secs_f64() * 1000.0;
+                eprintln!(
+                    "exact_root_phase log={} columns={} inverse={} round={} context_twiddle_ms={:.6} flatten_ms={:.6} mapping_ms={:.6} submit_ms={:.6} wait_cleanup_ms={:.6} ticket_wait_ms={:.6} copyback_ms={:.6} wait_owner_cleanup_ms={:.6} backing_drop_ms={:.6} final_return_ms={:.6} inner_total_ms={:.6} outer_total_ms={:.6} gpu_ms={:.6} kernel_ms={:.6} parity=exact wait_strategy={strategy:?} strategy_position={strategy_offset}",
+                    case.log,
+                    case.columns,
+                    case.inverse,
+                    round,
+                    ms(record.context_twiddles),
+                    ms(record.flatten),
+                    ms(record.mapping),
+                    ms(record.submit),
+                    ms(record.wait_and_cleanup),
+                    ms(record.ticket_wait),
+                    ms(record.copy_back),
+                    ms(cleanup),
+                    ms(record.backing_drop),
+                    ms(final_return),
+                    ms(record.total),
+                    ms(outer),
+                    record.gpu_seconds * 1000.0,
+                    record.kernel_seconds * 1000.0,
+                );
             }
-            let scope = PhaseDiagnosticScope::begin();
-            let started = Instant::now();
-            transform(&mut case.actual, case.log, case.root, case.inverse).unwrap();
-            let outer = started.elapsed();
-            let record = scope.finish();
-            assert_eq!(case.actual, case.expected);
-            assert!(record.gpu_seconds > 0.0);
-            let cleanup = record
-                .wait_and_cleanup
-                .saturating_sub(record.ticket_wait + record.copy_back);
-            let final_return = outer.saturating_sub(record.total);
-            let ms = |duration: Duration| duration.as_secs_f64() * 1000.0;
-            eprintln!(
-                "exact_root_phase log={} columns={} inverse={} round={} context_twiddle_ms={:.6} flatten_ms={:.6} mapping_ms={:.6} submit_ms={:.6} wait_cleanup_ms={:.6} ticket_wait_ms={:.6} copyback_ms={:.6} wait_owner_cleanup_ms={:.6} backing_drop_ms={:.6} final_return_ms={:.6} inner_total_ms={:.6} outer_total_ms={:.6} gpu_ms={:.6} kernel_ms={:.6} parity=exact",
-                case.log,
-                case.columns,
-                case.inverse,
-                round,
-                ms(record.context_twiddles),
-                ms(record.flatten),
-                ms(record.mapping),
-                ms(record.submit),
-                ms(record.wait_and_cleanup),
-                ms(record.ticket_wait),
-                ms(record.copy_back),
-                ms(cleanup),
-                ms(record.backing_drop),
-                ms(final_return),
-                ms(record.total),
-                ms(outer),
-                record.gpu_seconds * 1000.0,
-                record.kernel_seconds * 1000.0,
-            );
         }
     }
     eprintln!(
-        "exact_root_phase_notes no_command_clone=true original_owner_drop_order=true gpu_timestamps_after_success_only=true private_input=false backing_drop_records_synchronous_thread_only=true final_return_includes_public_twiddle_and_drain_scope_drop=true"
+        "exact_root_phase_notes no_command_clone=true original_owner_drop_order=true gpu_timestamps_after_success_only=true private_input=false backing_drop_records_synchronous_thread_only=true final_return_includes_public_twiddle_and_drain_scope_drop=true wait_override_test_only=true shared_deadline_unchanged=true active_wait_replaces_yields=true active_wait_then_original_notification_fallback=true"
     );
 }

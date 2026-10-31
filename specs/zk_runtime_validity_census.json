@@ -2639,7 +2639,7 @@
    "sites": [
     ["crates/fastpq_prover/src/backend.rs", "unavailable", "local_resource", 1],
     ["crates/fastpq_prover/src/error.rs", "unavailable", "local_resource", 2],
-    ["crates/fastpq_prover/src/goldilocks_transform.rs", "unavailable", "local_resource", 3],
+    ["crates/fastpq_prover/src/goldilocks_transform.rs", "unavailable", "local_resource", 6],
     ["crates/fastpq_prover/src/gpu.rs", "unavailable", "unsupported", 5],
     ["crates/fastpq_prover/src/gpu_stub.rs", "unavailable", "unsupported", 6],
     ["crates/fastpq_prover/src/metal.rs", "unavailable", "unsupported", 4],
@@ -2655,7 +2655,7 @@
     ["crates/iroha_core/src/state/fastpq_quantity_capture/commitment_journal/finalized_source.rs", "unavailable", "local_resource", 3],
     ["crates/iroha_core/src/state/fastpq_quantity_write_plan.rs", "unavailable", "local_resource", 4]
    ],
-   "note": "The autonomous producer classifies original typed capacity, allocator, Interrupted/WouldBlock and missing optional transport causes; fixed bounds, malformed proofs, identity mismatches and invariants remain terminal. Retrying retains the exact source, statement index and original error. Neither retry nor terminal local proof-production failure rejects or credits a ledger payment. Missing source transport invokes the isolated original-seed executor; no live State or settlement status is published.",
+   "note": "The autonomous producer classifies original typed capacity, allocator, Interrupted/WouldBlock and missing optional transport causes; fixed bounds, malformed proofs, identity mismatches and invariants remain terminal. Retrying retains the exact source, statement index and original error. Neither retry nor terminal local proof-production failure rejects or credits a ledger payment. Missing source transport invokes the isolated original-seed executor; no live State or settlement status is published. Exact-root transform preparation/publication and its payload accessor retain the same typed DeviceUnavailable result for missing required GPU execution; Auto/CPU dispatch keeps its deterministic CPU behavior. These are local execution-resource outcomes, not proof-profile or acceptance selectors.",
    "tests": [
     {
      "path": "crates/iroha_core/src/fastpq/lane/producer.rs",
@@ -5241,9 +5241,10 @@
     ["crates/iroha_core/src/executor/attachment_custody/x509.rs", "unavailable", "local_resource", 1],
     ["crates/iroha_core/src/smartcontracts/ivm/host/x509_attachment.rs", "unavailable", "local_resource", 6],
     ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/accumulator_stark.rs", "unavailable", "local_resource", 5],
-    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark.rs", "unavailable", "local_resource", 5]
+    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark.rs", "unavailable", "local_resource", 5],
+    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_bounded_transform.rs", "unavailable", "local_resource", 1]
    ],
-   "note": "X509 attachment custody keeps original decode/allocation refusal typed through SignedAttachmentErrorV1::LocalResource. The IVM owner maps original local failures to AllocationDeferred or ExecutionDeferred, preserving charged ownership through queue application; they do not become proof-invalidity verdicts. This source census is not whole-node local-resource qualification."
+   "note": "X509 attachment custody keeps original decode/allocation refusal typed through SignedAttachmentErrorV1::LocalResource. The IVM owner maps original local failures to AllocationDeferred or ExecutionDeferred, preserving charged ownership through queue application; they do not become proof-invalidity verdicts. This source census is not whole-node local-resource qualification. The native CPU adapter supplies a DeviceUnavailable callback while setting backend=None; columns_v1 consequently selects the existing CPU branch before that callback can be invoked. This syntactic resource token adds no proof-validity or activation condition."
   },
   {
    "id": "zk_x509.wall_clock",
@@ -6031,6 +6032,195 @@
    "sites": [
     ["crates/connect_norito_bridge/src/zk_x509_transaction_ffi.rs", "unavailable", "unavailable", 13]
    ]
+  },
+  {
+   "id": "ram_lfe.bgv_bounded_compiler_profile",
+   "kind": "activation_lifecycle",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_compiler.rs",
+   "symbol": "UnsupportedProfile",
+   "gates": "Bounded coefficient preparation accepts exactly 128 scalar slots over F257.",
+   "decided_by": "The supplied public routing plan must have 128 slots and plaintext modulus 257 before private row allocation; the comparison is identical for the same plan.",
+   "attribution": "read",
+   "note": "UnsupportedProfile is ordinary validation of the compiler input plan, not a readiness switch, deployment gate or activation of ciphertext evaluation. The separate generic bounded arithmetic evaluator consumes these matrices under a complete public plan; this compiler supplies no proof authority. Existing unfinished operation refusals remain.",
+   "anchors": [
+    {
+     "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_compiler.rs",
+     "function": "check_plan",
+     "contains": "plan.slots() != SLOTS",
+     "count": 1
+    },
+    {
+     "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_compiler.rs",
+     "function": "check_plan",
+     "contains": "plan.plaintext_modulus() != u64::from(MODULUS)",
+     "count": 1
+    }
+   ],
+   "sites": [
+    ["crates/iroha_crypto/src/ram_lfe/bgv_bounded_compiler.rs", "unavailable", "unsupported", 2]
+   ]
+  },
+  {
+   "id": "ram_lfe.bgv_affine_profile",
+   "kind": "activation_lifecycle",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_affine.rs",
+   "symbol": "UnsupportedProfile",
+   "gates": "The affine arithmetic plan accepts exactly 128 scalar slots over F257 and the corresponding seven public Galois generators.",
+   "decided_by": "The explicit effective plaintext precision must belong to the same master profile and have modulus257,128 scalar slots and exactly seven public broadcast generators; physical errors retain master p^E.",
+   "attribution": "read",
+   "note": "UnsupportedProfile validates the supplied arithmetic profile before planning or ciphertext evaluation. It is not an environment/readiness gate or a claim that parameters, normalization, input/key authenticity or circuit privacy are qualified. Existing runtime refusals remain.",
+   "anchors": [
+    {
+     "path": "crates/iroha_crypto/src/ram_lfe/bgv_affine.rs",
+     "function": "new",
+     "contains": "precision.modulus() != u64::from(RAM_LFE_V1_PLAINTEXT_MODULUS)",
+     "count": 1
+    },
+    {
+     "path": "crates/iroha_crypto/src/ram_lfe/bgv_affine.rs",
+     "function": "new",
+     "contains": "encoding.slots() != SLOTS",
+     "count": 1
+    },
+    {
+     "path": "crates/iroha_crypto/src/ram_lfe/bgv_affine.rs",
+     "function": "new",
+     "contains": ".broadcast_elements()",
+     "count": 1
+    }
+   ],
+   "sites": [
+    ["crates/iroha_crypto/src/ram_lfe/bgv_affine.rs", "unavailable", "unsupported", 4]
+   ]
+  },
+  {
+   "id": "ram_lfe.bgv_bounded_evaluator_profile",
+   "kind": "activation_lifecycle",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded.rs",
+   "symbol": "UnsupportedProfile",
+   "gates": "Complete generic bounded arithmetic accepts exactly128 scalar slots overF257 and its corresponding seven Galois generators.",
+   "decided_by": "The explicit effective plaintext precision must belong to the same master profile and have modulus257,128 scalar slots and exactly seven public broadcast generators; physical errors retain master p^E.",
+   "attribution": "read",
+   "note": "UnsupportedProfile is deterministic parameter validation of the complete arithmetic plan, not a readiness switch, deployment gate, selected parameter qualification or runtime backend activation. The sole consumed packed-input evaluator supports an explicit fixed public physical-refresh schedule. External authentication, committed execution, circuit privacy, full-resource/security qualification and logical Refresh-class compilation remain incomplete.",
+   "anchors": [
+    {
+     "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded.rs",
+     "function": "new",
+     "contains": "precision.modulus() != 257 || encoding.slots() != SLOTS",
+     "count": 1
+    },
+    {
+     "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded.rs",
+     "function": "new",
+     "contains": ".broadcast_elements()",
+     "count": 1
+    }
+   ],
+   "sites": [
+    ["crates/iroha_crypto/src/ram_lfe/bgv_bounded.rs", "unavailable", "unsupported", 3]
+   ]
+  },
+  {
+   "id": "fhe.prime_power_word_precision",
+   "kind": "activation_lifecycle",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_fhe/src/prime_power.rs",
+   "symbol": "UnsupportedPrecision",
+   "gates": "Public prime-power preparation accepts the exact requested odd-prime power only when it fits the canonical word modulus below2^63.",
+   "decided_by": "Deterministic public context validation rejects precision above39, checked-power overflow or modulus outside FixedModulus admission before coefficient/program allocation.",
+   "attribution": "read",
+   "note": "UnsupportedPrecision is exact arithmetic-representation validation, not readiness, a local activation switch or permission to execute ciphertext refresh. No precision is truncated. The module prepares public coefficients/instructions only; exact division, encrypted-secret binding, noise transitions and runtime refresh remain unimplemented.",
+   "anchors": [
+    {
+     "path": "crates/iroha_fhe/src/prime_power.rs",
+     "contains": "if precision > 39 {",
+     "count": 1
+    },
+    {
+     "path": "crates/iroha_fhe/src/prime_power.rs",
+     "function": "checked_power",
+     "contains": ".filter(|&next| next < 1_u64 << 63)",
+     "count": 1
+    },
+    {
+     "path": "crates/iroha_fhe/src/prime_power.rs",
+     "contains": "FixedModulus::derive(modulus).ok_or(PrimePowerError::UnsupportedPrecision)?",
+     "count": 1
+    }
+   ],
+   "sites": [
+    ["crates/iroha_fhe/src/prime_power.rs", "unavailable", "unsupported", 4]
+   ]
+  },
+  {
+   "id": "ram_lfe.bgv_packed_input_profile",
+   "kind": "activation_lifecycle",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_input.rs",
+   "symbol": "UnsupportedProfile",
+   "gates": "Actual packed-input construction requires same-master effective F257 precision and exactly128 scalar slots.",
+   "decided_by": "Public key/context/master identity, effective modulus, slot count and fresh-noise admission precede private reference-slot reads.",
+   "attribution": "read",
+   "note": "Deterministic parameter validation of canonical admitted-input encoding and local encryption, not readiness, activation, imported authenticity, circuit privacy or selected parameter qualification. No raw/local ciphertext cast mints packed provenance.",
+   "anchors": [
+    {
+     "path": "crates/iroha_crypto/src/ram_lfe/bgv_input.rs",
+     "function": "encrypt",
+     "contains": "precision.modulus() != 257",
+     "count": 1
+    },
+    {
+     "path": "crates/iroha_crypto/src/ram_lfe/bgv_input.rs",
+     "function": "encrypt",
+     "contains": "encoding.slots() != SLOTS",
+     "count": 1
+    },
+    {
+     "path": "crates/iroha_crypto/src/ram_lfe/bgv_input.rs",
+     "function": "encrypt",
+     "contains": "key.profile_identity() != profile.identity()",
+     "count": 1
+    }
+   ],
+   "sites": [
+    ["crates/iroha_crypto/src/ram_lfe/bgv_input.rs", "unavailable", "unsupported", 3]
+   ]
+  },
+  {
+   "id": "ram_lfe.bgv_bounded_refresh_preparation_profile",
+   "kind": "activation_lifecycle",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_refresh.rs",
+   "symbol": "UnsupportedProfile",
+   "gates": "Public bounded preparation accounting requires effective F257 precision and a ring large enough for128 scalar slots.",
+   "decided_by": "The explicit effective precision must belong to the same master profile; its modulus must equal257 and profile.degree() must be at least128 before public aggregate plan preparation.",
+   "attribution": "read",
+   "note": "This deterministic geometry check protects the existing fixed bounded class and typed preparation accounting. It does not select a parameter set, attest security or activate a backend. Exact slot count, full shape/key/schedule/carry checks and all preparation/work/stage caps remain enforced by their canonical owners; logical Refresh-class semantics remain separate.",
+   "anchors": [
+    {
+     "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_refresh.rs",
+     "function": "preparation_requirement",
+     "contains": "precision.modulus() != 257 || profile.degree() < 128",
+     "count": 1
+    }
+   ],
+   "sites": [
+    [
+     "crates/iroha_crypto/src/ram_lfe/bgv_bounded_refresh.rs",
+     "unavailable",
+     "unsupported",
+     1
+    ]
+   ]
   }
  ],
  "config_catalogs": [
@@ -6666,9 +6856,9 @@
   }
  },
  "summary": {
-  "entries": 232,
-  "sites": 1502,
-  "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 115, "open": 40, "out_of_plan": 21, "unsupported": 19},
-  "by_owner": {"-": 136, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
+  "entries": 238,
+  "sites": 1509,
+  "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 121, "open": 40, "out_of_plan": 21, "unsupported": 19},
+  "by_owner": {"-": 142, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }
 }

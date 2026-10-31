@@ -5,6 +5,7 @@
 //! the existing dispatch ticket drains or quarantines it on error and unwind.
 
 use super::*;
+use rayon::prelude::*;
 
 const LANES: u64 = 256;
 const LOCAL_LOG: u32 = 8;
@@ -134,6 +135,7 @@ pub(super) fn diagnostic_completed_command(command: &CommandBufferRef) {
 }
 
 /// The public exact-root facade validates canonicality and root order first.
+#[cfg(test)]
 pub fn transform(
     columns: &mut [Vec<u64>],
     log_size: u32,
@@ -142,25 +144,114 @@ pub fn transform(
 ) -> MetalResult<()> {
     #[cfg(test)]
     let diagnostic_total = diagnostic_start();
+    if columns.len() > crate::goldilocks_transform::MAX_GOLDILOCKS_TRANSFORM_COLUMNS_V1 {
+        return Err(GpuError::InvalidInput(
+            "invalid bounded exact-root FFT shape",
+        ));
+    }
+    let count = columns.len();
+    let prepared = {
+        let views: [&[u64]; 8] = core::array::from_fn(|index| -> &[u64] {
+            columns.get(index).map_or(&[], Vec::as_slice)
+        });
+        prepare(&views[..count], log_size, root, inverse)?
+    };
+    let mut destinations: [&mut [u64]; 8] = core::array::from_fn(|_| -> &mut [u64] { &mut [] });
+    for (destination, column) in destinations.iter_mut().zip(columns) {
+        *destination = column;
+    }
+    #[cfg(test)]
+    let diagnostic_publish = diagnostic_start();
+    let result = prepared
+        .publish_into(&mut destinations[..count])
+        .map_err(|error| {
+            if error == crate::goldilocks_transform::GoldilocksTransformErrorV1::CompletionUncertain
+            {
+                GpuError::CompletionUncertain {
+                    backend: GpuBackend::Metal,
+                }
+            } else {
+                GpuError::Execution {
+                    backend: GpuBackend::Metal,
+                    message: error.to_string(),
+                }
+            }
+        });
+    #[cfg(test)]
+    diagnostic_record(diagnostic_publish, |record| &mut record.wait_and_cleanup);
+    #[cfg(test)]
+    diagnostic_record(diagnostic_total, |record| &mut record.total);
+    result
+}
+
+/// Complete the original single shared backing without publishing caller data.
+pub(crate) fn prepare(
+    columns: &[&[u64]],
+    log_size: u32,
+    root: u64,
+    inverse: bool,
+) -> MetalResult<PreparedColumns> {
+    prepare_with_limit(
+        columns,
+        log_size,
+        root,
+        inverse,
+        crate::goldilocks_transform::MAX_GOLDILOCKS_TRANSFORM_COLUMNS_V1,
+    )
+}
+
+/// The separate forward facade has admitted the complete sixteen-column backing.
+pub(crate) fn prepare_forward(
+    columns: &[&[u64]],
+    log_size: u32,
+    root: u64,
+) -> MetalResult<PreparedColumns> {
+    prepare_with_limit(
+        columns,
+        log_size,
+        root,
+        false,
+        crate::goldilocks_transform::MAX_GOLDILOCKS_PREPARED_FORWARD_COLUMNS_V1,
+    )
+}
+
+fn prepare_with_limit(
+    columns: &[&[u64]],
+    log_size: u32,
+    root: u64,
+    inverse: bool,
+    column_limit: usize,
+) -> MetalResult<PreparedColumns> {
     let _drain_scope = DrainScope::enter(METAL_COMMAND_TIMEOUT);
     ensure_backend_available()?;
     let extent = goldilocks_domain_len(log_size)?;
     if log_size == 0
         || columns.is_empty()
-        || columns.len() > crate::goldilocks_transform::MAX_GOLDILOCKS_TRANSFORM_COLUMNS_V1
+        || columns.len() > column_limit
         || columns.iter().any(|column| column.len() != extent)
     {
         return Err(GpuError::InvalidInput(
             "invalid bounded exact-root FFT shape",
         ));
     }
-    let column_count = u32::try_from(columns.len())
+    prepare_staged_v1(columns.len(), log_size, root, inverse, || {
+        flatten_with_stats(columns, ColumnStagingPhase::Fft)
+    })
+}
+
+fn prepare_staged_v1(
+    columns: usize,
+    log_size: u32,
+    root: u64,
+    inverse: bool,
+    stage: impl FnOnce() -> MetalResult<PooledBuffer>,
+) -> MetalResult<PreparedColumns> {
+    let extent = goldilocks_domain_len(log_size)?;
+    let column_count = u32::try_from(columns)
         .map_err(|_| GpuError::InvalidInput("exact-root FFT column count exceeds u32"))?;
-    let words = extent
-        .checked_mul(columns.len())
-        .ok_or(GpuError::InvalidInput(
-            "exact-root FFT staging extent exceeds platform limits",
-        ))?;
+    let words = extent.checked_mul(columns).ok_or(GpuError::InvalidInput(
+        "exact-root FFT staging extent exceeds platform limits",
+    ))?;
     #[cfg(test)]
     let diagnostic_context = diagnostic_start();
     let context = metal_context()?;
@@ -191,7 +282,7 @@ pub fn transform(
     };
     #[cfg(test)]
     let diagnostic_flatten = diagnostic_start();
-    let mut buffer = flatten_with_stats(columns, ColumnStagingPhase::Fft)?;
+    let mut buffer = stage()?;
     #[cfg(test)]
     diagnostic_record(diagnostic_flatten, |record| &mut record.flatten);
     #[cfg(test)]
@@ -204,22 +295,355 @@ pub fn transform(
     let ticket = submit(context, &metal_buffer, &twiddles, args)?;
     #[cfg(test)]
     diagnostic_record(diagnostic_submit, |record| &mut record.submit);
-    // Reuse the production wait/copy owner and its failure injection. This is
-    // one batch covering all columns: no partial caller mutation precedes wait.
+    // Reuse the original wait owner and its failure injection. A completed
+    // token keeps the same backing and Metal view until checked publication.
     #[cfg(test)]
     let diagnostic_wait = diagnostic_start();
-    let result = ColumnBatchTicket {
-        range: 0..columns.len(),
+    let completed = ColumnBatchTicket {
+        range: 0..columns,
         buffer,
         metal_buffer,
         tickets: smallvec::smallvec![ticket],
     }
-    .wait(columns, extent, true);
+    .complete(true)?;
     #[cfg(test)]
     diagnostic_record(diagnostic_wait, |record| &mut record.wait_and_cleanup);
-    #[cfg(test)]
-    diagnostic_record(diagnostic_total, |record| &mut record.total);
-    result
+    let CompletedColumnBatch {
+        range,
+        buffer,
+        _metal_buffer,
+    } = completed;
+    debug_assert_eq!(range, 0..columns);
+    Ok(PreparedColumns {
+        output: PreparedOutput {
+            buffer,
+            rows: extent,
+            columns,
+        },
+        _metal_buffer,
+    })
+}
+
+/// Stage canonical masked prefixes into the same bounded exact-root owner.
+/// The public facade validates every coefficient, power and exact root first.
+pub(crate) fn prepare_prefixes_v1(
+    prefixes: &[&[u64]],
+    log_size: u32,
+    root: u64,
+    powers: &[u64],
+) -> MetalResult<PreparedColumns> {
+    let _drain_scope = DrainScope::enter(METAL_COMMAND_TIMEOUT);
+    ensure_backend_available()?;
+    let rows = goldilocks_domain_len(log_size)?;
+    if log_size == 0
+        || prefixes.is_empty()
+        || prefixes.len() > crate::goldilocks_transform::MAX_GOLDILOCKS_TRANSFORM_COLUMNS_V1
+        || prefixes
+            .iter()
+            .any(|prefix| prefix.is_empty() || prefix.len() > rows || prefix.len() > powers.len())
+    {
+        return Err(GpuError::InvalidInput("invalid bounded prefix FFT shape"));
+    }
+    prepare_staged_v1(prefixes.len(), log_size, root, false, || {
+        stage_validated_prefixes_v1(prefixes, rows, powers)
+    })
+}
+
+fn stage_validated_prefixes_v1(
+    prefixes: &[&[u64]],
+    rows: usize,
+    powers: &[u64],
+) -> MetalResult<PooledBuffer> {
+    let words = rows
+        .checked_mul(prefixes.len())
+        .ok_or(GpuError::InvalidInput("prefix extent overflow"))?;
+    let start = Instant::now();
+    let mut buffer = PooledBuffer::sensitive_zeroed(words)?;
+    let backing = Arc::get_mut(&mut buffer.backing).expect("new prefix backing is unique");
+    if rows >= METAL_BUFFER_PAGE_WORDS {
+        // rows is a power of two, so independent full columns have disjoint pages.
+        backing
+            .pages
+            .par_chunks_mut(rows / METAL_BUFFER_PAGE_WORDS)
+            .zip(prefixes.par_iter())
+            .for_each(|(pages, prefix)| {
+                for (index, page) in pages
+                    .iter_mut()
+                    .take(prefix.len().div_ceil(METAL_BUFFER_PAGE_WORDS))
+                    .enumerate()
+                {
+                    let first = index * METAL_BUFFER_PAGE_WORDS;
+                    let count = (prefix.len() - first).min(METAL_BUFFER_PAGE_WORDS);
+                    for ((destination, coefficient), power) in page.words[..count]
+                        .iter_mut()
+                        .zip(&prefix[first..first + count])
+                        .zip(&powers[first..first + count])
+                    {
+                        *destination = prefix_product_v1(*coefficient, *power);
+                    }
+                }
+            });
+    } else {
+        // Tiny test domains may share pages; each word still has exactly one writer.
+        for (column, prefix) in prefixes.iter().enumerate() {
+            for (row, (&coefficient, &power)) in prefix.iter().zip(powers).enumerate() {
+                let index = column * rows + row;
+                backing.pages[index / METAL_BUFFER_PAGE_WORDS].words
+                    [index % METAL_BUFFER_PAGE_WORDS] = prefix_product_v1(coefficient, power);
+            }
+        }
+    }
+    record_staging_flatten(ColumnStagingPhase::Fft, start.elapsed());
+    Ok(buffer)
+}
+
+/// Same unsigned pseudo-Mersenne fold as the privacy field arithmetic.
+#[inline]
+fn prefix_product_v1(left: u64, right: u64) -> u64 {
+    const EPSILON: u64 = 0xffff_ffff;
+    let product = u128::from(left) * u128::from(right);
+    let low = product as u64;
+    let high = (product >> 64) as u64;
+    let (low, borrowed) = low.overflowing_sub(high >> 32);
+    let low = if borrowed {
+        low.wrapping_sub(EPSILON)
+    } else {
+        low
+    };
+    let (value, carried) = low.overflowing_add((high & EPSILON) * EPSILON);
+    let value = if carried {
+        value.wrapping_add(EPSILON)
+    } else {
+        value
+    };
+    if value >= FIELD_MODULUS {
+        value - FIELD_MODULUS
+    } else {
+        value
+    }
+}
+
+/// A completed device allocation. Only the original successful wait constructs it.
+pub(crate) struct PreparedColumns {
+    output: PreparedOutput,
+    _metal_buffer: Buffer,
+}
+
+/// Validated completed backing, with no device view or GPU-lane guard.
+/// Only immutable slices escape, and its final backing owner erases all pages.
+pub(crate) struct CompletedReadColumns {
+    output: PreparedOutput,
+}
+
+impl CompletedReadColumns {
+    pub(crate) fn erase_completed_v1(self) {
+        self.output.buffer.erase_completed_v1();
+    }
+
+    pub(crate) fn rows(&self) -> usize {
+        self.output.rows
+    }
+    pub(crate) fn columns(&self) -> usize {
+        self.output.columns
+    }
+    pub(crate) fn backing_payload_bytes(
+        &self,
+    ) -> Result<usize, crate::goldilocks_transform::GoldilocksTransformErrorV1> {
+        self.output.backing_payload_bytes()
+    }
+    #[allow(unsafe_code)]
+    pub(crate) fn column(&self, index: usize) -> Option<&[u64]> {
+        if index >= self.output.columns {
+            return None;
+        }
+        const {
+            assert!(
+                mem::size_of::<MetalBufferPage>()
+                    == METAL_BUFFER_PAGE_WORDS * mem::size_of::<u64>()
+            );
+        }
+        // SAFETY: validate_output established exact logical/page extents and
+        // canonicality before constructing this owner. repr(C) pages contain
+        // only an exactly page-sized u64 array, with no inter-page padding.
+        // The index bounds put the entire slice inside initialized allocation.
+        // Authoritative GPU completion precedes this owner; no mutable access,
+        // dispatch or view survives it. Shared borrows keep backing alive.
+        Some(unsafe {
+            core::slice::from_raw_parts(
+                self.output
+                    .buffer
+                    .backing
+                    .pages
+                    .as_ptr()
+                    .cast::<u64>()
+                    .add(index * self.output.rows),
+                self.output.rows,
+            )
+        })
+    }
+}
+
+/// The shared publication contract can also be exercised without GPU execution.
+/// Tests construct this private owner from the real clearing backing pool.
+struct PreparedOutput {
+    buffer: PooledBuffer,
+    rows: usize,
+    columns: usize,
+}
+
+/// Scan exactly the validated logical extent, excluding the final page padding.
+fn completed_output_is_canonical_v1(pages: &[MetalBufferPage], words: usize) -> bool {
+    use crate::goldilocks_transform::{
+        CANONICAL_SCAN_TILE_WORDS_V1, canonical_word_slice_v1, parallel_canonical_scan_v1,
+    };
+    use rayon::prelude::*;
+
+    let full = words / METAL_BUFFER_PAGE_WORDS;
+    let tail = words % METAL_BUFFER_PAGE_WORDS;
+    const TILE_PAGES: usize = CANONICAL_SCAN_TILE_WORDS_V1 / METAL_BUFFER_PAGE_WORDS;
+    const { assert!(TILE_PAGES > 0) };
+    let complete = if parallel_canonical_scan_v1(words) {
+        pages[..full]
+            .par_chunks(TILE_PAGES)
+            .all(|tile| tile.iter().all(|page| canonical_word_slice_v1(&page.words)))
+    } else {
+        pages[..full]
+            .iter()
+            .all(|page| canonical_word_slice_v1(&page.words))
+    };
+    complete && (tail == 0 || canonical_word_slice_v1(&pages[full].words[..tail]))
+}
+
+impl PreparedColumns {
+    pub(crate) fn into_readonly(
+        self,
+    ) -> Result<CompletedReadColumns, crate::goldilocks_transform::GoldilocksTransformErrorV1> {
+        let Self {
+            output,
+            _metal_buffer,
+        } = self;
+        let completed = output.into_readonly()?;
+        // No pending command exists. Drop the view before publishing host-only
+        // custody; its callback can release its separate backing retention.
+        drop(_metal_buffer);
+        Ok(completed)
+    }
+
+    pub(crate) fn rows(&self) -> usize {
+        self.output.rows
+    }
+    pub(crate) fn columns(&self) -> usize {
+        self.output.columns
+    }
+
+    pub(crate) fn backing_payload_bytes(
+        &self,
+    ) -> Result<usize, crate::goldilocks_transform::GoldilocksTransformErrorV1> {
+        self.output.backing_payload_bytes()
+    }
+
+    pub(crate) fn publish_into(
+        self,
+        destinations: &mut [&mut [u64]],
+    ) -> Result<(), crate::goldilocks_transform::GoldilocksTransformErrorV1> {
+        let Self {
+            output,
+            _metal_buffer,
+        } = self;
+        output.publish_into(destinations)?;
+        // Device callbacks cannot invoke worker cleanup: release this view,
+        // then attempt exclusive completed backing custody on this caller.
+        drop(_metal_buffer);
+        output.buffer.erase_completed_v1();
+        Ok(())
+    }
+}
+
+impl PreparedOutput {
+    fn into_readonly(
+        self,
+    ) -> Result<CompletedReadColumns, crate::goldilocks_transform::GoldilocksTransformErrorV1> {
+        self.validate_output()?;
+        Ok(CompletedReadColumns { output: self })
+    }
+
+    fn backing_payload_bytes(
+        &self,
+    ) -> Result<usize, crate::goldilocks_transform::GoldilocksTransformErrorV1> {
+        const {
+            assert!(mem::size_of::<PooledBufferBacking>() + 2 * mem::size_of::<usize>() <= 256);
+        }
+        self.buffer
+            .backing
+            .pages
+            .capacity()
+            .checked_mul(METAL_BUFFER_PAGE_BYTES)
+            .and_then(|bytes| bytes.checked_add(mem::size_of::<PooledBufferBacking>()))
+            // Arc's allocation owns both atomic reference counts before its data.
+            .and_then(|bytes| bytes.checked_add(2 * mem::size_of::<usize>()))
+            .ok_or(crate::goldilocks_transform::GoldilocksTransformErrorV1::InvalidShape)
+    }
+
+    fn validate_output(
+        &self,
+    ) -> Result<(), crate::goldilocks_transform::GoldilocksTransformErrorV1> {
+        use crate::goldilocks_transform::{
+            GoldilocksTransformErrorV1 as Error, goldilocks_transform_completion_uncertain_v1,
+        };
+        if goldilocks_transform_completion_uncertain_v1() {
+            return Err(Error::CompletionUncertain);
+        }
+        let words = self
+            .rows
+            .checked_mul(self.columns)
+            .ok_or(Error::InvalidShape)?;
+        if self.rows < 2
+            || !self.rows.is_power_of_two()
+            || self.rows.trailing_zeros() > 32
+            || !(1..=crate::goldilocks_transform::MAX_GOLDILOCKS_PREPARED_FORWARD_COLUMNS_V1)
+                .contains(&self.columns)
+            || self.buffer.len() != words
+            || self.buffer.backing.pages.len() != metal_buffer_page_count(words)
+            || self.buffer.backing.pages.capacity() != self.buffer.backing.pages.len()
+        {
+            return Err(Error::InvalidShape);
+        }
+        if !completed_output_is_canonical_v1(&self.buffer.backing.pages, words) {
+            return Err(Error::NonCanonicalOutput);
+        }
+        // A different submitted command may become uncertain during the scan.
+        // Every refusal still precedes the first destination write.
+        if goldilocks_transform_completion_uncertain_v1() {
+            return Err(Error::CompletionUncertain);
+        }
+        Ok(())
+    }
+
+    fn publish_into(
+        &self,
+        destinations: &mut [&mut [u64]],
+    ) -> Result<(), crate::goldilocks_transform::GoldilocksTransformErrorV1> {
+        use crate::goldilocks_transform::{
+            GoldilocksTransformErrorV1 as Error, goldilocks_transform_completion_uncertain_v1,
+        };
+        if goldilocks_transform_completion_uncertain_v1() {
+            return Err(Error::CompletionUncertain);
+        }
+        if destinations.len() != self.columns
+            || destinations.iter().any(|column| column.len() != self.rows)
+        {
+            return Err(Error::InvalidShape);
+        }
+        self.validate_output()?;
+        #[cfg(test)]
+        let diagnostic_copy = diagnostic_start();
+        for (index, column) in destinations.iter_mut().enumerate() {
+            self.buffer.copy_range_to_slice(index * self.rows, column);
+        }
+        #[cfg(test)]
+        diagnostic_copy_back(diagnostic_copy);
+        Ok(())
+    }
 }
 
 fn submit(
@@ -291,3 +715,23 @@ fn submit(
 #[cfg(test)]
 #[path = "metal_exact_root_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "metal_exact_root_transaction_tests.rs"]
+mod transaction_tests;
+
+#[cfg(test)]
+#[path = "metal_exact_root_canonical_scan_tests.rs"]
+mod canonical_scan_tests;
+
+#[cfg(test)]
+#[path = "metal_exact_root_mapping_tests.rs"]
+mod mapping_tests;
+
+#[cfg(test)]
+#[path = "metal_exact_root_prefix_tests.rs"]
+pub(crate) mod prefix_tests;
+
+#[cfg(test)]
+#[path = "metal_exact_root_readonly_tests.rs"]
+mod readonly_tests;

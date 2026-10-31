@@ -16,7 +16,7 @@ use support::oracle;
 use zeroize::Zeroizing;
 
 fn profile() -> BgvProfile {
-    BgvProfile::new(BgvParameters::derive(4, 257, (40, 2), (41, 1), 1).expect("parameters"))
+    BgvProfile::new(BgvParameters::derive(4, 257, 1, (40, 2), (41, 1), 1).expect("parameters"))
         .expect("profile")
 }
 
@@ -208,9 +208,10 @@ fn context_rejects_malformed_rosters_thresholds_and_field_coordinates() {
         );
     }
     // Real small prime fields: participant IDs cannot wrap or alias modulo a prime.
-    let small =
-        BgvProfile::new(BgvParameters::derive(2, 3, (7, 1), (8, 1), 1).expect("small parameters"))
-            .expect("small profile");
+    let small = BgvProfile::new(
+        BgvParameters::derive(2, 3, 1, (7, 1), (8, 1), 1).expect("small parameters"),
+    )
+    .expect("small profile");
     let smallest = *primes(&small).iter().min().expect("prime");
     let outside = u16::try_from(smallest).expect("small field");
     assert_eq!(
@@ -240,7 +241,7 @@ fn context_identity_binds_every_declared_dimension() {
         assert_ne!(base.identity(), other.identity());
     }
     let other_profile =
-        BgvProfile::new(BgvParameters::derive(5, 257, (40, 2), (41, 1), 1).expect("parameters"))
+        BgvProfile::new(BgvParameters::derive(5, 257, 1, (40, 2), (41, 1), 1).expect("parameters"))
             .expect("profile");
     assert_ne!(base.identity(), context(&other_profile, 3).identity());
 }
@@ -358,7 +359,7 @@ fn secret_buffer_budget_and_profile_are_checked_before_entropy_is_drawn() {
     );
     assert_eq!(entropy.draws(), 0);
     let other =
-        BgvProfile::new(BgvParameters::derive(5, 257, (40, 2), (41, 1), 1).expect("parameters"))
+        BgvProfile::new(BgvParameters::derive(5, 257, 1, (40, 2), (41, 1), 1).expect("parameters"))
             .expect("profile");
     assert_eq!(
         DealerKeyShares::required_secret_bytes(&other, &context),
@@ -631,7 +632,7 @@ fn canonical_subset_plan_rejects_malformed_input_and_binds_every_public_dimensio
         );
     }
     let other_profile =
-        BgvProfile::new(BgvParameters::derive(5, 257, (40, 2), (41, 1), 1).expect("parameters"))
+        BgvProfile::new(BgvParameters::derive(5, 257, 1, (40, 2), (41, 1), 1).expect("parameters"))
             .expect("other profile");
     assert_eq!(
         ThresholdSelection::new(&other_profile, &context, instance, &ids).unwrap_err(),
@@ -666,7 +667,7 @@ fn subset_conversion_refusals_return_unchanged_owner_for_corrected_metadata_retr
     let original = fixtures::threshold_share_words(&share);
     let address = fixtures::threshold_share_buffer_address(&share);
     let other_profile =
-        BgvProfile::new(BgvParameters::derive(5, 257, (40, 2), (41, 1), 1).expect("parameters"))
+        BgvProfile::new(BgvParameters::derive(5, 257, 1, (40, 2), (41, 1), 1).expect("parameters"))
             .expect("other profile");
     let other_context = ThresholdContext::new(
         &other_profile,

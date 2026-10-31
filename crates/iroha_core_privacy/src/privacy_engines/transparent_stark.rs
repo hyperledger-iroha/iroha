@@ -179,6 +179,37 @@ pub struct TransparentStarkWorkSecurityV1 {
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GoldilocksFieldV1(pub(crate) u64);
+
+/// Borrow field storage as words without copying or changing its allocation.
+/// Canonicality remains the caller's arithmetic validation responsibility.
+#[allow(unsafe_code)]
+pub(crate) fn goldilocks_words_v1(values: &[GoldilocksFieldV1]) -> &[u64] {
+    // SAFETY: repr(transparent) gives exactly u64 size/alignment and every u64
+    // bit pattern is valid storage for this newtype. The returned slice retains
+    // the input's extent and shared lifetime; no Vec header is reinterpreted.
+    unsafe { core::slice::from_raw_parts(values.as_ptr().cast(), values.len()) }
+}
+
+/// Exclusively borrow existing field storage for already validated word writes.
+/// This does not validate residues; transactional writers must do so before publication.
+#[allow(unsafe_code)]
+pub(crate) fn goldilocks_words_mut_v1(values: &mut [GoldilocksFieldV1]) -> &mut [u64] {
+    // SAFETY: repr(transparent) has u64 layout and accepts every storage bit
+    // pattern. The exclusive borrow covers the complete returned slice for its
+    // lifetime; the original allocation, Vec header and ownership never change.
+    unsafe { core::slice::from_raw_parts_mut(values.as_mut_ptr().cast(), values.len()) }
+}
+
+/// Borrow word storage as fields without changing lifetime, allocation or ownership.
+/// The caller must establish canonicality before arithmetic or publication.
+#[allow(unsafe_code)]
+pub(crate) fn goldilocks_fields_v1(values: &[u64]) -> &[GoldilocksFieldV1] {
+    // SAFETY: repr(transparent) has u64 layout and every storage bit pattern is
+    // valid for this newtype. Shared extent/lifetime are unchanged; no Vec or
+    // allocation-layout conversion occurs.
+    unsafe { core::slice::from_raw_parts(values.as_ptr().cast(), values.len()) }
+}
+
 impl zeroize::Zeroize for GoldilocksFieldV1 {
     fn zeroize(&mut self) {
         self.zeroize_v1();
@@ -789,6 +820,28 @@ fn goldilocks_fft_stage_v1<T: Send, const PARALLEL_INNER: bool>(
     powers: Option<&[GoldilocksFieldV1]>,
     butterfly: impl Fn(&mut T, &mut T, GoldilocksFieldV1) + Sync,
 ) {
+    goldilocks_fft_stage_with_grain_v1::<T, PARALLEL_INNER, FFT_BUTTERFLIES_PER_TASK_V1>(
+        values, width, step, powers, butterfly,
+    );
+}
+
+/// Share the exact stage arithmetic with controlled, private task-grain tests.
+/// Production always enters through the fixed 1024-butterfly wrapper above.
+fn goldilocks_fft_stage_with_grain_v1<
+    T: Send,
+    const PARALLEL_INNER: bool,
+    const BUTTERFLIES_PER_TASK: usize,
+>(
+    values: &mut [T],
+    width: usize,
+    step: GoldilocksFieldV1,
+    powers: Option<&[GoldilocksFieldV1]>,
+    butterfly: impl Fn(&mut T, &mut T, GoldilocksFieldV1) + Sync,
+) {
+    const {
+        assert!(BUTTERFLIES_PER_TASK.is_power_of_two());
+        assert!(BUTTERFLIES_PER_TASK <= usize::MAX / 2);
+    }
     let stride = values.len() / width;
     let window = |left: &mut [T], right: &mut [T], first: usize| {
         if let Some(powers) = powers {
@@ -816,36 +869,36 @@ fn goldilocks_fft_stage_v1<T: Send, const PARALLEL_INNER: bool>(
         // The caller already distributes bounded columns across workers. Keep
         // exactly the same public windows and starting powers without nesting
         // Rayon tasks inside each column or allocating another field buffer.
-        if width <= 2 * FFT_BUTTERFLIES_PER_TASK_V1 {
-            for block in values.chunks_mut(2 * FFT_BUTTERFLIES_PER_TASK_V1) {
+        if width <= 2 * BUTTERFLIES_PER_TASK {
+            for block in values.chunks_mut(2 * BUTTERFLIES_PER_TASK) {
                 serial_block(block);
             }
         } else {
             for chunk in values.chunks_exact_mut(width) {
                 let (left, right) = chunk.split_at_mut(width / 2);
                 for (index, (left, right)) in left
-                    .chunks_mut(FFT_BUTTERFLIES_PER_TASK_V1)
-                    .zip(right.chunks_mut(FFT_BUTTERFLIES_PER_TASK_V1))
+                    .chunks_mut(BUTTERFLIES_PER_TASK)
+                    .zip(right.chunks_mut(BUTTERFLIES_PER_TASK))
                     .enumerate()
                 {
-                    let first = index * FFT_BUTTERFLIES_PER_TASK_V1;
+                    let first = index * BUTTERFLIES_PER_TASK;
                     window(left, right, first);
                 }
             }
         }
-    } else if width <= 2 * FFT_BUTTERFLIES_PER_TASK_V1 {
+    } else if width <= 2 * BUTTERFLIES_PER_TASK {
         // Both widths are powers of two, so no group straddles a task boundary.
         values
-            .par_chunks_mut(2 * FFT_BUTTERFLIES_PER_TASK_V1)
+            .par_chunks_mut(2 * BUTTERFLIES_PER_TASK)
             .for_each(serial_block);
     } else {
         values.par_chunks_exact_mut(width).for_each(|chunk| {
             let (left, right) = chunk.split_at_mut(width / 2);
-            left.par_chunks_mut(FFT_BUTTERFLIES_PER_TASK_V1)
-                .zip(right.par_chunks_mut(FFT_BUTTERFLIES_PER_TASK_V1))
+            left.par_chunks_mut(BUTTERFLIES_PER_TASK)
+                .zip(right.par_chunks_mut(BUTTERFLIES_PER_TASK))
                 .enumerate()
                 .for_each(|(index, (left, right))| {
-                    let first = index * FFT_BUTTERFLIES_PER_TASK_V1;
+                    let first = index * BUTTERFLIES_PER_TASK;
                     window(left, right, first);
                 });
         });
@@ -977,6 +1030,34 @@ fn goldilocks_fft_with_powers_v1<const PARALLEL_INNER: bool>(
     root: GoldilocksFieldV1,
     powers: Option<&GoldilocksFftPowersV1>,
 ) -> Result<(), TransparentStarkErrorV1> {
+    goldilocks_fft_with_stage_v1(values, root, powers, |values, width, step, powers| {
+        goldilocks_fft_stage_v1::<_, PARALLEL_INNER>(
+            values,
+            width,
+            step,
+            powers,
+            |even, odd, twiddle| {
+                let scaled_odd = (*odd).mul(twiddle);
+                let original_even = *even;
+                *even = original_even.add(scaled_odd);
+                *odd = original_even.sub(scaled_odd);
+            },
+        );
+    })
+}
+
+/// Keep domain validation, canonicality and bit reversal shared with task-grain tests.
+fn goldilocks_fft_with_stage_v1(
+    values: &mut [GoldilocksFieldV1],
+    root: GoldilocksFieldV1,
+    powers: Option<&GoldilocksFftPowersV1>,
+    mut stage: impl FnMut(
+        &mut [GoldilocksFieldV1],
+        usize,
+        GoldilocksFieldV1,
+        Option<&[GoldilocksFieldV1]>,
+    ),
+) -> Result<(), TransparentStarkErrorV1> {
     let size = values.len();
     if size == 0
         || !size.is_power_of_two()
@@ -1007,17 +1088,11 @@ fn goldilocks_fft_with_powers_v1<const PARALLEL_INNER: bool>(
     let mut width = 2_usize;
     while width <= size {
         let step = root.pow((size / width) as u128);
-        goldilocks_fft_stage_v1::<_, PARALLEL_INNER>(
+        stage(
             values,
             width,
             step,
             powers.map(|powers| powers.values.as_slice()),
-            |even, odd, twiddle| {
-                let scaled_odd = (*odd).mul(twiddle);
-                let original_even = *even;
-                *even = original_even.add(scaled_odd);
-                *odd = original_even.sub(scaled_odd);
-            },
         );
         width <<= 1;
     }
@@ -1182,6 +1257,10 @@ fn goldilocks_fft_prefix_dif_v1<const PARALLEL_INNER: bool>(
 #[path = "transparent_stark_prefix_fft_tests.rs"]
 mod prefix_fft_tests;
 
+#[cfg(test)]
+#[path = "transparent_stark_fft_grain_tests.rs"]
+mod fft_grain_tests;
+
 /// In-place radix-two FFT over the quartic Goldilocks extension.
 ///
 /// The evaluation domain remains in the base field, so roots and twiddles are
@@ -1189,6 +1268,22 @@ mod prefix_fft_tests;
 pub fn goldilocks_fp4_fft_v1(
     values: &mut [GoldilocksFp4V1],
     root: GoldilocksFieldV1,
+) -> Result<(), TransparentStarkErrorV1> {
+    goldilocks_fp4_fft_with_stage_v1(values, root, |values, width, step| {
+        goldilocks_fft_stage_v1::<_, true>(values, width, step, None, |even, odd, twiddle| {
+            let scaled_odd = (*odd).mul_base(twiddle);
+            let original_even = *even;
+            *even = original_even.add(scaled_odd);
+            *odd = original_even.sub(scaled_odd);
+        });
+    })
+}
+
+/// Preserve the extension transform's exact admission and permutation for all grains.
+fn goldilocks_fp4_fft_with_stage_v1(
+    values: &mut [GoldilocksFp4V1],
+    root: GoldilocksFieldV1,
+    mut stage: impl FnMut(&mut [GoldilocksFp4V1], usize, GoldilocksFieldV1),
 ) -> Result<(), TransparentStarkErrorV1> {
     let size = values.len();
     if size == 0
@@ -1217,12 +1312,7 @@ pub fn goldilocks_fp4_fft_v1(
     let mut width = 2_usize;
     while width <= size {
         let step = root.pow((size / width) as u128);
-        goldilocks_fft_stage_v1::<_, true>(values, width, step, None, |even, odd, twiddle| {
-            let scaled_odd = (*odd).mul_base(twiddle);
-            let original_even = *even;
-            *even = original_even.add(scaled_odd);
-            *odd = original_even.sub(scaled_odd);
-        });
+        stage(values, width, step);
         width <<= 1;
     }
     Ok(())
@@ -4161,3 +4251,7 @@ mod merkle_payload_tests {
 #[cfg(test)]
 #[path = "outer_hash_experiment.rs"]
 mod outer_hash_experiment;
+
+#[cfg(test)]
+#[path = "transparent_stark_word_views_tests.rs"]
+mod word_views_tests;

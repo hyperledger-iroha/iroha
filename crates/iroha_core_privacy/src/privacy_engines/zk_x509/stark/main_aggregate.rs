@@ -37,6 +37,8 @@ pub(super) mod main_key_joins;
 #[cfg(test)]
 #[path = "main_native_boundary_tests.rs"]
 mod main_native_boundary_tests;
+#[path = "main_native_transform.rs"]
+mod main_native_transform;
 #[path = "main_oods.rs"]
 mod main_oods;
 #[cfg(test)]
@@ -329,6 +331,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             )?),
         ];
         if providers.len() != FULL_PROFILE_TRACE_GROUPS_V1
+            || providers.capacity() != FULL_PROFILE_TRACE_GROUPS_V1
             || providers
                 .iter()
                 .zip(&self.layout.trace_groups)
@@ -609,6 +612,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         mut self,
         composition_material: RetainedCompositionMaterialV1,
         composition_roots: Vec<PrivacyOuterDigestV1>,
+        composition_cuts: Vec<Option<aggregate::retained_scalar_commitment::RetainedScalarCutV1>>,
         fri_masks: Vec<aggregate::AggregateFriMaskOracleMaterialV1>,
         fri_mask_roots: Vec<PrivacyOuterDigestV1>,
         deep: aggregate::AggregateDeepProofV1,
@@ -674,7 +678,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
                     .map(|_| ())
             })?;
             fri_materials.push(
-                aggregate::build_streaming_fri_lane_v1(
+                aggregate::build_retained_streaming_fri_lane_v1(
                     AGGREGATE_PARAMETERS_V1,
                     &main_domains_v1(proof_instance),
                     &shared_layout,
@@ -684,6 +688,17 @@ impl ZkX509MainCompositionPhaseV1<'_> {
                 )
                 .map_err(map_aggregate_error_v1)?,
             );
+        }
+        let retained_oracle_payload =
+            aggregate::retained_scalar_commitment::oracle_payload_bytes_v1(
+                &composition_cuts,
+                &fri_materials,
+            )
+            .map_err(map_aggregate_error_v1)?;
+        if composition_cuts.len() != SECURITY_LANES
+            || retained_oracle_payload > fri_buffer_plan.retained_oracle_cuts
+        {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
         }
         // The original masked FRI inputs remain in clearing owners. Reuse them
         // once queries are fixed instead of replaying every private trace column.
@@ -767,11 +782,13 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             .try_reserve_exact(SECURITY_LANES)
             .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
         for (lane, composition) in compositions.iter().enumerate() {
-            let commitment = aggregate::streaming_composition_commitment_v1(
+            let commitment = aggregate::open_retained_composition_v1(
                 &main_domains_v1(proof_instance),
                 lane,
                 composition,
                 &composition_opening_indices,
+                composition_roots[lane],
+                composition_cuts[lane].as_ref(),
             )
             .map_err(map_aggregate_error_v1)?;
             if commitment.root != composition_roots[lane] {
@@ -797,7 +814,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         for (lane, material) in fri_materials.iter().enumerate() {
             let mut base_values = fri_bases.take_lane_v1(lane)?;
             fri_openings.push(
-                aggregate::open_streaming_fri_lane_v1(
+                aggregate::open_retained_streaming_fri_lane_v1(
                     AGGREGATE_PARAMETERS_V1,
                     &main_domains_v1(proof_instance),
                     &shared_layout,
@@ -880,8 +897,9 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             .into_iter()
             .zip(fri_openings)
             .map(|(material, openings)| FriLaneProofV1 {
-                roots: material.roots,
+                roots: material.material.roots,
                 terminal_values: material
+                    .material
                     .terminal_values
                     .into_iter()
                     .map(|value| value.coefficients().map(F::value))
@@ -1009,6 +1027,43 @@ enum MainProverConstraintProviderV1<'phase, 'assembly> {
     Io(MainIoProverConstraintSourceV1),
     Log19(MainLog19ProverConstraintSourceV1<'assembly, 'phase>),
 }
+
+/// One registration bound to the original immutable provider before row work.
+/// Unique registration and P-256 binding searches execute once; each row still
+/// checks the exact owner, selected entry, all widths and every canonical cell.
+pub(super) struct MainLog19CompositionRegistrationV1<'p, 'assembly, 'source> {
+    source: &'p MainLog19ProverConstraintSourceV1<'assembly, 'source>,
+    registration: RegisteredSegmentLayoutV1,
+    pub(super) index: usize,
+}
+impl<'p, 'assembly, 'source> MainLog19CompositionRegistrationV1<'p, 'assembly, 'source> {
+    fn new_v1(
+        source: &'p MainLog19ProverConstraintSourceV1<'assembly, 'source>,
+        registration: RegisteredSegmentLayoutV1,
+    ) -> Result<Self, ZkX509StarkErrorV1> {
+        let index = source.source.registration_index_v1(registration)?;
+        if index >= 6 {
+            source.source.p256_binding_v1(registration)?;
+        }
+        Ok(Self {
+            source,
+            registration,
+            index,
+        })
+    }
+
+    pub(super) fn validate_owner_v1(
+        &self,
+        source: &MainLog19ProverConstraintSourceV1<'_, '_>,
+        registration: RegisteredSegmentLayoutV1,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        if !core::ptr::eq(self.source, source) || self.registration != registration {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        Ok(())
+    }
+}
+
 impl MainProverConstraintProviderV1<'_, '_> {
     fn native_trace_log2_v1(&self) -> u8 {
         match self {
@@ -1104,6 +1159,7 @@ impl MainProverConstraintProviderV1<'_, '_> {
             ),
         }
     }
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn composition_value_on_stripe_v1(
         &self,
@@ -1114,6 +1170,39 @@ impl MainProverConstraintProviderV1<'_, '_> {
         fixed_current: &[F],
         fixed_next: &[F],
         alphas: &[E],
+        scratch: &mut MainResidueScratchV1,
+    ) -> Result<E, ZkX509StarkErrorV1> {
+        let context = match self {
+            Self::Log19(source) => Some(MainLog19CompositionRegistrationV1::new_v1(
+                source,
+                registration,
+            )?),
+            _ => None,
+        };
+        self.composition_value_with_context_v1(
+            registration,
+            denominators,
+            row,
+            opening,
+            fixed_current,
+            fixed_next,
+            alphas,
+            scratch,
+            context.as_ref(),
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn composition_value_with_context_v1(
+        &self,
+        registration: RegisteredSegmentLayoutV1,
+        denominators: &main_quotient_denominators::MainQuotientDenominatorsV1,
+        row: usize,
+        opening: RegisteredOpenedRowsV1<'_>,
+        fixed_current: &[F],
+        fixed_next: &[F],
+        alphas: &[E],
+        scratch: &mut MainResidueScratchV1,
+        context: Option<&MainLog19CompositionRegistrationV1<'_, '_, '_>>,
     ) -> Result<E, ZkX509StarkErrorV1> {
         if fixed_current.len() != registration.segment.fixed_width
             || fixed_next.len() != registration.segment.fixed_width
@@ -1122,6 +1211,28 @@ impl MainProverConstraintProviderV1<'_, '_> {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
         let inverse = denominators.at_v1(registration.segment.trace_log2, row)?;
+        if let Self::Log19(source) = self {
+            if matches!(
+                registration.segment.adapter,
+                SegmentAdapterIdV1::StrictDer | SegmentAdapterIdV1::Sha256CallBus
+            ) {
+                source.reusable_constraint_residues_v1(
+                    registration,
+                    opening,
+                    fixed_current,
+                    fixed_next,
+                    &mut scratch.values,
+                    context.ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
+                )?;
+                if scratch.values.len() != registration.segment.constraint_count {
+                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                }
+                return Ok(
+                    main_composition_mix::mix_residues_v1(&scratch.values, alphas)
+                        .mul_base(inverse),
+                );
+            }
+        }
         let residues = match self {
             Self::Log5(source) => {
                 source.constraint_residues_v1(registration, opening, fixed_current)?
@@ -1156,9 +1267,13 @@ impl MainProverConstraintProviderV1<'_, '_> {
                     .try_into()
                     .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
             )?,
-            Self::Log19(source) => {
-                source.constraint_residues_v1(registration, opening, fixed_current, fixed_next)?
-            }
+            Self::Log19(source) => source.constraint_residues_with_context_v1(
+                registration,
+                opening,
+                fixed_current,
+                fixed_next,
+                context,
+            )?,
         };
         if residues.len() != registration.segment.constraint_count {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
@@ -1166,28 +1281,176 @@ impl MainProverConstraintProviderV1<'_, '_> {
         Ok(main_composition_mix::mix_residues_v1(&residues, alphas).mul_base(inverse))
     }
 }
+impl MainLog19ProverConstraintSourceV1<'_, '_> {
+    fn reusable_constraint_residues_v1(
+        &self,
+        registration: RegisteredSegmentLayoutV1,
+        opening: RegisteredOpenedRowsV1<'_>,
+        fixed_current: &[F],
+        fixed_next: &[F],
+        residues: &mut Vec<F>,
+        context: &MainLog19CompositionRegistrationV1<'_, '_, '_>,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        context.validate_owner_v1(self, registration)?;
+        self.validate_constraint_opening_at_v1(
+            registration,
+            context.index,
+            opening,
+            fixed_current,
+            fixed_next,
+        )?;
+        let registration_index = context.index;
+        match registration_index {
+            0 => super::super::der_stark::evaluate_zk_x509_der_stark_local_residues_into_v1(
+                opening
+                    .base_current
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                opening
+                    .base_next
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                opening
+                    .aux_current
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                opening
+                    .aux_next
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                fixed_current
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                fixed_next
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                &self.source.post_base.der(),
+                self.der_public,
+                residues,
+            )
+            .map_err(ZkX509StarkErrorV1::from)?,
+            2..=5 => {
+                let segment = registration_index - 2;
+                let current = ZkX509ShaBatchRowV1 {
+                    base: *<&[F; ZK_X509_SHA_BATCH_BASE_WIDTH_V1]>::try_from(opening.base_current)
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    aux: *<&[F; ZK_X509_SHA_BATCH_AUX_WIDTH_V1]>::try_from(opening.aux_current)
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    fixed: *<&[F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1]>::try_from(fixed_current)
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                };
+                let next = ZkX509ShaBatchRowV1 {
+                    base: *<&[F; ZK_X509_SHA_BATCH_BASE_WIDTH_V1]>::try_from(opening.base_next)
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    aux: *<&[F; ZK_X509_SHA_BATCH_AUX_WIDTH_V1]>::try_from(opening.aux_next)
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    fixed: *<&[F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1]>::try_from(fixed_next)
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                };
+                super::super::sha_call_bus_stark::evaluate_sha_batch_local_with_bound_context_into_v1(
+                    &current,
+                    &next,
+                    self.composition_challenges,
+                    u8::try_from(segment).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    residues,
+                    &self.sha_fold_powers,
+                )
+                .map_err(map_main_sha_source_error_v1)?
+            }
+            _ => return Err(ZkX509StarkErrorV1::ProfileMismatch),
+        }
+        if residues.len() != registration.segment.constraint_count {
+            return Err(ZkX509StarkErrorV1::InternalInvariant);
+        }
+        Ok(())
+    }
+}
+
+enum MainFixedCoefficientOwnerV1 {
+    Dense(ZeroizingBaseColumnsV1),
+    Arithmetic(main_fixed_coset::arithmetic_basis::MainArithmeticFixedCoefficientsV1),
+}
 struct ZeroizingMainFixedPolynomialSetV1 {
     registration: RegisteredSegmentLayoutV1,
-    columns: Vec<Vec<F>>,
+    cache_plan: main_quotient_cache::MainQuotientCachePlanV1,
+    owner: MainFixedCoefficientOwnerV1,
 }
-impl Drop for ZeroizingMainFixedPolynomialSetV1 {
-    fn drop(&mut self) {
-        for column in &mut self.columns {
-            for value in column {
-                value.zeroize_v1();
+impl ZeroizingMainFixedPolynomialSetV1 {
+    fn dense_columns_mut_v1(&mut self) -> Result<&mut Vec<Vec<F>>, ZkX509StarkErrorV1> {
+        match &mut self.owner {
+            MainFixedCoefficientOwnerV1::Dense(columns) => Ok(&mut columns.0),
+            MainFixedCoefficientOwnerV1::Arithmetic(_) => {
+                Err(ZkX509StarkErrorV1::InternalInvariant)
             }
         }
     }
+    fn cache_columns_v1(&self) -> Result<&[Vec<F>], ZkX509StarkErrorV1> {
+        match (&self.owner, self.registration.segment.adapter) {
+            (
+                MainFixedCoefficientOwnerV1::Arithmetic(owner),
+                SegmentAdapterIdV1::P256Arithmetic,
+            ) => owner.cache_columns_v1(),
+            (MainFixedCoefficientOwnerV1::Dense(_), SegmentAdapterIdV1::P256Arithmetic)
+            | (MainFixedCoefficientOwnerV1::Arithmetic(_), _) => {
+                Err(ZkX509StarkErrorV1::ProfileMismatch)
+            }
+            (MainFixedCoefficientOwnerV1::Dense(columns), _) => Ok(&columns.0),
+        }
+    }
+    #[cfg(test)]
+    fn full_coefficients_for_test_v1(&mut self) -> Result<&[Vec<F>], ZkX509StarkErrorV1> {
+        match &mut self.owner {
+            MainFixedCoefficientOwnerV1::Dense(columns) => Ok(&columns.0),
+            MainFixedCoefficientOwnerV1::Arithmetic(owner) => owner.full_coefficients_for_test_v1(),
+        }
+    }
 }
+
+enum MainFixedCosetOwnerV1<'a> {
+    Dense(main_fixed_coset::MainFixedCosetV1<'a>),
+    Arithmetic(main_fixed_coset::arithmetic_basis::MainArithmeticFixedCosetV1<'a>),
+}
+// Both closed variants occupy their maximum inline size even on dense paths.
+// Charge their complete headers in every registration, independently of the
+// arithmetic-only cache reservation for basis allocations and reconstruction.
+const MAIN_FIXED_OWNER_METADATA_BYTES_V1: usize =
+    core::mem::size_of::<ZeroizingMainFixedPolynomialSetV1>()
+        + core::mem::size_of::<MainFixedCosetOwnerV1<'static>>();
+
+impl MainFixedCosetOwnerV1<'_> {
+    fn evaluate_v1(
+        &mut self,
+        stripe: main_quotient_stripes::MainQuotientStripeV1,
+    ) -> Result<&[Vec<F>], ZkX509StarkErrorV1> {
+        match self {
+            Self::Dense(owner) => owner.evaluate_v1(stripe),
+            Self::Arithmetic(owner) => owner.evaluate_v1(stripe),
+        }
+    }
+}
+
 fn stream_main_fixed_polynomial_sets_v1(
     provider: &MainProverConstraintProviderV1<'_, '_>,
     transform_policy: main_bounded_transform::MainBoundedTransformPolicyV1,
+    mut cache_plan: impl FnMut(
+        RegisteredSegmentLayoutV1,
+    ) -> Result<
+        main_quotient_cache::MainQuotientCachePlanV1,
+        ZkX509StarkErrorV1,
+    >,
     mut consume: impl FnMut(&mut ZeroizingMainFixedPolynomialSetV1) -> Result<(), ZkX509StarkErrorV1>,
 ) -> Result<(), ZkX509StarkErrorV1> {
     if let MainProverConstraintProviderV1::Log19(source) = provider {
         for registration in source.source.registrations.iter().copied() {
-            let mut completed =
-                main_log19_fixed_polynomial_set_v1(source, registration, transform_policy)?;
+            main_bounded_transform::check_completion_v1(
+                fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1(),
+            )?;
+            let mut completed = main_log19_fixed_polynomial_set_v1(
+                source,
+                registration,
+                transform_policy,
+                cache_plan(registration)?,
+            )?;
             consume(&mut completed)?;
         }
         return Ok(());
@@ -1198,7 +1461,8 @@ fn stream_main_fixed_polynomial_sets_v1(
             || coefficients.len() != registration.segment.trace_size()
             || coefficients
                 .iter()
-                .any(|coefficient| F::canonical(coefficient.0).is_none())
+                .any(|value| F::canonical(value.0).is_none())
+            || registration.segment.adapter == SegmentAdapterIdV1::P256Arithmetic
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
@@ -1209,44 +1473,56 @@ fn stream_main_fixed_polynomial_sets_v1(
             let mut completed = pending
                 .take()
                 .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
-            if completed.columns.len() != completed.registration.segment.fixed_width {
+            if completed.cache_columns_v1()?.len() != completed.registration.segment.fixed_width {
                 return Err(ZkX509StarkErrorV1::ProfileMismatch);
             }
             consume(&mut completed)?;
         }
-        let set = pending.get_or_insert_with(|| ZeroizingMainFixedPolynomialSetV1 {
-            registration,
-            columns: Vec::new(),
-        });
+        if pending.is_none() {
+            pending = Some(ZeroizingMainFixedPolynomialSetV1 {
+                registration,
+                cache_plan: cache_plan(registration)?,
+                owner: MainFixedCoefficientOwnerV1::Dense(ZeroizingBaseColumnsV1(Vec::new())),
+            });
+        }
+        let set = pending
+            .as_mut()
+            .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
         if set.registration != registration
-            || local_column != set.columns.len()
+            || local_column != set.cache_columns_v1()?.len()
             || local_column >= registration.segment.fixed_width
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
-        let mut retained = Vec::new();
+        let mut retained = ZeroizingMainTraceColumnV1(Vec::new());
         retained
+            .0
             .try_reserve_exact(coefficients.len())
             .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        retained.extend_from_slice(coefficients);
-        set.columns.push(retained);
+        retained.0.extend_from_slice(coefficients);
+        set.dense_columns_mut_v1()?.push(retained.into_vec_v1());
         Ok(())
     })?;
     let mut completed = pending.ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-    if completed.columns.len() != completed.registration.segment.fixed_width {
+    if completed.cache_columns_v1()?.len() != completed.registration.segment.fixed_width {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
     consume(&mut completed)
 }
 /// Construct the existing final fixed matrix directly, avoiding a second
 /// pending copy. Each public SHA or arithmetic row fills all its admitted columns
-/// once. All initial inverse transforms retain canonical column order and use
-/// the existing admitted inverse adapter in batches of at most eight columns.
+/// once. Arithmetic transforms only its sealed public basis; all other initial
+/// inverse transforms retain canonical column order. Both use the existing
+/// inverse adapter in batches of at most eight columns.
 fn main_log19_fixed_polynomial_set_v1(
     source: &MainLog19ProverConstraintSourceV1<'_, '_>,
     registration: RegisteredSegmentLayoutV1,
     transform_policy: main_bounded_transform::MainBoundedTransformPolicyV1,
+    cache_plan: main_quotient_cache::MainQuotientCachePlanV1,
 ) -> Result<ZeroizingMainFixedPolynomialSetV1, ZkX509StarkErrorV1> {
+    main_bounded_transform::check_completion_v1(
+        fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1(),
+    )?;
     let index = source.source.registration_index_v1(registration)?;
     let transform_policy = transform_policy.for_quotient_layout_v1(
         registration.segment.base_width,
@@ -1254,13 +1530,6 @@ fn main_log19_fixed_polynomial_set_v1(
     )?;
     let root = goldilocks_primitive_root_v1(registration.segment.trace_log2)
         .map_err(map_transparent_error_v1)?;
-    let mut set = ZeroizingMainFixedPolynomialSetV1 {
-        registration,
-        columns: Vec::new(),
-    };
-    set.columns
-        .try_reserve_exact(registration.segment.fixed_width)
-        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
     let arithmetic = if index >= 6 {
         let binding = source.source.p256_binding_v1(registration)?;
         (binding.p256.adapter_v1() == P256MainAdapterV1::Arithmetic
@@ -1269,6 +1538,32 @@ fn main_log19_fixed_polynomial_set_v1(
     } else {
         None
     };
+    if registration.segment.adapter == SegmentAdapterIdV1::P256Arithmetic {
+        let binding = source.source.p256_binding_v1(registration)?;
+        if arithmetic != Some(binding.p256) {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let (owner, cache_plan) =
+            main_fixed_coset::arithmetic_basis::MainArithmeticFixedCoefficientsV1::from_source_v1(
+                &source.source.p256,
+                binding,
+                transform_policy,
+                cache_plan,
+            )?;
+        return Ok(ZeroizingMainFixedPolynomialSetV1 {
+            registration,
+            cache_plan,
+            owner: MainFixedCoefficientOwnerV1::Arithmetic(owner),
+        });
+    }
+    if arithmetic.is_some() {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    let mut columns = ZeroizingBaseColumnsV1(Vec::new());
+    columns
+        .0
+        .try_reserve_exact(registration.segment.fixed_width)
+        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
     // Each producer owns its separately sized fixed row. Resource accounting
     // reserves both current/next rows at the maximum producer width plus16 words.
     const _: () =
@@ -1283,35 +1578,21 @@ fn main_log19_fixed_polynomial_set_v1(
         #[cfg(test)]
         let rows_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionShaFixedRows);
         for _ in 0..registration.segment.fixed_width {
-            set.columns.push(
+            columns.0.push(
                 zeroed_main_trace_column_v1(registration.segment.trace_size())?.into_vec_v1(),
             );
         }
         source
             .source
             .sha_fixed
-            .fill_fixed_matrix_v1(index - 2, &mut set.columns)
+            .fill_fixed_matrix_v1(index - 2, &mut columns.0)
             .map_err(map_main_sha_source_error_v1)?;
-        #[cfg(test)]
-        rows_timer.complete_v1();
-    } else if let Some(binding) = arithmetic {
-        for _ in 0..registration.segment.fixed_width {
-            set.columns.push(
-                zeroed_main_trace_column_v1(registration.segment.trace_size())?.into_vec_v1(),
-            );
-        }
-        #[cfg(test)]
-        let rows_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionArithmeticFixedRows);
-        source
-            .source
-            .p256
-            .fill_arithmetic_fixed_matrix_v1(binding, &mut set.columns)?;
         #[cfg(test)]
         rows_timer.complete_v1();
     } else {
         for column in 0..registration.segment.fixed_width {
             let values = source.source.native_fixed_column_v1(registration, column)?;
-            set.columns.push(values.into_vec_v1());
+            columns.0.push(values.into_vec_v1());
         }
     }
     #[cfg(test)]
@@ -1319,41 +1600,35 @@ fn main_log19_fixed_polynomial_set_v1(
         Some(PhaseTimerV1::start_v1(
             PhaseV1::CompositionShaFixedInverseTransform,
         ))
-    } else if arithmetic.is_some() {
-        Some(PhaseTimerV1::start_v1(
-            PhaseV1::CompositionArithmeticFixedInverseTransform,
-        ))
     } else {
         None
     };
-    main_initial_fixed_coefficients_with_v1(
-        &mut set.columns,
+    main_initial_fixed_coefficients_native_with_v1(
+        &mut columns.0,
         root,
         transform_policy,
-        |words, root, direction| {
-            fastpq_prover::goldilocks_transform::transform_goldilocks_columns_v1(
-                words,
-                root,
-                direction,
-                fastpq_prover::ExecutionMode::Auto,
-            )
-        },
+        &mut main_native_transform::ExactNativeTransformV1,
         fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1,
     )?;
     #[cfg(test)]
     if let Some(timer) = inverse_timer {
         timer.complete_v1();
     }
-    Ok(set)
+    Ok(ZeroizingMainFixedPolynomialSetV1 {
+        registration,
+        cache_plan,
+        owner: MainFixedCoefficientOwnerV1::Dense(columns),
+    })
 }
 
 /// Interpolate the already owned final fixed matrix without a second matrix.
 /// Validate every column before the first transform can mutate any prefix.
+#[cfg(test)]
 fn main_initial_fixed_coefficients_with_v1(
     columns: &mut [Vec<F>],
     root: F,
     policy: main_bounded_transform::MainBoundedTransformPolicyV1,
-    mut transform: impl FnMut(
+    transform: impl FnMut(
         &mut [Vec<u64>],
         u64,
         fastpq_prover::goldilocks_transform::GoldilocksTransformDirectionV1,
@@ -1361,6 +1636,22 @@ fn main_initial_fixed_coefficients_with_v1(
         fastpq_prover::goldilocks_transform::GoldilocksTransformBackendV1,
         fastpq_prover::goldilocks_transform::GoldilocksTransformErrorV1,
     >,
+    uncertain: impl FnMut() -> bool,
+) -> Result<(), ZkX509StarkErrorV1> {
+    main_initial_fixed_coefficients_native_with_v1(
+        columns,
+        root,
+        policy,
+        &mut main_native_transform::WordInjectionV1(transform),
+        uncertain,
+    )
+}
+
+fn main_initial_fixed_coefficients_native_with_v1(
+    columns: &mut [Vec<F>],
+    root: F,
+    policy: main_bounded_transform::MainBoundedTransformPolicyV1,
+    transform: &mut impl main_native_transform::MainNativeTransformV1,
     mut uncertain: impl FnMut() -> bool,
 ) -> Result<(), ZkX509StarkErrorV1> {
     main_bounded_transform::check_completion_v1(uncertain())?;
@@ -1380,7 +1671,7 @@ fn main_initial_fixed_coefficients_with_v1(
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
     for batch in columns.chunks_mut(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
-        policy.inverse_with_v1(batch, root, &mut transform, &mut uncertain)?;
+        policy.inverse_native_with_v1(batch, root, transform, &mut uncertain)?;
     }
     Ok(())
 }
@@ -1425,6 +1716,11 @@ fn main_registration_trace_columns_on_coset_v1(
         MainTraceColumnKindV1::Base => (registration.base_start, registration.segment.base_width),
         MainTraceColumnKindV1::Aux => (registration.aux_start, registration.segment.aux_width),
     };
+    if let Some(retained) =
+        polynomials.retained_registration_coefficients_v1(layout, kind, registration)?
+    {
+        return cache.evaluate_retained_v1(kind, width, stripe, transform_policy, retained);
+    }
     cache.evaluate_v1(kind, width, stripe, transform_policy, |columns| {
         polynomials.replay_columns_coefficients_v1(
             layout,
@@ -1436,6 +1732,31 @@ fn main_registration_trace_columns_on_coset_v1(
         )
     })
 }
+struct MainResidueScratchV1 {
+    values: Vec<F>,
+}
+impl MainResidueScratchV1 {
+    fn new_v1(capacity: usize) -> Result<Self, ZkX509StarkErrorV1> {
+        let mut owner = Self { values: Vec::new() };
+        owner
+            .values
+            .try_reserve_exact(capacity)
+            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+        if owner.values.capacity() != capacity {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
+        Ok(owner)
+    }
+}
+impl Drop for MainResidueScratchV1 {
+    fn drop(&mut self) {
+        // Resizing within capacity initializes every vacated cell without allocation.
+        // The final eraser includes private cells hidden by an earlier clear/short row.
+        self.values.resize(self.values.capacity(), F::ZERO);
+        super::super::private_table::zeroize_fields_v1(&mut self.values);
+    }
+}
+
 struct MainQuotientRowScratchV1 {
     base_current: ZeroizingMainTraceColumnV1,
     base_next: ZeroizingMainTraceColumnV1,
@@ -1443,10 +1764,11 @@ struct MainQuotientRowScratchV1 {
     aux_next: ZeroizingMainTraceColumnV1,
     fixed_current: ZeroizingMainTraceColumnV1,
     fixed_next: ZeroizingMainTraceColumnV1,
+    residues: MainResidueScratchV1,
 }
 impl MainQuotientRowScratchV1 {
-    fn new_v1(registration: RegisteredSegmentLayoutV1) -> Self {
-        Self {
+    fn new_v1(registration: RegisteredSegmentLayoutV1) -> Result<Self, ZkX509StarkErrorV1> {
+        Ok(Self {
             base_current: ZeroizingMainTraceColumnV1(vec![
                 F::ZERO;
                 registration.segment.base_width
@@ -1459,7 +1781,17 @@ impl MainQuotientRowScratchV1 {
                 registration.segment.fixed_width
             ]),
             fixed_next: ZeroizingMainTraceColumnV1(vec![F::ZERO; registration.segment.fixed_width]),
-        }
+            residues: MainResidueScratchV1::new_v1(
+                if matches!(
+                    registration.segment.adapter,
+                    SegmentAdapterIdV1::StrictDer | SegmentAdapterIdV1::Sha256CallBus
+                ) {
+                    registration.segment.constraint_count
+                } else {
+                    0
+                },
+            )?,
+        })
     }
     fn fill_v1(
         &mut self,
@@ -1497,12 +1829,32 @@ impl MainQuotientRowScratchV1 {
             *next_value = fixed[column][next];
         }
     }
-    fn opening_v1(&self) -> RegisteredOpenedRowsV1<'_> {
-        RegisteredOpenedRowsV1 {
-            base_current: &self.base_current,
-            base_next: &self.base_next,
-            aux_current: &self.aux_current,
-            aux_next: &self.aux_next,
+    /// Reuse the previous next row only within a consecutive stripe task.
+    /// The six existing clearing allocations stay owned by this scratch.
+    fn fill_or_advance_v1(
+        &mut self,
+        row: usize,
+        next: usize,
+        consecutive: bool,
+        base: &[Vec<F>],
+        aux: &[Vec<F>],
+        fixed: &[Vec<F>],
+    ) {
+        if !consecutive {
+            self.fill_v1(row, next, base, aux, fixed);
+            return;
+        }
+        core::mem::swap(&mut self.base_current, &mut self.base_next);
+        core::mem::swap(&mut self.aux_current, &mut self.aux_next);
+        core::mem::swap(&mut self.fixed_current, &mut self.fixed_next);
+        for (target, column) in self.base_next.iter_mut().zip(base) {
+            *target = column[next];
+        }
+        for (target, column) in self.aux_next.iter_mut().zip(aux) {
+            *target = column[next];
+        }
+        for (target, column) in self.fixed_next.iter_mut().zip(fixed) {
+            *target = column[next];
         }
     }
 }
@@ -1520,13 +1872,15 @@ fn main_registration_composition_coefficient_chunks_v1(
     sha_union_centers: &[[F; 4]; 4],
     sha_union_alphas: &[E],
     bounded_transform: main_bounded_transform::MainBoundedTransformPolicyV1,
-    joint_buffers: Option<&main_ca_resources::MainCaJointBufferPlanV1>,
 ) -> Result<Vec<Vec<Vec<E>>>, ZkX509StarkErrorV1> {
     const QUOTIENT_ROWS_PER_TASK_V1: usize = 1 << 12;
     #[cfg(test)]
     let registration_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionRegistration);
     let registration = fixed.registration;
     canonical_main_registration_index_v1(layout, registration)?;
+    // A closed owner-kind mismatch is rejected before any private replay or
+    // cache construction; arithmetic never retries through the dense path.
+    fixed.cache_columns_v1()?;
     let plan = registered_retained_prover_plan_v1(registration.segment, layout.common_lde_log2)?;
     if provider.native_trace_log2_v1() != registration.segment.trace_log2
         || alphas.len() != SECURITY_LANES
@@ -1536,6 +1890,12 @@ fn main_registration_composition_coefficient_chunks_v1(
     {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
+    let registration_context = match provider {
+        MainProverConstraintProviderV1::Log19(source) => Some(
+            MainLog19CompositionRegistrationV1::new_v1(source, registration)?,
+        ),
+        _ => None,
+    };
     let first_stripe = main_quotient_stripes::MainQuotientStripeV1::new_v1(
         registration.segment.trace_log2,
         plan.quotient_coset_log2,
@@ -1562,41 +1922,65 @@ fn main_registration_composition_coefficient_chunks_v1(
         registration.segment.base_width,
         registration.segment.aux_width,
     )?;
-    let cache_plan = match joint_buffers {
-        Some(plan) => plan.quotient_cache_plan_v1(layout, registration)?,
-        None => main_resources::MainProverBufferPlanV1::new_v1(layout)?
-            .quotient_cache_plan_v1(layout, registration)?,
-    };
+    let cache_plan = fixed.cache_plan;
     #[cfg(test)]
     let cache_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionTraceCache);
-    let cache = main_quotient_cache::MainQuotientReplayCacheV1::from_replay_v1(
-        cache_plan,
-        |kind, columns| {
-            let (polynomials, start) = match kind {
-                MainTraceColumnKindV1::Base => (base_polynomials, registration.base_start),
-                MainTraceColumnKindV1::Aux => (aux_polynomials, registration.aux_start),
-            };
-            polynomials.replay_columns_coefficients_v1(
-                layout,
-                kind,
-                registration.trace_group,
-                start + columns.start..start + columns.end,
-                sources,
-                transform_policy,
-            )
-        },
-    )?
+    let retained_base = base_polynomials.retained_registration_coefficients_v1(
+        layout,
+        MainTraceColumnKindV1::Base,
+        registration,
+    )?;
+    let retained_aux = aux_polynomials.retained_registration_coefficients_v1(
+        layout,
+        MainTraceColumnKindV1::Aux,
+        registration,
+    )?;
+    let cache = match (retained_base, retained_aux) {
+        (Some(base), Some(aux)) => {
+            main_quotient_cache::MainQuotientReplayCacheV1::from_retained_v1(cache_plan, base, aux)
+        }
+        (None, None) => main_quotient_cache::MainQuotientReplayCacheV1::from_replay_v1(
+            cache_plan,
+            |kind, columns| {
+                let (polynomials, start) = match kind {
+                    MainTraceColumnKindV1::Base => (base_polynomials, registration.base_start),
+                    MainTraceColumnKindV1::Aux => (aux_polynomials, registration.aux_start),
+                };
+                polynomials.replay_columns_coefficients_v1(
+                    layout,
+                    kind,
+                    registration.trace_group,
+                    start + columns.start..start + columns.end,
+                    sources,
+                    transform_policy,
+                )
+            },
+        ),
+        _ => Err(ZkX509StarkErrorV1::InternalInvariant),
+    }?
     .with_fixed_coefficients_v1(
-        &fixed.columns,
+        fixed.cache_columns_v1()?,
         registration.segment.trace_size(),
         first_stripe.count,
     )?;
-    let mut fixed_coset = main_fixed_coset::MainFixedCosetV1::new_v1(
-        registration.segment.trace_log2,
-        core::mem::take(&mut fixed.columns),
-    )?
-    .with_transform_policy_v1(transform_policy)?
-    .with_coefficient_prefix_v1(cache.fixed_coefficients_v1())?;
+    // cache_columns_v1 rejected any registration/owner-kind mismatch before
+    // this consuming transition; there is no dense fallback for an arithmetic error.
+    let mut fixed_coset = match core::mem::replace(
+        &mut fixed.owner,
+        MainFixedCoefficientOwnerV1::Dense(ZeroizingBaseColumnsV1(Vec::new())),
+    ) {
+        MainFixedCoefficientOwnerV1::Dense(mut columns) => MainFixedCosetOwnerV1::Dense(
+            main_fixed_coset::MainFixedCosetV1::new_v1(
+                registration.segment.trace_log2,
+                core::mem::take(&mut columns.0),
+            )?
+            .with_transform_policy_v1(transform_policy)?
+            .with_coefficient_prefix_v1(cache.fixed_coefficients_v1())?,
+        ),
+        MainFixedCoefficientOwnerV1::Arithmetic(owner) => MainFixedCosetOwnerV1::Arithmetic(
+            owner.into_coset_v1(transform_policy, cache.fixed_coefficients_v1())?,
+        ),
+    };
     #[cfg(test)]
     cache_timer.complete_v1();
     let mut quotients = (0..SECURITY_LANES)
@@ -1685,6 +2069,7 @@ fn main_registration_composition_coefficient_chunks_v1(
                     .try_for_each_init(
                         || MainQuotientRowScratchV1::new_v1(registration),
                         |scratch, (chunk_index, output)| {
+                            let scratch = scratch.as_mut().map_err(|error| *error)?;
                             let first_row = chunk_index
                                 .checked_mul(QUOTIENT_ROWS_PER_TASK_V1)
                                 .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
@@ -1698,15 +2083,29 @@ fn main_registration_composition_coefficient_chunks_v1(
                                     .checked_add(offset)
                                     .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
                                 let next = (row + stripe.next_stride) % stripe.rows;
-                                scratch.fill_v1(row, next, &base, &aux, fixed_columns);
-                                *target = provider.composition_value_on_stripe_v1(
+                                scratch.fill_or_advance_v1(
+                                    row,
+                                    next,
+                                    stripe.next_stride == 1 && offset != 0,
+                                    &base,
+                                    &aux,
+                                    fixed_columns,
+                                );
+                                *target = provider.composition_value_with_context_v1(
                                     registration,
                                     &denominators,
                                     row,
-                                    scratch.opening_v1(),
+                                    RegisteredOpenedRowsV1 {
+                                        base_current: &scratch.base_current,
+                                        base_next: &scratch.base_next,
+                                        aux_current: &scratch.aux_current,
+                                        aux_next: &scratch.aux_next,
+                                    },
                                     &scratch.fixed_current,
                                     &scratch.fixed_next,
                                     &alphas[lane],
+                                    &mut scratch.residues,
+                                    registration_context.as_ref(),
                                 )?;
                                 if let Some(denominators) = &sha_union_denominators {
                                     if lane != 0 {
@@ -1988,43 +2387,51 @@ fn main_composition_material_with_ca_v1<R: TryRng>(
             .filter(|registration| registration.trace_group == group_index)
             .collect::<Vec<_>>();
         let mut seen_in_group = 0_usize;
-        stream_main_fixed_polynomial_sets_v1(provider, bounded_transform, |fixed| {
-            if expected.get(seen_in_group).copied() != Some(fixed.registration) {
-                return Err(ZkX509StarkErrorV1::ProfileMismatch);
-            }
-            let registration_index =
-                canonical_main_registration_index_v1(layout, fixed.registration)?;
-            let contribution = ZeroizingExtensionLanesV1::new(
-                main_registration_composition_coefficient_chunks_v1(
-                    layout,
-                    provider,
-                    base_polynomials,
-                    aux_polynomials,
-                    sources,
-                    fixed,
-                    &alphas[registration_index],
-                    &shared_layout,
-                    sha_union_plan,
-                    sha_union_centers,
-                    sha_union_alphas,
-                    bounded_transform,
-                    ca.as_ref().map(|ca| ca.buffers),
-                )?,
-                zeroize_extension_lanes_v1,
-            );
-            #[cfg(test)]
-            let fold_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionRegistrationFold);
-            add_main_composition_coefficient_chunks_v1(
-                &mut coefficient_chunks,
-                &contribution,
-                coefficient_cap,
-            )?;
-            #[cfg(test)]
-            fold_timer.complete_v1();
-            seen_in_group += 1;
-            seen_registrations += 1;
-            Ok(())
-        })?;
+        stream_main_fixed_polynomial_sets_v1(
+            provider,
+            bounded_transform,
+            |registration| match ca.as_ref() {
+                Some(ca) => ca.buffers.quotient_cache_plan_v1(layout, registration),
+                None => main_resources::MainProverBufferPlanV1::new_v1(layout)?
+                    .quotient_cache_plan_v1(layout, registration),
+            },
+            |fixed| {
+                if expected.get(seen_in_group).copied() != Some(fixed.registration) {
+                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                }
+                let registration_index =
+                    canonical_main_registration_index_v1(layout, fixed.registration)?;
+                let contribution = ZeroizingExtensionLanesV1::new(
+                    main_registration_composition_coefficient_chunks_v1(
+                        layout,
+                        provider,
+                        base_polynomials,
+                        aux_polynomials,
+                        sources,
+                        fixed,
+                        &alphas[registration_index],
+                        &shared_layout,
+                        sha_union_plan,
+                        sha_union_centers,
+                        sha_union_alphas,
+                        bounded_transform,
+                    )?,
+                    zeroize_extension_lanes_v1,
+                );
+                #[cfg(test)]
+                let fold_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionRegistrationFold);
+                add_main_composition_coefficient_chunks_v1(
+                    &mut coefficient_chunks,
+                    &contribution,
+                    coefficient_cap,
+                )?;
+                #[cfg(test)]
+                fold_timer.complete_v1();
+                seen_in_group += 1;
+                seen_registrations += 1;
+                Ok(())
+            },
+        )?;
         if seen_in_group != expected.len() {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }

@@ -20,7 +20,7 @@
    "file_groups": "Every file the scan finds, classified by component and role."
   },
   "scan_scope": "Every tracked or unignored file is scanned except the paths under scan.excluded_paths (this file, its checker and the plan ledger). A Markdown file is listed only when it names the RAM-LFE HKDF backend. Outside the arithmetic scopes, arithmetic that matches no detection pattern is not inventoried: other proof-field arithmetic (Pasta, BN254, the remaining Goldilocks owners that specs/fastpq/shared_backend_inventory.json lists), signature and curve arithmetic, and erasure coding.",
-  "C.4": "Adds offline dealer-assisted sharing of an existing RNS-BGV key, explicit public context and sharing-instance identities, and opaque clearing custody. A canonical borrowed subset plan converts one local share in place into an opaque subset-additive owner; invalid conversion returns the original unmodified owner. No threshold decryption, reusable online custody, DKG, malicious-party proof, retry-security or qualified parameter claim."
+  "C.4": "Adds offline trusted-dealer sharing, canonical in-place subset weighting and local consumed-subset opening under one trusted co-located owner. Opening uses existing NTT/RNS arithmetic without reconstructing a full key or exporting partial decryptions, bounds retained shares and scratch, and returns original unchanged owners on refusal. No distributed opening, reusable online custody, DKG, malicious-party proof, retry-security or qualified parameter claim."
  },
  "observed": {
   "base_commit": "7e93d3e0495017db7c606dc72c7ac9180792d696",
@@ -31,7 +31,7 @@
   "C.3": "built iroha_fhe::bgv on the shared kernels and added iroha_fhe::natural, ::ntt_plan and ::rns_chain; primitives, protocol_logic (rns_bgv), test_only_references and function_assignment record them. The retained BFV entries are unchanged and are not renamed into the RNS-BGV candidate.",
   "C.5": "primitives, test_only_references and function_assignment for ZK-AMS, protocol_logic (bgv_mkhe), zk_ams_distinct",
   "R.6": "hkdf, current_state, file_groups, generated_consumers",
-  "C.4": "Adds offline dealer-assisted sharing of an existing RNS-BGV key across the main and special prime fields, explicit public context and sharing-instance identities, move-only clearing custody and independent interpolation/refusal tests. No threshold decryption, DKG, malicious-party proof or qualified parameter claim."
+  "C.4": "Adds offline Shamir sharing over every main and special prime, explicit context/instance identities, move-only clearing custody, in-place subset weighting and local consumed-subset opening of two-component ciphertexts. Independent scalar/CRT, subset/level, refusal and clearing tests cover this local arithmetic. Distributed masked/proven opening, DKG, authoritative key/purpose/epoch binding and parameter qualification remain incomplete."
  },
  "scan": {
   "patterns": ["basis_conversion", "bfv", "bgv", "fhe", "hkdf", "hkdf_ram_lfe", "mkhe", "negacyclic", "ntt", "ram_lfe", "rns"],
@@ -118,7 +118,7 @@
    "iroha_fhe::natural": "Arbitrary-precision non-negative integers for public quantities.",
    "iroha_fhe::ntt_plan": "Precomputed constant-time negacyclic transform of one prime below 2^62.",
    "iroha_fhe::rns_chain": "Exact mixed-radix basis conversion and congruence-preserving scale-down over chains of any length.",
-   "iroha_fhe::bgv": "The exact modular RNS-BGV scheme shared by RAM-LFE and SoraCloud: profiles, keys, encryption, leveled operations, public noise bounds, slot encodings and the cost model. A starting candidate; nothing consumes it yet."
+   "iroha_fhe::bgv": "The exact modular RNS-BGV scheme shared by RAM-LFE and SoraCloud: profiles, keys, encryption, leveled operations, public noise bounds, packed slot routing and the cost model. RAM-LFE affine evaluation consumes its arithmetic; production delivery and cryptographic qualification remain incomplete."
   }
  },
  "zk_ams_distinct": {
@@ -284,7 +284,7 @@
      "path": "crates/iroha_fhe/src/modular.rs",
      "symbol": "ModularArithmetic::modulus",
      "role": "canonical",
-     "callers_exhaustive": true,
+     "callers_exhaustive": false,
      "callers": {}
     },
     {
@@ -316,7 +316,7 @@
      "callers_exhaustive": false,
      "callers": {
       "crates/iroha_fhe/src/modular.rs": ["ModularArithmetic::pow"],
-      "crates/iroha_fhe/src/ntt.rs": ["cyclic_ntt_with", "forward_negacyclic_ntt_with", "inverse_negacyclic_ntt_with", "twist_in_place_with"],
+      "crates/iroha_fhe/src/ntt.rs": ["cyclic_ntt_with", "cyclic_product_in_place_with", "forward_negacyclic_ntt_with", "inverse_negacyclic_ntt_with", "twist_in_place_with"],
       "crates/iroha_fhe/src/polynomial.rs": ["negacyclic_mul_schoolbook_into_with"]
      }
     },
@@ -328,7 +328,7 @@
      "callers": {"crates/iroha_fhe/src/ntt.rs": ["cyclic_ntt_with"]}
     },
     {"path": "crates/iroha_fhe/src/modular.rs", "symbol": "WordModulus", "role": "canonical"},
-    {"path": "crates/iroha_fhe/src/modular.rs", "symbol": "WordModulus::modulus", "role": "canonical", "callers_exhaustive": true, "callers": {}},
+    {"path": "crates/iroha_fhe/src/modular.rs", "symbol": "WordModulus::modulus", "role": "canonical", "callers_exhaustive": false, "callers": {}},
     {"path": "crates/iroha_fhe/src/modular.rs", "symbol": "WordModulus::add", "role": "canonical", "callers_exhaustive": true, "callers": {}},
     {"path": "crates/iroha_fhe/src/modular.rs", "symbol": "WordModulus::sub", "role": "canonical", "callers_exhaustive": true, "callers": {}},
     {"path": "crates/iroha_fhe/src/modular.rs", "symbol": "WordModulus::mul", "role": "canonical", "callers_exhaustive": false, "callers": {}},
@@ -451,6 +451,8 @@
       "crates/iroha_core_privacy/src/privacy_engines/jindo/security.rs": ["check_prime_difference_classes_v1"],
       "crates/iroha_crypto/src/fhe_bfv.rs": ["packed_plaintext_evaluation_points"],
       "crates/iroha_fhe/src/accel/avx2.rs": ["cyclic_ntt"],
+      "crates/iroha_fhe/src/bgv/routing.rs": ["SlotLinearMap::fold_giants"],
+      "crates/iroha_fhe/src/bgv/routing/layout.rs": ["SlotLinearLayout::new"],
       "crates/iroha_fhe/src/modular.rs": ["is_prime_u64", "is_primitive_root_of_order", "mod_inv_prime_u64", "primitive_root_of_order_with_candidate_limit"],
       "crates/iroha_fhe/src/ntt.rs": ["root_for_length"],
       "crates/iroha_fhe/src/rns.rs": ["reconstruct_coefficient"],
@@ -465,7 +467,6 @@
      "callers_exhaustive": true,
      "callers": {
       "crates/iroha_crypto/src/fhe_bfv.rs": ["encode_packed_plaintext_slots"],
-      "crates/iroha_fhe/src/bgv/encoding.rs": ["SlotEncoding::new"],
       "crates/iroha_fhe/src/ntt.rs": ["negacyclic_multiply_ntt_in_place", "transform_parameters"],
       "crates/iroha_fhe/src/ntt_plan.rs": ["NegacyclicPlan::new"],
       "crates/iroha_fhe/src/rns.rs": ["basis_extend_target_limbs"],
@@ -579,6 +580,7 @@
       "crates/iroha_crypto/src/fhe_bfv.rs": ["packed_plaintext_root"],
       "crates/iroha_fhe/src/bgv/profile.rs": ["BgvParameters::validate", "first_primes"],
       "crates/iroha_fhe/src/ntt_plan.rs": ["NegacyclicPlan::new"],
+      "crates/iroha_fhe/src/prime_power.rs": ["PrimePowerContext::new"],
       "crates/iroha_fhe/src/rns.rs": ["validate_ntt_modulus_chain"],
       "crates/iroha_fhe/src/rns_chain.rs": ["basis_prime"],
       "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe.rs": ["BgvProfile::validate"]
@@ -618,16 +620,25 @@
   {
    "id": "ntt.cyclic_radix2",
    "family": "ntt",
-   "summary": "In-place radix-2 cyclic number-theoretic transform with bit-reversal and inverse scaling, generic over the modular arithmetic.",
+   "summary": "In-place radix-2 cyclic number-theoretic transforms and cyclic products using the shared bit-reversal, butterfly and inverse-scaling schedule, generic over modular arithmetic.",
    "owner": {"crate": "iroha_fhe", "module": "iroha_fhe::ntt"},
    "canonical_source": {
     "path": "crates/iroha_fhe/src/ntt.rs",
-    "symbols": ["bit_reverse_permute", "cyclic_ntt_in_place", "cyclic_ntt_in_place_scalar", "cyclic_ntt_with", "reduce_single_element", "transform_parameters"]
+    "symbols": [
+     "bit_reverse_permute",
+     "cyclic_ntt_in_place",
+     "cyclic_ntt_in_place_scalar",
+     "cyclic_ntt_with",
+     "reduce_single_element",
+     "transform_parameters",
+     "cyclic_product_in_place_with"
+    ]
    },
    "notes": [
     "`cyclic_ntt_with` is one butterfly schedule over any `ModularArithmetic`: word arithmetic for BFV, Jindo and the exact CRT convolution, branch-free Montgomery arithmetic for Bootle-Lantern.",
     "`cyclic_ntt_in_place` may dispatch to the NEON or AVX2 kernel; `cyclic_ntt_in_place_scalar` is the reference it must equal.",
-    "The ZK-AMS transforms are #[cfg(test)]; no ZK-AMS production code runs an NTT."
+    "The ZK-AMS transforms are #[cfg(test)]; no ZK-AMS production code runs an NTT.",
+    "`cyclic_product_in_place_with` composes the same transform without allocation; secret inputs use FixedModulus. Native40 coefficient construction consumes it only in the test-only source adapter."
    ],
    "implementations": [
     {
@@ -647,7 +658,13 @@
      "role": "canonical",
      "callers_exhaustive": true,
      "callers": {
-      "crates/iroha_fhe/src/ntt.rs": ["cyclic_ntt_in_place", "cyclic_ntt_in_place_scalar", "forward_negacyclic_ntt_with", "inverse_negacyclic_ntt_with"]
+      "crates/iroha_fhe/src/ntt.rs": [
+       "cyclic_ntt_in_place",
+       "cyclic_ntt_in_place_scalar",
+       "cyclic_product_in_place_with",
+       "forward_negacyclic_ntt_with",
+       "inverse_negacyclic_ntt_with"
+      ]
      }
     },
     {
@@ -704,7 +721,8 @@
      "role": "canonical",
      "callers_exhaustive": true,
      "callers": {"crates/iroha_fhe/src/ntt.rs": ["cyclic_ntt_in_place", "cyclic_ntt_in_place_scalar"]}
-    }
+    },
+    {"path": "crates/iroha_fhe/src/ntt.rs", "symbol": "cyclic_product_in_place_with", "role": "canonical", "callers_exhaustive": true, "callers": {}}
    ]
   },
   {
@@ -1530,8 +1548,10 @@
      "callers_exhaustive": true,
      "callers": {
       "crates/iroha_fhe/src/bgv/profile.rs": ["BgvProfile::new"],
+      "crates/iroha_fhe/src/bgv/upper_digits/compiler.rs": ["Compiler::constant"],
       "crates/iroha_fhe/src/constant_time.rs": ["FixedModulus::is_consistent"],
       "crates/iroha_fhe/src/ntt_plan.rs": ["NegacyclicPlan::new"],
+      "crates/iroha_fhe/src/prime_power.rs": ["PrimePowerContext::at_precision", "PrimePowerContext::new"],
       "crates/iroha_fhe/src/rns_chain.rs": ["RnsBasis::conversion_target", "basis_prime"]
      }
     },
@@ -1556,28 +1576,29 @@
      "path": "crates/iroha_fhe/src/constant_time.rs",
      "symbol": "FixedModulus::reduce_u64",
      "role": "canonical",
-     "callers_exhaustive": true,
+     "callers_exhaustive": false,
      "callers": {"crates/iroha_fhe/src/constant_time.rs": ["FixedModulus::canonicalize_i64"]}
     },
     {
      "path": "crates/iroha_fhe/src/constant_time.rs",
      "symbol": "FixedModulus::canonicalize_i64",
      "role": "canonical",
-     "callers_exhaustive": true,
+     "callers_exhaustive": false,
      "callers": {
       "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/ring.rs": [
        "ApplicationPolynomialV1::from_centered_coefficients",
        "ApplicationPolynomialV1::scale_centered",
        "ProofPolynomialV1::from_centered_coefficients",
        "ProofPolynomialV1::scale_centered"
-      ]
+      ],
+      "crates/iroha_fhe/src/bgv/upper_digits/compiler.rs": ["Compiler::constant"]
      }
     },
     {
      "path": "crates/iroha_fhe/src/constant_time.rs",
      "symbol": "FixedModulus::add_canonical",
      "role": "canonical",
-     "callers_exhaustive": true,
+     "callers_exhaustive": false,
      "callers": {
       "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/ring.rs": ["ApplicationPolynomialV1::add", "ProofPolynomialV1::add"],
       "crates/iroha_fhe/src/bgv/cipher.rs": ["PublicKey::encrypt_from_coins"],
@@ -1593,15 +1614,15 @@
      "path": "crates/iroha_fhe/src/constant_time.rs",
      "symbol": "FixedModulus::sub_canonical",
      "role": "canonical",
-     "callers_exhaustive": true,
+     "callers_exhaustive": false,
      "callers": {
       "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/ring.rs": ["ApplicationPolynomialV1::sub", "ProofPolynomialV1::multiply_by_monomial", "ProofPolynomialV1::sub"],
       "crates/iroha_fhe/src/bgv/keys.rs": ["masked_error"],
       "crates/iroha_fhe/src/bgv/poly.rs": ["RnsPoly::negate", "RnsPoly::sub_assign"],
+      "crates/iroha_fhe/src/bgv/threshold.rs": ["ThresholdSelection::coefficient"],
       "crates/iroha_fhe/src/constant_time.rs": ["CenteredCrt3::reconstruct_mod_target", "FixedModulus::canonicalize_i64", "FixedModulus::sub"],
       "crates/iroha_fhe/src/ntt_plan.rs": ["NegacyclicPlan::forward", "NegacyclicPlan::inverse"],
-      "crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::apply", "RnsBasis::digits_to_target"],
-      "crates/iroha_fhe/src/bgv/threshold.rs": ["ThresholdSelection::coefficient"]
+      "crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::apply", "RnsBasis::digits_to_target"]
      }
     },
     {
@@ -1619,9 +1640,10 @@
      "path": "crates/iroha_fhe/src/constant_time.rs",
      "symbol": "FixedModulus::multiply",
      "role": "canonical",
-     "callers_exhaustive": true,
+     "callers_exhaustive": false,
      "callers": {
       "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/ring.rs": ["ApplicationPolynomialV1::scale_centered", "ProofPolynomialV1::scale_canonical_unchecked", "multiply_negacyclic_crt_ntt_v1"],
+      "crates/iroha_fhe/src/accel.rs": ["mul_scalar_mod_with"],
       "crates/iroha_fhe/src/bgv/cipher.rs": ["PublicKey::encrypt_from_coins"],
       "crates/iroha_fhe/src/bgv/keys.rs": ["SwitchingKey::from_coins", "masked_error"],
       "crates/iroha_fhe/src/bgv/threshold.rs": ["DealerKeyShares::take_share", "SecretKeyShare::try_into_subset_additive", "ThresholdSelection::coefficient"],
@@ -1633,14 +1655,14 @@
      "path": "crates/iroha_fhe/src/constant_time.rs",
      "symbol": "FixedModulus::power",
      "role": "canonical",
-     "callers_exhaustive": true,
-     "callers": {"crates/iroha_fhe/src/constant_time.rs": ["FixedModulus::pow"], "crates/iroha_fhe/src/bgv/threshold.rs": ["ThresholdSelection::coefficient"]}
+     "callers_exhaustive": false,
+     "callers": {"crates/iroha_fhe/src/bgv/threshold.rs": ["ThresholdSelection::coefficient"], "crates/iroha_fhe/src/constant_time.rs": ["FixedModulus::pow"]}
     },
     {
      "path": "crates/iroha_fhe/src/constant_time.rs",
      "symbol": "FixedModulus::modulus",
      "role": "canonical",
-     "callers_exhaustive": true,
+     "callers_exhaustive": false,
      "callers": {}
     },
     {"path": "crates/iroha_fhe/src/constant_time.rs", "symbol": "FixedModulus::add", "role": "canonical", "callers_exhaustive": true, "callers": {}},
@@ -1689,6 +1711,7 @@
      "mul_mod_assign_scalar",
      "mul_scalar_mod",
      "mul_scalar_mod_scalar",
+     "mul_scalar_mod_with",
      "product_kernel_constants",
      "sub_mod_assign",
      "sub_mod_assign_scalar",
@@ -1701,7 +1724,7 @@
     ]
    },
    "notes": [
-    "Ineligible inputs (short slices, unreduced operands, unsupported moduli, no CPU support) take the scalar path, so every dispatching function equals its `_scalar` reference on all inputs.",
+    "General-input dispatchers fall back on ineligible short/unreduced/unsupported inputs and equal their scalar references. The crate-private canonical-input public-scalar adapter trusts the clearing owner's residue invariant, dispatches only by public geometry/features/CPU, sends a multiple-of-eight prefix through the existing SIMD kernel, and uses FixedModulus for remaining or unsupported words without operand scans or private remainders.",
     "No Metal or CUDA kernel exists for word-modulus arithmetic; the TODO sits at the dispatch site in iroha_fhe::ntt::cyclic_ntt_in_place."
    ],
    "implementations": [
@@ -1747,7 +1770,7 @@
      "cfg": ["all(feature = \"simd\", any(target_arch = \"aarch64\", target_arch = \"x86_64\"))"],
      "role": "canonical",
      "callers_exhaustive": true,
-     "callers": {"crates/iroha_fhe/src/accel.rs": ["try_cyclic_ntt", "try_mul_mod_assign", "try_mul_scalar_mod"]}
+     "callers": {"crates/iroha_fhe/src/accel.rs": ["mul_scalar_mod_with", "try_cyclic_ntt", "try_mul_mod_assign", "try_mul_scalar_mod"]}
     },
     {
      "path": "crates/iroha_fhe/src/accel.rs",
@@ -1873,6 +1896,13 @@
      "role": "canonical",
      "callers_exhaustive": true,
      "callers": {"crates/iroha_fhe/src/accel/avx2.rs": ["cyclic_ntt"], "crates/iroha_fhe/src/accel/neon.rs": ["cyclic_ntt"]}
+    },
+    {
+     "path": "crates/iroha_fhe/src/accel.rs",
+     "symbol": "mul_scalar_mod_with",
+     "role": "canonical",
+     "callers_exhaustive": true,
+     "callers": {"crates/iroha_fhe/src/bgv/poly.rs": ["RnsPoly::mul_scalar_assign"]}
     }
    ]
   },
@@ -2155,7 +2185,7 @@
      "path": "crates/iroha_fhe/src/natural.rs",
      "symbol": "Natural::div_floor_u64",
      "role": "canonical",
-     "callers_exhaustive": true,
+     "callers_exhaustive": false,
      "callers": {"crates/iroha_fhe/src/bgv/noise.rs": ["key_switch_noise", "switch_down_noise"]}
     },
     {
@@ -2249,7 +2279,13 @@
     {"path": "crates/iroha_fhe/src/natural.rs", "symbol": "Natural::rem_u64", "role": "canonical", "callers_exhaustive": true, "callers": {}},
     {"path": "crates/iroha_fhe/src/natural.rs", "symbol": "Natural::to_u128", "role": "canonical", "callers_exhaustive": true, "callers": {}},
     {"path": "crates/iroha_fhe/src/natural.rs", "symbol": "Natural::to_u64", "role": "canonical", "callers_exhaustive": true, "callers": {}},
-    {"path": "crates/iroha_fhe/src/natural.rs", "symbol": "Natural::words_le", "role": "canonical", "callers_exhaustive": false, "callers": {}},
+    {
+     "path": "crates/iroha_fhe/src/natural.rs",
+     "symbol": "Natural::words_le",
+     "role": "canonical",
+     "callers_exhaustive": false,
+     "callers": {"crates/iroha_fhe/src/bgv/metadata.rs": ["transfer_scratch"]}
+    },
     {
      "path": "crates/iroha_fhe/src/natural.rs",
      "symbol": "Natural::zero",
@@ -2305,7 +2341,9 @@
      "symbol": "NegacyclicPlan::fixed",
      "role": "canonical",
      "callers_exhaustive": false,
-     "callers": {"crates/iroha_fhe/src/bgv/poly.rs": ["RnsPoly::add_assign", "RnsPoly::automorphism", "RnsPoly::negate", "RnsPoly::sub_assign"]}
+     "callers": {
+      "crates/iroha_fhe/src/bgv/poly.rs": ["RnsPoly::add_assign", "RnsPoly::automorphism", "RnsPoly::mul_scalar_assign", "RnsPoly::negate", "RnsPoly::sub_assign"]
+     }
     },
     {
      "path": "crates/iroha_fhe/src/ntt_plan.rs",
@@ -2483,8 +2521,8 @@
      "path": "crates/iroha_fhe/src/rns_chain.rs",
      "symbol": "RnsBasis::convert_centered",
      "role": "canonical",
-     "callers_exhaustive": true,
-     "callers": {"crates/iroha_fhe/src/bgv/cipher.rs": ["SecretKey::decrypt"], "crates/iroha_fhe/src/bgv/eval.rs": ["BgvProfile::key_switch"]}
+     "callers_exhaustive": false,
+     "callers": {"crates/iroha_fhe/src/bgv/cipher.rs": ["decode_inner_product"], "crates/iroha_fhe/src/bgv/eval.rs": ["BgvProfile::key_switch"]}
     },
     {
      "path": "crates/iroha_fhe/src/rns_chain.rs",
@@ -2769,9 +2807,14 @@
     {"path": "crates/fastpq_prover/src/fft.rs", "symbol": "mul_mod"},
     {"path": "crates/fastpq_prover/src/goldilocks_transform.rs", "symbol": "available_goldilocks_transform_backend_v1"},
     {"path": "crates/fastpq_prover/src/goldilocks_transform.rs", "symbol": "goldilocks_transform_completion_uncertain_v1"},
+    {"path": "crates/fastpq_prover/src/goldilocks_transform.rs", "symbol": "metal_goldilocks_forward_extra_payload_v1"},
     {"path": "crates/fastpq_prover/src/goldilocks_transform.rs", "symbol": "metal_goldilocks_transform_extra_payload_v1"},
     {"path": "crates/fastpq_prover/src/goldilocks_transform.rs", "symbol": "mul_mod_v1"},
     {"path": "crates/fastpq_prover/src/goldilocks_transform.rs", "symbol": "power_v1"},
+    {"path": "crates/fastpq_prover/src/goldilocks_transform.rs", "symbol": "prepare_goldilocks_columns_v1"},
+    {"path": "crates/fastpq_prover/src/goldilocks_transform.rs", "symbol": "prepare_goldilocks_forward_columns_v1"},
+    {"path": "crates/fastpq_prover/src/goldilocks_transform.rs", "symbol": "prepared_goldilocks_columns_payload_bound_v1"},
+    {"path": "crates/fastpq_prover/src/goldilocks_transform.rs", "symbol": "prepared_goldilocks_forward_payload_bound_v1"},
     {"path": "crates/fastpq_prover/src/goldilocks_transform.rs", "symbol": "transform_cpu_v1"},
     {"path": "crates/fastpq_prover/src/goldilocks_transform.rs", "symbol": "transform_goldilocks_columns_v1"}
    ]
@@ -3233,7 +3276,7 @@
    "component": "Cleartext normal form of a V1 tape: the specification oracle of the normalizing lowering",
    "tasks": ["R.0"],
    "executes": [],
-   "note": "Folds the plaintext runs of a hidden tape into affine forms over F257 and keeps each multiplication, selection and scheduled refresh as one gate, on plaintext scalars; it encrypts nothing. The encrypted normalizer, its fixed public schedule and its proof belong to tasks R.3, R.7 and R.9.",
+   "note": "Folds the plaintext runs of a hidden tape into affine forms over F257 and keeps each multiplication, selection and scheduled refresh as one gate; it encrypts nothing. The affine forms now feed ram_lfe.bgv_affine_evaluation, which runs a fixed padded shared packed-routing schedule. The bounded compiler and evaluator now provide complete generic sixteen-layer arithmetic under an explicit public schedule. Proving the normalization, selecting qualified parameters, circuit privacy and encrypted refresh remain with R.3, R.7, C.3 and R.9.",
    "path": "crates/iroha_crypto/src/ram_lfe/normal_form.rs",
    "symbols": [{"symbol": "ram_lfe_reference_normalize_v1"}, {"symbol": "RamLfeNormalFormV1::evaluate"}]
   },
@@ -3355,10 +3398,10 @@
   {
    "id": "mkhe.rns_native_profile_and_source",
    "scheme": "bgv_mkhe",
-   "component": "RNS-native proof topology, profile, proof digests, transcript roots and the move-only source arena",
+   "component": "RNS-native proof topology, profile, proof digests, transcript roots, move-only source arena and canonical resource custody",
    "tasks": ["C.5"],
    "executes": [],
-   "note": "RNS-native relation topology and candidate profile. The composite verifier module is #[cfg(test)]; the qPCS and phase II/III relation files keep only constants and types in production.",
+   "note": "RNS-native relation topology and candidate profile. The composite verifier module is #[cfg(test)]; the qPCS and phase II/III relation files keep only constants and types in production. Canonical workspace/storage ledgers and the consumed Core source-resource session are production resource management, with no executing ring-arithmetic operation or original-source/key/Phase23 authority. The eventual complete source/qPCS lineage remains unimplemented.",
    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_profile.rs",
    "symbols": [
     {"symbol": "zk_ams_mkhe_rns_native_profile_v1"},
@@ -3447,7 +3490,7 @@
    "component": "Parameter sets, the first-prime derivation rule, pinned candidates, canonical identity and the pinned evaluation context",
    "tasks": ["C.3", "C.4", "C.8", "C.9", "R.11", "R.8", "R.7"],
    "executes": [],
-   "note": "Candidates are starting points for measurement; none has a reviewed security estimate. Validation rejects any prime that is not 1 mod 2*N*t.",
+   "note": "The canonical master identity includes base prime p and exponent E, with p^E below2^31. A bounded E-element opaque PlaintextPrecision table validates k in1..=E and binds that master identity; no scalar membership, imported-noise validity or exact-division authority is constructed. Main/special primes remain1mod2*N*p^E. Existing F257 candidates stay E1 and unqualified.",
    "path": "crates/iroha_fhe/src/bgv/profile.rs",
    "symbols": []
   },
@@ -3477,7 +3520,7 @@
    "component": "Plaintexts, ciphertexts, public-key encryption, decryption and the canonical word and byte encodings",
    "tasks": ["C.3", "C.4", "C.8", "C.9", "R.11", "R.8", "R.7"],
    "executes": ["encryption", "decryption"],
-   "note": "The noise bound in a decoded frame is the sender's claim; the proofs that make it valid belong to the consumers.",
+   "note": "Plaintexts/ciphertexts and frames bind effective k to the master identity. Fresh coins/errors use master p^E; plaintext message bounds use p^k. One existing CRT conversion target per level reduces the centered phase to p^E, then canonical FixedModulus reduction obtains p^k. Frame byte35 is mandatory k; no retired decoder fallback. Imported noise remains only a claim, and there is no public divide/noise-reset API. Ciphertext byte residues now use exactly ceil(log2(q_i)) little-endian bits per canonical residue with separately zero-padded limb ends; decoding rejects noncanonical residue values, nonzero padding, alternate fixed-u64 bodies, truncation and trailing bytes. Existing canonical u64 word access, clearing resident RNS owners and key frames are unchanged. This is one first-release byte layout, not a compatibility decoder or authentication claim.",
    "path": "crates/iroha_fhe/src/bgv/cipher.rs",
    "symbols": []
   },
@@ -3487,7 +3530,7 @@
    "component": "Addition, plaintext operations, tensor product, relinearization, hybrid key switching, automorphisms and modulus switching",
    "tasks": ["C.3", "C.4", "C.8", "C.9", "R.11", "R.8", "R.7"],
    "executes": ["evaluation", "key_switching"],
-   "note": "Every operation takes the shape of its result from rns_bgv.shape_planning and refuses a result whose public noise bound exceeds the capacity of its level.",
+   "note": "Every operation takes the shape of its result from rns_bgv.shape_planning and refuses a result whose public noise bound exceeds the capacity of its level. Explicit public scalar multiplication validates effective-precision canonicality, derives centered coefficient and norm together, then scales every residue through the shared canonical-input adapter. Zero/unit scalars execute the same complete loop. The generic plaintext polynomial path remains for general or hidden operands.",
    "path": "crates/iroha_fhe/src/bgv/eval.rs",
    "symbols": []
   },
@@ -3497,7 +3540,7 @@
    "component": "Public worst-case noise bounds and the decryption-failure condition",
    "tasks": ["C.3", "C.4", "C.8", "C.9", "R.11", "R.8", "R.7"],
    "executes": [],
-   "note": "Functions take public quantities only; no key, coin or decrypted value can reach a bound.",
+   "note": "Functions take public quantities only; no key, coin or decrypted value reaches a bound. Fresh encryption uses (p^k-1)/2+p^E*B*(2N+1); key switching and modulus dropping retain master p^E scale. Within-capacity unwrapped phase guarantees correctness, while exceeding capacity loses that guarantee.",
    "path": "crates/iroha_fhe/src/bgv/noise.rs",
    "symbols": []
   },
@@ -3507,17 +3550,17 @@
    "component": "Public shapes of ciphertexts (level, components, noise bound), the admission of every operation on them and the rule that lowers a product while its capacity ratio grows",
    "tasks": ["C.3", "C.4", "C.8", "C.9", "R.11", "R.8", "R.7"],
    "executes": [],
-   "note": "The evaluation module takes the level, component count and bound of every result from here, so a plan is the admission part of the evaluator run without residues. Takes no key, plaintext value or coin.",
+   "note": "Public shapes bind master identity and exact effective k as well as level/components/bound. Every transfer preserves k and refuses foreign or mixed contexts; the evaluator obtains every result shape here. Takes no secret values. Effective fresh bounds delegate to the sole rns_bgv.noise_accounting owner. Explicitly public scalar operands derive their centered coefficient and exact norm inseparably before the ordinary plaintext-product transfer; no private-vector norm is inferred.",
    "path": "crates/iroha_fhe/src/bgv/plan.rs",
    "symbols": []
   },
   {
    "id": "rns_bgv.slot_encoding",
    "scheme": "rns_bgv",
-   "component": "Scalar slot encodings (sparse subalgebra and fully split batching), slot masks, slot movement and the broadcast",
+   "component": "Scalar slot encodings, slot masks/movement/broadcast, and public-layout BSGS/Horner slot maps",
    "tasks": ["C.3", "C.4", "C.8", "C.9", "R.11", "R.8", "R.7"],
    "executes": ["evaluation"],
-   "note": "Subalgebra membership of a hidden plaintext needs a proof from whoever encrypted it; that proof is task R.11.",
+   "note": "Subalgebra membership of a hidden plaintext needs a proof from whoever encrypted it; that proof is task R.11. `bgv::routing` plans and evaluates the matrix diagonals admitted by immutable public layout support under explicit coefficient, output and scratch budgets; its public split chooses Galois work within public noise capacity. Authentication, scalar-subalgebra membership, circuit privacy and whole-application budgeting remain external. Baby residue owners are transformed once per request; identical centered diagonal multipliers and leaf sums use the shared canonical NTT in place, with only completed leaves inverted. Arithmetic units use the existing CostModel and remain distinct from full application work accounting. Explicit public-prefix masks derive their exact centered coefficient norms for fixed public counts; the potentially hidden-count prefix API retains its count-independent vector bound. Routing plans/maps share one immutable public row-support layout; every supported zero remains stored and unsupported nonzeros are refused during clearing row preparation. The same canonical evaluator omits only publicly absent diagonals and empty Horner branches; supported private zero coefficients retain identical operations/read order. Each output has its exact canonical shape transfer, with no common-bound widening or noise decrease. The complete public baby cache and required-key preflight remain. Public odd-unit activity masks are shared with the immutable layout and charged as metadata. Metadata and preparation row payload have separate explicit ceilings; these storage and arithmetic optimizations add no runtime activation. Effective precision is bound by each encoding and prepared map before private reads; slot count depends on base p-1, with a compatible prime-power root tower and canonical unit inverses. u32 coefficients retain the p^E<2^31 bound. Neither encoding nor ordinary routing lowers precision.",
    "path": "crates/iroha_fhe/src/bgv/encoding.rs",
    "symbols": []
   },
@@ -3527,7 +3570,7 @@
    "component": "Deterministic sizes and work units from public profile geometry; every size is the length of a frame the crate encodes",
    "tasks": ["C.3", "C.4", "C.8", "C.9", "R.11", "R.8", "R.7"],
    "executes": [],
-   "note": "scripts/fhe_bgv_cost_model.py holds an independent model and checks specs/fhe_bgv_cost_summary.json against it; crates/iroha_fhe/tests/bgv_cost_model_vectors.rs recomputes the sizes, work units, instruction costs, tape plans and contract inputs of that summary with this module, the noise rules and the costing harness.",
+   "note": "scripts/fhe_bgv_cost_model.py holds an independent model and checks specs/fhe_bgv_cost_summary.json against it; crates/iroha_fhe/tests/bgv_cost_model_vectors.rs recomputes the sizes, work units, instruction costs, tape plans and contract inputs of that summary with this module, the noise rules and the costing harness. Public scalar multiplication has its separate component-aware C*N*(level+1) residue-product category; general polynomial NTT costs and historical measurement artifacts remain unchanged. Public scalar reduction, validation, copying and clearing remain outside that count.",
    "path": "crates/iroha_fhe/src/bgv/cost.rs",
    "symbols": []
   },
@@ -3537,7 +3580,7 @@
    "component": "Limb-major residue polynomial in a clearing owner, with limb-wise transforms and arithmetic on the shared kernels",
    "tasks": ["C.3", "C.4", "C.8", "C.9", "R.11", "R.8", "R.7"],
    "executes": ["ring_arithmetic"],
-   "note": "Holds no kernel of its own: every operation calls iroha_fhe::ntt_plan, iroha_fhe::constant_time or iroha_fhe::automorphism.",
+   "note": "Holds no kernel of its own: every operation calls iroha_fhe::ntt_plan, iroha_fhe::constant_time or iroha_fhe::automorphism, or the shared canonical-input public-scalar adapter in iroha_fhe::accel. Scalar scaling reduces only the public centered coefficient per limb and preserves clearing ownership.",
    "path": "crates/iroha_fhe/src/bgv/poly.rs",
    "symbols": []
   },
@@ -3567,7 +3610,7 @@
    "component": "Offline dealer-assisted Shamir custody and local canonical-subset additive conversion",
    "tasks": ["C.4"],
    "executes": ["ring_arithmetic"],
-   "note": "Consumes a complete key, samples independent polynomials per main and special prime, and evaluates shares through the canonical FixedModulus owner. Public metadata binds profile, key context, epoch, threshold, roster and fresh sharing instance. A borrowed canonical subset plan binds its exact participants; local conversion uses the existing buffer and modular kernels, returning the original unmodified owner on metadata refusal. Selection and conversion are not algebraic share proofs. No public reconstruction, share codec, threshold decryption, reusable online custody, DKG, retry-security, malicious-party proof or network integration; no profile is qualified.",
+   "note": "Consumes a complete key, samples independent polynomials per main and special prime, and evaluates shares through the canonical FixedModulus owner. Public metadata binds profile, caller-declared key context/epoch, threshold, roster and fresh sharing instance. A borrowed canonical subset plan binds its exact participants; local conversion uses the existing buffer and modular kernels, returning the original unmodified owner on metadata refusal. The separate local_threshold_opening owner consumes that exact subset under one trusted co-located owner. Metadata checks are not algebraic share proofs or registered-key/purpose/epoch authority. No public secret-key reconstruction, share codec, distributed masked/proven opening, reusable online custody, DKG, retry-security or network integration; no profile is qualified.",
    "path": "crates/iroha_fhe/src/bgv/threshold.rs",
    "symbols": []
   },
@@ -3613,6 +3656,116 @@
     {"symbol": "terminal_feasibility"},
     {"symbol": "zk_ams_mkhe_noise_feasibility_v1"}
    ]
+  },
+  {
+   "id": "ram_lfe.bgv_affine_evaluation",
+   "scheme": "ram_lfe",
+   "component": "Encrypted evaluation of affine normal forms through one padded shared packed-routing schedule",
+   "tasks": ["R.3", "R.7", "C.3"],
+   "executes": ["evaluation"],
+   "note": "Owner-side preparation copies canonical affine forms into the shared clearing SlotLinearMap<1,1>. Each request masks original input slots, inserts its current initialized lanes and constant one, runs the publicly planned BSGS/Horner routing and applies the fixed output mask. Tested profiles use 22 Galois applications and 130 plaintext products. The prepared map supports different associated data without stale lane values; private coefficients do not select the request schedule. This unqualified arithmetic has no normalization proof, malicious-input proof, circuit-privacy sanitizer, complete resource qualification or refresh evaluator. Existing runtime backend refusals remain. Affine/bounded plans take explicit same-master effective F257 precision and require128 slots; fresh inputs, masks, initialized lanes and trivial zeros use that context while all physical errors retain master p^E. This foundation adds no bounded refresh loop or packed-input authority.",
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_affine.rs",
+   "symbols": []
+  },
+  {
+   "id": "rns_bgv.local_threshold_opening",
+   "scheme": "rns_bgv",
+   "component": "Local trusted-owner opening of an exact consumed subset of weighted BGV shares",
+   "tasks": ["C.4"],
+   "executes": ["decryption"],
+   "note": "Consumes the exact canonical selected subset and computes c0 + sum(c1 * lambda_i * s_i) with existing NTT and centered RNS conversion. Only two-component ciphertexts are admitted. Preflight validates profile, level, word/degree shape and selection/context/instance metadata before allocation; all regular refusals retain original unchanged shares. The polynomial-word ceiling includes retained full shares plus three current-level polynomials. No full key reconstruction, exported partial decryptions, network route or authoritative key/purpose/epoch binding. Distributed masked/proven opening, malicious-party verification, authorization, durable custody and replay/retry handling remain TODO. The sole decoder receives the ciphertext effective precision; all dealer/shared-key errors remain master-scaled.",
+   "path": "crates/iroha_fhe/src/bgv/threshold/opening.rs",
+   "symbols": []
+  },
+  {
+   "id": "ram_lfe.bgv_bounded_compilation",
+   "scheme": "ram_lfe",
+   "component": "Owner-side bounded normal-form compilation into fixed public-support packed layer and output matrices",
+   "tasks": ["R.0", "R.3", "R.7", "C.3"],
+   "executes": [],
+   "note": "The compact clearing compiler retains canonical gate ordinals, prepares all sixteen public A/B/C layer matrices and the ordered output projection through the shared routing owner. Coefficient preparation is private and occurs outside observable requests; initialized lanes remain request inputs. The separate ram_lfe.bgv_bounded_evaluation owner executes the complete public encrypted schedule. This compiler performs no ciphertext evaluation, normalization proof, input/key authentication or circuit-privacy sanitization. Existing candidate parameters and production refusals remain unchanged. The class-fixed compiler-case union retains294270 u32 coefficients per layer and22528 projection coefficients, independent of private gate kinds/depths or coefficient values. All sixteen plans/maps share one public layout allocation; unsupported future/current references and nonzero structural-zero positions are refused.",
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_compiler.rs",
+   "symbols": []
+  },
+  {
+   "id": "ram_lfe.bgv_bounded_evaluation",
+   "scheme": "ram_lfe",
+   "component": "Sole closed packed-input bounded evaluator with fixed public physical-refresh and aggregate resource admission",
+   "tasks": ["R.3", "R.7", "C.3"],
+   "executes": ["evaluation"],
+   "note": "Every admitted request consumes the actual packed-input owner and same-origin local key, routes21 state/base banks into all60 A/B/C operands and executes20 relinearized products plus additions for each of16 layers, then projects/masks64 ordered outputs. The sole from_normal_form factory admits aggregate public preparation before private compilation/maps; the raw evaluator and from_compiler factory are retired without shims. Explicit public schedule data selects no-refresh or all21-bank physical bootstrap at all17 boundaries; every dummy/carry bank participates, exact public source shapes alone deduplicate prepared plans, and unchanged class-fixed support controls routing. Same-master effective F257 precision and128 scalar slots preserve master p^E error scales. Whole-evaluation declared canonical-arithmetic and scalar-word ceilings, existing stage caps, requested payload and complementary typed metadata scopes are preadmitted and actual retained capacities checked. These scoped storage bounds exclude allocator overhead/RSS and separately owned keys/profile/backend resources. The packed constructor establishes local encoding provenance only. Logical Refresh-class compilation (R.9), external key/input authentication, committed execution proof, circuit privacy, selected parameters and full-resource/security qualification remain incomplete; no backend activation or qualification is established.",
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded.rs",
+   "symbols": []
+  },
+  {
+   "id": "rns_bgv.relative_trace",
+   "scheme": "rns_bgv",
+   "component": "Fixed-public relative-trace decomposition and monomial recomposition of full-ring plaintexts into scalar-subalgebra banks",
+   "tasks": ["C.3", "C.8", "R.9"],
+   "executes": ["evaluation"],
+   "note": "The generic plan derives d=N/S scalar-subalgebra banks from the complete odd-unit subgroup fixing X^d. A single public inverse precedes a fixed consuming parity cursor; exact canonical transfers account for its centered magnitude, each Galois/add/subtract and odd-child unit monomial. The traversal uses d-1 automorphisms and public owner bit-reversal restores the natural bank order. The ordered banks recompose through public monomials. Caller-supplied output, scratch and plaintext payload ceilings are explicit, with backend/key/metadata exclusions. This arithmetic transform grows noise and changes no level; it is not coefficient-slot packing, a bootstrap, a complete refresh, input/key authority, a proof or parameter/resource qualification. Geometry and every monomial preserve effective k, and normalization uses the exact unit inverse modulo p^k with its actual centered norm; it does not lower precision or noise. The sole parity executor is factored behind a private InverseBanks/Unit mode that derives coefficient and bound together. Public RelativeTraceDecompositionPlan retains normalized inverse-d semantics; the private coefficient-trace entry retains a real norm1 product and yields closed, non-Clone unnormalized d*g_r leaves in fixed DFS order. Each leaf binds its natural ordinal and complete public context/shape/slot/bank geometry; only the concrete coefficient cursor consumes it. Public normalized collection uses this same move-owned traversal and in-place bit reversal. The former recursive split is retired; the plural raw owner exists only in test fixtures. No vector constructor, public normalization mode or second executor is added.",
+   "path": "crates/iroha_fhe/src/bgv/relative_trace.rs",
+   "symbols": []
+  },
+  {
+   "id": "shared.prime_power_preparation",
+   "scheme": "shared_arithmetic",
+   "component": "Public prime-power lifting coefficients and complete precision-tagged upper-digit instruction compilation",
+   "tasks": ["C.3", "C.8", "R.9"],
+   "executes": [],
+   "note": "PrimePowerContext validates the exact odd-prime power below the canonical word-kernel limit. Explicit plans admit retained coefficient/program payload, preparation scratch and canonical arithmetic work before allocation. LiftingPolynomial and UpperDigitsProgram prepare public coefficients and the complete lifting/subtraction/exact-division tableau; this module executes no scalar or ciphertext requests. PreparationArithmetic counts and delegates to existing FixedModulus operations and modular primality, with no duplicate raw modular kernel. Coefficient owners clear on release. Ordinary master/effective BGV precision belongs to rns_bgv.profile and its arithmetic owners. The separate rns_bgv.upper_digits owner now executes the immutable tableau on genuine scalar-bank origins with private matched precision reductions. The separate rns_bgv.local_bootstrap owner supplies a closed honest same-master bootstrap construction. External encrypted-secret/key authority, proof/circuit-privacy integration and parameter/resource qualification remain incomplete; public preparation alone grants no execution or division authority.",
+   "path": "crates/iroha_fhe/src/prime_power.rs",
+   "symbols": []
+  },
+  {
+   "id": "rns_bgv.coefficient_slots",
+   "scheme": "rns_bgv",
+   "component": "Complete full-ring coefficient-to-slot conversion and inverse using shared relative trace and packed routing",
+   "tasks": ["C.3", "C.8", "R.9"],
+   "executes": ["evaluation"],
+   "note": "The sole private unit-scaled parity entry produces closed d*g_r banks, d=N/S. Its concrete inverse Vandermonde uses N^-1*beta_j^-k, so d*S/N=1 places original coefficient a[r+d*k] in slot k of bank r. This combines modular-unit normalization into the matrix without dividing or relabeling the noise bound; the ordinary exact planner recomputes all admitted shapes and splits. Forward mapping and canonical recomposition invert it. Every original coefficient and dense public matrix coordinate is retained. Non-Clone closed scalar tokens and the complete-bank view record actual transform origin, conditional on correct ciphertext/key equations; no frame/vector/shape constructor, authentication, imported-noise proof or generic division authority exists. The complete view collects the same coefficient cursor and moves owners into natural order. The consuming one-bank accumulator checks every expected ordinal/context/shape, applies the shared forward map and monomial/add primitives, and returns no incomplete result. Its concrete rns_bgv.upper_digits successor preserves coordinate order while replacing scalar values and effective precision. Decomposition/recomposition preflight exact shapes and complete key union. Scoped complete-view residue payload includes consumed input and all retained banks; private streaming retention instead composes the bounded frontier and one current stage without changing logical d or work; matrix, layout, row and monomial ceilings are separate. Backend scratch, public shape metadata, keys and allocator overhead remain excluded. The transform directions themselves retain level and grow noise; they provide no bootstrap, activation or qualification.",
+   "path": "crates/iroha_fhe/src/bgv/coefficient_slots.rs",
+   "symbols": []
+  },
+  {
+   "id": "rns_bgv.upper_digits",
+   "scheme": "rns_bgv",
+   "component": "Immutable public encrypted upper-digit schedule with genuine scalar-bank origin and private matched precision reductions",
+   "tasks": ["C.3", "C.8", "R.9"],
+   "executes": ["evaluation"],
+   "note": "The existing UpperDigitsProgram is counted without allocation, then lowered to alias-aware SSA with balanced public width16 lifting-polynomial blocks. One public modulus level per multiplicative depth switches every live ciphertext through canonical BGV methods; source aliases are retained without deep ciphertext clones. A crate-private shape-only preparation factor lets the local bootstrap preadmit its complete pipeline; it creates no scalar owner. Only the actual closed coefficient token runs the immutable per-bank executor; the complete CoefficientSlotBanks view delegates that same transition. Private retention mode changes only completed-container metadata and residue aggregation, while keeping full logical bank count, every exact shape transfer and every bank's arithmetic. The payload exposes the canonical single-bank tensor/switch peak for outer lifetime composition. Exact compiler-matched tableau subtraction edges uniquely own private in-place inverse-p residue scaling and effective precision reduction with floor(V/p); no arbitrary ciphertext/vector/frame/shape cast, public divide, or noise reset exists. Explicit preflight covers requested metadata and conservative bound capacities, complete bank-set and tensor/switch result residues, scalar plaintext, separate canonical RNS scratch, and scoped CostModel/word operations. Incoming metadata, allocator overhead/over-allocation, fixed stack conversion data, profile/keys and RSS remain excluded. Every-node integer phase tests cover genuine p5 E2/E3 constructor chains, including retained2 digits, exact quotients and clearing under refusal/unwind. This conditional arithmetic remains separate from rns_bgv.local_bootstrap, which now supplies a closed honest same-master encrypted-secret construction. Neither owner supplies external authentication, malicious well-formedness proof, circuit privacy, original proof-resource authority, application activation or parameter/security qualification. Immutable public MultiplyPlain nodes delegate to the sole shared public scalar operation without an NTT or plaintext allocation; matched divisions, all DAG nodes/levels and exact phase bounds are unchanged. Preadmission and replay count scalar products consistently; scalar additions retain plaintext storage.",
+   "path": "crates/iroha_fhe/src/bgv/upper_digits.rs",
+   "symbols": []
+  },
+  {
+   "id": "rns_bgv.local_bootstrap",
+   "scheme": "rns_bgv",
+   "component": "Closed same-master local bootstrap from generated matching key and ciphertext construction origins",
+   "tasks": ["C.3", "C.8", "R.9", "R.11"],
+   "executes": ["key_generation", "encryption", "evaluation"],
+   "note": "Setup uses existing honest KeySet generation and canonical encryption of the same secret polynomial at master p^E, then returns SecretKey custody separately; runtime key contains no SecretKey. A move-only ciphertext wrapper borrows its exact immutable key owner and permits local encryption, trivial construction, ciphertext/plaintext sums, plaintext multiplication, canonical level lowering, multiplication/square, packed linear routing and complete refresh, with pointer-origin checks and no frame/vector/raw-ciphertext import or remint. BootstrapPlan checks strict dense-secret carry 2*a*V+(N+1)*Q<a*Q, a=p^(E-r), and every ordinary transfer before private input work. Runtime scales original canonical components, uses exact centered RNS conversion modulo master T, evaluates w1*Enc(s)+w0, and consumes every coefficient leaf through the same immutable upper-digit and inverse/monomial owners, retaining only pending DFS siblings, the current stage and one output accumulator; no secret decryption or measured-noise relabel occurs. Combined stream residue and newly introduced metadata ceilings explicitly cover these lifetimes. Checked aggregate canonical-arithmetic and scalar-word budgets add input, both full transforms and all logical banks exactly once, after separately bounded public preparation and before private source execution. No complete bank array is retained by refresh and no alternate arithmetic evaluator is added. Scope-specific setup/preparation/input and nested arithmetic budgets remain explicit and exclude identified backend/public metadata/allocator/RSS costs. This local construction can preserve fresh messages without decreasing their public bound; repeated square-refresh gain is checked separately. It establishes no external key/input authentication, malicious well-formedness proof, circuit privacy, original proof-resource authority, selected production parameters or application activation. The consuming route wrapper checks every input local origin, admits all input plus planned output and canonical ciphertext-scratch residues, and delegates exact layout/shape/key checks to the sole SlotLinearMap evaluator; the exact original input owners and actual canonical output owners return together by moves with unchanged input allocations. No raw-ciphertext remint or additional arithmetic kernel is introduced. Validation-only preflight checks exact source shape/origin and requested complete Galois/relinearization union before caller private reads. Trivial construction hides no plaintext. Local construction origin does not establish packed scalar membership or external authentication.",
+   "path": "crates/iroha_fhe/src/bgv/bootstrap.rs",
+   "symbols": []
+  },
+  {
+   "id": "ram_lfe.bgv_input_construction",
+   "scheme": "ram_lfe",
+   "component": "Canonical admitted byte encoding, local encryption and explicit source-level switching into one closed packed-input owner",
+   "tasks": ["R.3", "R.7"],
+   "executes": ["encryption"],
+   "note": "The sole constructor takes admitted RamLfeReferenceInputV1 and an explicit public source level. Same-master effective F257/128-slot and complete fresh-to-source shape checks precede private reads; one clearing owner zero-extends64 slots to128, then canonical SlotEncoding, actual local encryption and consuming modulus switching create the move-only key-borrowing packed owner. No raw/local cast, mutable access, bound relabeling, compatibility constructor or new arithmetic primitive exists. The current bounded consumer requires its planned fresh top-level source; a lower-level packed owner does not change that schedule. Local construction does not establish a complete authenticated wire envelope, imported key/input proof, circuit privacy, parameter qualification or committed execution proof.",
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_input.rs",
+   "symbols": []
+  },
+  {
+   "id": "rns_bgv.plan_metadata",
+   "scheme": "rns_bgv",
+   "component": "Typed public prepared-plan metadata requirements and observed retained capacities",
+   "tasks": ["C.3", "C.8", "R.7"],
+   "executes": [],
+   "note": "Allocation-free checked requested-capacity bounds and visible retained Vec/Natural capacity observations complement existing matrix/layout/upper-DAG budgets. This is local resource accounting, not ciphertext arithmetic, allocator/RSS coverage, consensus policy, parameter selection or runtime activation. Callers still enforce aggregate preadmission and observation before private work.",
+   "path": "crates/iroha_fhe/src/bgv/metadata.rs",
+   "symbols": []
   }
  ],
  "test_only_references": [
@@ -3772,8 +3925,13 @@
    "id": "mkhe.rns_native_relation_reference",
    "scheme": "bgv_mkhe",
    "kind": "protocol_reference",
-   "note": "RNS-native relations, qPCS stages, transcript, section codec, public polynomial reader and the global lookup statement. Test-only.",
-   "symbols": []
+   "note": "RNS-native relations, qPCS stages, transcript, section codec, public polynomial reader and the global lookup statement. Test-only. The native40 coefficient adapter checks ordinary low/high convolution and constructs clearing masked product/quotient owners using canonical shared arithmetic; original source/S integration and production activation remain absent.",
+   "symbols": [
+    {"symbol": "construct_native_relation_polynomials_v1", "test_only": true},
+    {"symbol": "construct_with_geometry_v1", "test_only": true},
+    {"symbol": "admission_v1", "test_only": true}
+   ],
+   "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_relation_polynomials.rs"
   },
   {
    "id": "mkhe.phase23_and_terminal_reference",
@@ -3800,7 +3958,7 @@
    "id": "mkhe.reference_support",
    "scheme": "bgv_mkhe",
    "kind": "protocol_reference",
-   "note": "Zeroizing byte and scalar owners, lifecycle store, digests and size helpers of the mkhe.rs reference code. Test-only.",
+   "note": "Zeroizing byte and scalar owners, lifecycle store, digests and size helpers of the mkhe.rs reference code. Test-only. Includes private resource-ledger usage, limit and sibling-reservation helpers used only by tests.",
    "symbols": []
   },
   {
@@ -4082,6 +4240,42 @@
    "kind": "fixture",
    "summary": "Fixture-cfg variable-time reference module: checked owned-buffer payload ceiling, explicit mask/error bounds, borrowed original statement equality and exact fresh ciphertext equation/metadata comparison through existing arithmetic. Not a client/key proof, honest-generation certificate, sanitizer or whole-process resource certificate.",
    "path": "crates/iroha_fhe/src/bgv/encryption_witness.rs",
+   "symbols": []
+  },
+  {
+   "id": "ram_lfe.bgv_affine_tests",
+   "scheme": "ram_lfe",
+   "kind": "protocol_reference",
+   "summary": "Encrypted affine normal-form results against canonical cleartext execution, fixed schedule/noise shape, incompatible input/profile/key refusals, maximum tape and clearing controls. No proof, circuit privacy or backend activation is established. The same affine test component includes bgv_affine_maximum_tests.rs, reached only by the external cfg(test) maximum_tests module: an explicit ignored N16384/q6 two-tape maximum-shape check, independent centered BigInt CRT and physical-noise bound assertions. This records test coverage, not a passed resource measurement or qualification.",
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_affine_tests.rs",
+   "whole_file": true,
+   "symbols": []
+  },
+  {
+   "id": "rns_bgv.threshold_opening_tests",
+   "scheme": "rns_bgv",
+   "kind": "protocol_reference",
+   "summary": "Every threshold/subset/superset and ciphertext level, relinearized multiplication, independent scalar convolution and centered CRT versus direct decryption, unchanged owning refusals and exact selected participation. Clearing success/error/unwind is additionally covered by the existing clearing_probe owner; no distributed opening proof is established.",
+   "path": "crates/iroha_fhe/tests/bgv_threshold_opening.rs",
+   "whole_file": true,
+   "symbols": []
+  },
+  {
+   "id": "ram_lfe.bgv_bounded_tests",
+   "scheme": "ram_lfe",
+   "kind": "protocol_reference",
+   "summary": "Public schedule/noise/counter/payload admission, exact and one-under aggregate preparation/work controls, consumed packed-input and same-origin refusals, private-preparation and pending-source/partial-output error/unwind clearing. All previous real packing/product/full-layer/full16 semantic assertions remain through the sole closed evaluator. Fixed physical-refresh fixtures retain actual all-bank work and exact shape deduplication; logical Refresh-class semantics, source presence and component passes do not imply qualification.",
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_tests.rs",
+   "whole_file": true,
+   "symbols": []
+  },
+  {
+   "id": "ram_lfe.bgv_bounded_refresh_tests",
+   "scheme": "ram_lfe",
+   "kind": "protocol_reference",
+   "summary": "Independent legal four-register maximum bounded tape with distinct ordered outputs, exact fixed physical-refresh/work counts and all-coefficient Vandermonde/negacyclic convolution/centered-CRT checks. The full encrypted fixture is explicitly ignored; source presence alone is not execution or qualification.",
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_refresh_tests.rs",
+   "whole_file": true,
    "symbols": []
   }
  ],
@@ -5539,6 +5733,120 @@
    "test_gated": {"ram_lfe.inline_unit_tests": ["mod tests"]}
   },
   {
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_affine.rs",
+   "production": {
+    "ram_lfe.bgv_affine_evaluation": [
+     "RamLfeBgvAffinePlanV1::check_inputs",
+     "RamLfeBgvAffinePlanV1::galois_applications",
+     "RamLfeBgvAffinePlanV1::galois_elements",
+     "RamLfeBgvAffinePlanV1::new",
+     "RamLfeBgvAffinePlanV1::output_shape",
+     "RamLfeBgvAffineProgramV1::evaluate",
+     "RamLfeBgvAffineProgramV1::fmt",
+     "RamLfeBgvAffineProgramV1::from_normal_form"
+    ]
+   },
+   "test_gated": {}
+  },
+  {
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded.rs",
+   "production": {
+    "ram_lfe.bgv_bounded_evaluation": [
+     "RamLfeBgvBoundedPlanV1::canonical_arithmetic_units",
+     "RamLfeBgvBoundedPlanV1::check_inputs",
+     "RamLfeBgvBoundedPlanV1::check_retained_metadata",
+     "RamLfeBgvBoundedPlanV1::galois_elements",
+     "RamLfeBgvBoundedPlanV1::layout_metadata_bytes",
+     "RamLfeBgvBoundedPlanV1::matrix_payload_bytes",
+     "RamLfeBgvBoundedPlanV1::new",
+     "RamLfeBgvBoundedPlanV1::operations",
+     "RamLfeBgvBoundedPlanV1::output_shape",
+     "RamLfeBgvBoundedPlanV1::owned_residue_bytes",
+     "RamLfeBgvBoundedPlanV1::preparation_requirement",
+     "RamLfeBgvBoundedPlanV1::prepared_refresh_plans",
+     "RamLfeBgvBoundedPlanV1::scalar_word_operations",
+     "RamLfeBgvBoundedProgramV1::evaluate",
+     "RamLfeBgvBoundedProgramV1::fmt",
+     "RamLfeBgvBoundedProgramV1::from_normal_form",
+     "checked_add",
+     "execute_layer",
+     "finish_layer",
+     "initialize_state",
+     "lower",
+     "lower_banks",
+     "refresh_banks",
+     "scaled_residues"
+    ]
+   },
+   "test_gated": {}
+  },
+  {
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_compiler.rs",
+   "production": {
+    "ram_lfe.bgv_bounded_compilation": [
+     "RamLfeBgvBoundedCompilerV1::build_layout",
+     "RamLfeBgvBoundedCompilerV1::check_plan",
+     "RamLfeBgvBoundedCompilerV1::column_slot",
+     "RamLfeBgvBoundedCompilerV1::emit_form",
+     "RamLfeBgvBoundedCompilerV1::emit_layer_row",
+     "RamLfeBgvBoundedCompilerV1::emit_projection_row",
+     "RamLfeBgvBoundedCompilerV1::fill_layer_row",
+     "RamLfeBgvBoundedCompilerV1::fill_projection_row",
+     "RamLfeBgvBoundedCompilerV1::fmt",
+     "RamLfeBgvBoundedCompilerV1::form_depth",
+     "RamLfeBgvBoundedCompilerV1::from_normal_form",
+     "RamLfeBgvBoundedCompilerV1::layer_layout",
+     "RamLfeBgvBoundedCompilerV1::layer_layout_metadata_bytes",
+     "RamLfeBgvBoundedCompilerV1::layer_payload_bytes",
+     "RamLfeBgvBoundedCompilerV1::operand",
+     "RamLfeBgvBoundedCompilerV1::preparation_scratch_bytes",
+     "RamLfeBgvBoundedCompilerV1::prepare_layer",
+     "RamLfeBgvBoundedCompilerV1::prepare_projection",
+     "RamLfeBgvBoundedCompilerV1::private_payload_bytes",
+     "RamLfeBgvBoundedCompilerV1::projection_layout",
+     "RamLfeBgvBoundedCompilerV1::projection_layout_metadata_bytes",
+     "RamLfeBgvBoundedCompilerV1::projection_payload_bytes",
+     "RamLfeBgvBoundedCompilerV1::row_support"
+    ]
+   },
+   "test_gated": {}
+  },
+  {
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_refresh.rs",
+   "production": {
+    "ram_lfe.bgv_bounded_evaluation": [
+     "RefreshPlans::group",
+     "RefreshPlans::new",
+     "Work::add",
+     "Work::admit",
+     "Work::ciphertext_adds",
+     "Work::lower",
+     "Work::route",
+     "add",
+     "limit",
+     "mul",
+     "preparation_requirement",
+     "sum",
+     "validate_refresh",
+     "word"
+    ]
+   },
+   "test_gated": {}
+  },
+  {
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_input.rs",
+   "production": {
+    "ram_lfe.bgv_input_construction": [
+     "RamLfeBgvPackedInputV1::ciphertext",
+     "RamLfeBgvPackedInputV1::encrypt",
+     "RamLfeBgvPackedInputV1::fmt",
+     "RamLfeBgvPackedInputV1::into_local",
+     "RamLfeBgvPackedInputV1::shape"
+    ]
+   },
+   "test_gated": {"ram_lfe.inline_unit_tests": ["mod tests"]}
+  },
+  {
    "path": "crates/iroha_crypto/src/ram_lfe/canonical.rs",
    "production": {
     "ram_lfe.canonical_v1_commitments": [
@@ -5621,6 +5929,7 @@
      "ClearingArray::drop",
      "ClearingArray::eq",
      "ClearingArray::is_zero",
+     "ClearingArray::try_zeroed",
      "ClearingArray::zeroed"
     ]
    },
@@ -5860,6 +6169,53 @@
   {"path": "crates/iroha_fhe/src/accel/neon.rs", "production": {}, "test_gated": {}},
   {"path": "crates/iroha_fhe/src/automorphism.rs", "production": {}, "test_gated": {"shared.unit_tests": ["mod tests"]}},
   {
+   "path": "crates/iroha_fhe/src/bgv/bootstrap.rs",
+   "production": {
+    "rns_bgv.local_bootstrap": [
+     "BootstrapPlan::fmt",
+     "BootstrapPlan::galois_elements",
+     "BootstrapPlan::homomorphic_input_shape",
+     "BootstrapPlan::input_shape",
+     "BootstrapPlan::metadata_requirement",
+     "BootstrapPlan::new",
+     "BootstrapPlan::output_shape",
+     "BootstrapPlan::payload",
+     "BootstrapPlan::reduces_phase_bound",
+     "BootstrapPlan::retained_metadata",
+     "LocalBootstrapCiphertext::ciphertext",
+     "LocalBootstrapCiphertext::fmt",
+     "LocalBootstrapCiphertext::into_ciphertext",
+     "LocalBootstrapCiphertext::shape",
+     "LocalBootstrapKey::add",
+     "LocalBootstrapKey::add_plain",
+     "LocalBootstrapKey::check_source",
+     "LocalBootstrapKey::encrypt",
+     "LocalBootstrapKey::encrypt_with",
+     "LocalBootstrapKey::fmt",
+     "LocalBootstrapKey::generate",
+     "LocalBootstrapKey::generate_with",
+     "LocalBootstrapKey::mul_plain",
+     "LocalBootstrapKey::multiply",
+     "LocalBootstrapKey::preflight_evaluation",
+     "LocalBootstrapKey::profile_identity",
+     "LocalBootstrapKey::refresh",
+     "LocalBootstrapKey::route",
+     "LocalBootstrapKey::square",
+     "LocalBootstrapKey::switch_to",
+     "LocalBootstrapKey::trivial",
+     "add",
+     "aggregate_work",
+     "limit",
+     "mul",
+     "reserve",
+     "stream_residue_bytes",
+     "word",
+     "zeros"
+    ]
+   },
+   "test_gated": {"rns_bgv.unit_tests": ["mod tests"]}
+  },
+  {
    "path": "crates/iroha_fhe/src/bgv/cipher.rs",
    "production": {
     "rns_bgv.encryption_and_encoding": [
@@ -5871,8 +6227,10 @@
      "Ciphertext::from_bytes",
      "Ciphertext::from_canonical_words",
      "Ciphertext::from_shape",
+     "Ciphertext::into_components",
      "Ciphertext::level",
      "Ciphertext::noise_bound",
+     "Ciphertext::plaintext_precision",
      "Ciphertext::profile_identity",
      "Ciphertext::to_bytes",
      "Ciphertext::trivial",
@@ -5886,6 +6244,7 @@
      "Plaintext::eq",
      "Plaintext::fmt",
      "Plaintext::new",
+     "Plaintext::plaintext_precision",
      "Plaintext::profile_identity",
      "Plaintext::with_public_bound",
      "Plaintext::worst_case_bound",
@@ -5894,10 +6253,62 @@
      "PublicKey::encrypt_with",
      "SecretKey::decrypt",
      "SecretKey::inner_product",
-     "centered_magnitude"
+     "centered_magnitude",
+     "decode_inner_product",
+     "frame_reserve",
+     "pack_limb",
+     "packed_limb_bytes",
+     "residue_width",
+     "unpack_limb"
     ]
    },
    "test_gated": {"rns_bgv.unit_tests": ["mod tests"]}
+  },
+  {
+   "path": "crates/iroha_fhe/src/bgv/coefficient_slots.rs",
+   "production": {
+    "rns_bgv.coefficient_slots": [
+     "CoefficientSlotAccumulator::finish",
+     "CoefficientSlotAccumulator::push",
+     "CoefficientSlotBanks::banks",
+     "CoefficientSlotBanks::fmt",
+     "CoefficientSlotBanks::shape",
+     "CoefficientSlotBanks::slots",
+     "CoefficientSlotCursor::advance",
+     "CoefficientSlotDecomposition::banks",
+     "CoefficientSlotDecomposition::evaluate",
+     "CoefficientSlotDecomposition::galois_elements",
+     "CoefficientSlotDecomposition::metadata_heap",
+     "CoefficientSlotDecomposition::new",
+     "CoefficientSlotDecomposition::operations",
+     "CoefficientSlotDecomposition::output_shape",
+     "CoefficientSlotDecomposition::payload",
+     "CoefficientSlotDecomposition::prepare",
+     "CoefficientSlotDecomposition::slots",
+     "CoefficientSlotDecomposition::start",
+     "CoefficientSlotRecomposition::evaluate",
+     "CoefficientSlotRecomposition::galois_elements",
+     "CoefficientSlotRecomposition::metadata_heap",
+     "CoefficientSlotRecomposition::new",
+     "CoefficientSlotRecomposition::operations",
+     "CoefficientSlotRecomposition::output_shape",
+     "CoefficientSlotRecomposition::payload",
+     "CoefficientSlotRecomposition::prepare",
+     "CoefficientSlotRecomposition::start_accumulator",
+     "Matrix::move_banks",
+     "Matrix::move_one",
+     "Matrix::prepare",
+     "check_keys",
+     "checked_mul",
+     "key_union",
+     "operations",
+     "payload",
+     "stream_metadata_bytes",
+     "trace_budget"
+    ],
+    "rns_bgv.upper_digits": ["CoefficientSlotBank::upper", "CoefficientSlotBanks::evaluate_upper_digits"]
+   },
+   "test_gated": {"rns_bgv.unit_tests": ["CoefficientSlotBank::banks", "CoefficientSlotBank::ordinal", "CoefficientSlotBank::value", "mod tests"]}
   },
   {
    "path": "crates/iroha_fhe/src/bgv/coins.rs",
@@ -5941,6 +6352,7 @@
      "CostModel::new",
      "CostModel::plaintext_multiplication_units",
      "CostModel::public_key_bytes",
+     "CostModel::scalar_multiplication_units",
      "CostModel::scale_down_units",
      "CostModel::secret_key_bytes",
      "CostModel::special",
@@ -5965,9 +6377,14 @@
      "SlotEncoding::is_fully_split",
      "SlotEncoding::mask_bound",
      "SlotEncoding::new",
+     "SlotEncoding::plaintext_precision",
      "SlotEncoding::prefix_mask",
+     "SlotEncoding::public_prefix_coefficients",
+     "SlotEncoding::public_prefix_mask",
+     "SlotEncoding::public_prefix_mask_bound",
      "SlotEncoding::root",
      "SlotEncoding::select_and_broadcast",
+     "SlotEncoding::slot_count",
      "SlotEncoding::slot_mask",
      "SlotEncoding::slot_source",
      "SlotEncoding::slots",
@@ -5995,6 +6412,7 @@
      "BgvProfile::combine_plain",
      "BgvProfile::key_switch",
      "BgvProfile::mul_plain",
+     "BgvProfile::mul_public_scalar",
      "BgvProfile::multiply",
      "BgvProfile::negate",
      "BgvProfile::relinearize",
@@ -6078,6 +6496,27 @@
    "test_gated": {"rns_bgv.unit_tests": ["mod tests"]}
   },
   {
+   "path": "crates/iroha_fhe/src/bgv/metadata.rs",
+   "production": {
+    "rns_bgv.plan_metadata": [
+     "PlanMetadataRequirement::peak_bytes",
+     "PlanMetadataRequirement::repeated",
+     "PlanMetadataRequirement::retained_bytes",
+     "add",
+     "encoding_scratch",
+     "geometry",
+     "mul",
+     "shape_heap",
+     "shape_heap_bound",
+     "shape_value_bound",
+     "sum",
+     "transfer_scratch",
+     "words"
+    ]
+   },
+   "test_gated": {"rns_bgv.unit_tests": ["mod tests"]}
+  },
+  {
    "path": "crates/iroha_fhe/src/bgv/mod.rs",
    "production": {"rns_bgv.errors": ["BgvError::from", "BgvError::from", "BgvError::from"]},
    "test_gated": {"rns_bgv.unit_tests": ["mod tests"]}
@@ -6114,6 +6553,7 @@
      "BgvProfile::plan_key_switch",
      "BgvProfile::plan_lower_multiplication",
      "BgvProfile::plan_mul_plain",
+     "BgvProfile::plan_mul_public_scalar",
      "BgvProfile::plan_multiply",
      "BgvProfile::plan_relinearize",
      "BgvProfile::plan_switch_down",
@@ -6123,9 +6563,14 @@
      "Ciphertext::shape",
      "CiphertextShape::bound",
      "CiphertextShape::bound_bits",
+     "CiphertextShape::check_profile",
      "CiphertextShape::components",
      "CiphertextShape::into_bound",
-     "CiphertextShape::level"
+     "CiphertextShape::level",
+     "CiphertextShape::metadata_requirement",
+     "CiphertextShape::plaintext_precision",
+     "CiphertextShape::retained_metadata",
+     "PublicScalar::new"
     ]
    },
    "test_gated": {"rns_bgv.unit_tests": ["mod tests"]}
@@ -6145,6 +6590,7 @@
      "RnsPoly::limb",
      "RnsPoly::limb_mut",
      "RnsPoly::limbs",
+     "RnsPoly::mul_scalar_assign",
      "RnsPoly::negate",
      "RnsPoly::pointwise_mul_assign",
      "RnsPoly::prefix",
@@ -6156,7 +6602,7 @@
      "words_from_le_bytes"
     ]
    },
-   "test_gated": {"rns_bgv.unit_tests": ["mod tests"]}
+   "test_gated": {"rns_bgv.unit_tests": ["mod clearing_observer", "mod tests"]}
   },
   {
    "path": "crates/iroha_fhe/src/bgv/profile.rs",
@@ -6167,6 +6613,7 @@
      "BgvParameters::all_primes",
      "BgvParameters::all_roots",
      "BgvParameters::canonical_bytes",
+     "BgvParameters::checked_plaintext",
      "BgvParameters::degree",
      "BgvParameters::derive",
      "BgvParameters::from_canonical_bytes",
@@ -6189,18 +6636,153 @@
      "BgvProfile::level",
      "BgvProfile::level_modulus",
      "BgvProfile::main_plan",
+     "BgvProfile::master_plaintext",
+     "BgvProfile::master_plaintext_modulus",
      "BgvProfile::new",
      "BgvProfile::noise_bound_words",
      "BgvProfile::parameters",
-     "BgvProfile::plaintext_fixed",
-     "BgvProfile::plaintext_modulus",
+     "BgvProfile::plaintext_precision",
+     "BgvProfile::plaintext_precision_bytes",
      "BgvProfile::special_count",
      "BgvProfile::special_modulus",
      "BgvProfile::special_plan",
      "BgvProfile::special_product_mod_main",
      "BgvProfile::top_level",
+     "PlaintextPrecision::check_profile",
+     "PlaintextPrecision::check_same",
+     "PlaintextPrecision::exponent",
+     "PlaintextPrecision::fixed",
+     "PlaintextPrecision::modulus",
+     "PlaintextPrecision::prime",
+     "PlaintextPrecision::profile_identity",
      "first_primes",
      "plan_defect"
+    ]
+   },
+   "test_gated": {"rns_bgv.unit_tests": ["mod tests"]}
+  },
+  {
+   "path": "crates/iroha_fhe/src/bgv/relative_trace.rs",
+   "production": {
+    "rns_bgv.relative_trace": [
+     "CoefficientTraceCursor::advance",
+     "CoefficientTracePlan::banks",
+     "CoefficientTracePlan::galois_elements",
+     "CoefficientTracePlan::metadata_heap",
+     "CoefficientTracePlan::new",
+     "CoefficientTracePlan::operations",
+     "CoefficientTracePlan::output_shape",
+     "CoefficientTracePlan::slots",
+     "CoefficientTracePlan::start",
+     "Geometry::check_profile",
+     "Geometry::new",
+     "Geometry::payload",
+     "Normalization::scale",
+     "ParityCursor::advance",
+     "ParityDecompositionPlan::banks",
+     "ParityDecompositionPlan::evaluate",
+     "ParityDecompositionPlan::galois_elements",
+     "ParityDecompositionPlan::new",
+     "ParityDecompositionPlan::operations",
+     "ParityDecompositionPlan::output_shape",
+     "ParityDecompositionPlan::payload",
+     "ParityDecompositionPlan::preflight",
+     "ParityDecompositionPlan::slots",
+     "ParityDecompositionPlan::start",
+     "RelativeTraceDecompositionPlan::banks",
+     "RelativeTraceDecompositionPlan::evaluate",
+     "RelativeTraceDecompositionPlan::galois_elements",
+     "RelativeTraceDecompositionPlan::new",
+     "RelativeTraceDecompositionPlan::operations",
+     "RelativeTraceDecompositionPlan::output_shape",
+     "RelativeTraceDecompositionPlan::payload",
+     "RelativeTraceDecompositionPlan::slots",
+     "RelativeTraceRecompositionPlan::evaluate",
+     "RelativeTraceRecompositionPlan::metadata_heap",
+     "RelativeTraceRecompositionPlan::new",
+     "RelativeTraceRecompositionPlan::operations",
+     "RelativeTraceRecompositionPlan::output_shape",
+     "RelativeTraceRecompositionPlan::payload",
+     "UnnormalizedCoefficientBank::into_value",
+     "accumulate",
+     "checked_mul",
+     "cursor_metadata_bytes",
+     "monomial",
+     "monomial_product",
+     "natural_order",
+     "operations"
+    ]
+   },
+   "test_gated": {
+    "rns_bgv.unit_tests": ["CoefficientTracePlan::evaluate", "UnnormalizedCoefficientBanks::fmt", "UnnormalizedCoefficientBanks::into_values", "mod tests"]
+   }
+  },
+  {
+   "path": "crates/iroha_fhe/src/bgv/routing.rs",
+   "production": {
+    "rns_bgv.slot_encoding": [
+     "NttCiphertext::add_assign",
+     "NttCiphertext::from_ciphertext",
+     "NttCiphertext::into_ciphertext",
+     "NttCiphertext::multiply_plain",
+     "PreparationRow::drop",
+     "SlotLinearMap::coefficient",
+     "SlotLinearMap::drop",
+     "SlotLinearMap::evaluate",
+     "SlotLinearMap::fmt",
+     "SlotLinearMap::fold_giants",
+     "SlotLinearMap::new",
+     "SlotLinearMap::prepare_rows",
+     "SlotLinearPlan::arithmetic_units",
+     "SlotLinearPlan::baby_count",
+     "SlotLinearPlan::check_inputs",
+     "SlotLinearPlan::coefficient_bytes",
+     "SlotLinearPlan::coefficient_count",
+     "SlotLinearPlan::galois_applications",
+     "SlotLinearPlan::galois_elements",
+     "SlotLinearPlan::giant_count",
+     "SlotLinearPlan::layout",
+     "SlotLinearPlan::layout_metadata_bytes",
+     "SlotLinearPlan::metadata_requirement",
+     "SlotLinearPlan::new",
+     "SlotLinearPlan::output_residue_bytes",
+     "SlotLinearPlan::output_shapes",
+     "SlotLinearPlan::plaintext_modulus",
+     "SlotLinearPlan::plaintext_products",
+     "SlotLinearPlan::preparation_scratch_bytes",
+     "SlotLinearPlan::retained_metadata",
+     "SlotLinearPlan::scratch_residue_bytes",
+     "SlotLinearPlan::slots",
+     "SlotLinearPlan::with_layout",
+     "group_element",
+     "plan_fold",
+     "plan_split"
+    ]
+   },
+   "test_gated": {"rns_bgv.unit_tests": ["mod tests"]}
+  },
+  {
+   "path": "crates/iroha_fhe/src/bgv/routing/layout.rs",
+   "production": {
+    "rns_bgv.slot_encoding": [
+     "SlotLinearLayout::activity_words",
+     "SlotLinearLayout::coefficient_count",
+     "SlotLinearLayout::coefficient_index",
+     "SlotLinearLayout::columns",
+     "SlotLinearLayout::dense",
+     "SlotLinearLayout::diagonal_active",
+     "SlotLinearLayout::eq",
+     "SlotLinearLayout::geometry",
+     "SlotLinearLayout::metadata_bytes",
+     "SlotLinearLayout::metadata_bytes_for",
+     "SlotLinearLayout::new",
+     "SlotLinearLayout::row_segments",
+     "SlotLinearLayout::rows",
+     "SlotLinearLayout::slots",
+     "SlotLinearSegment::count",
+     "SlotLinearSegment::new",
+     "SlotLinearSegment::start",
+     "SlotLinearSegment::stride"
     ]
    },
    "test_gated": {"rns_bgv.unit_tests": ["mod tests"]}
@@ -6253,13 +6835,144 @@
     "rns_bgv.unit_tests": ["mod tests"]
    }
   },
+  {
+   "path": "crates/iroha_fhe/src/bgv/threshold/opening.rs",
+   "production": {
+    "rns_bgv.local_threshold_opening": [
+     "ThresholdOpeningError::fmt",
+     "ThresholdOpeningError::into_parts",
+     "ThresholdOpeningError::reason",
+     "ThresholdOpeningError::source",
+     "ThresholdSelection::open_local",
+     "ThresholdSelection::open_validated",
+     "ThresholdSelection::required_opening_secret_bytes",
+     "ThresholdSelection::validate_opening",
+     "check_shape"
+    ]
+   },
+   "test_gated": {"rns_bgv.unit_tests": ["mod tests"]}
+  },
+  {
+   "path": "crates/iroha_fhe/src/bgv/upper_digits.rs",
+   "production": {
+    "rns_bgv.upper_digits": [
+     "EncryptedUpperDigitsPlan::banks",
+     "EncryptedUpperDigitsPlan::divide_matched_difference",
+     "EncryptedUpperDigitsPlan::evaluate",
+     "EncryptedUpperDigitsPlan::execute_bank",
+     "EncryptedUpperDigitsPlan::fmt",
+     "EncryptedUpperDigitsPlan::from_shape",
+     "EncryptedUpperDigitsPlan::input_shape",
+     "EncryptedUpperDigitsPlan::new",
+     "EncryptedUpperDigitsPlan::operations",
+     "EncryptedUpperDigitsPlan::outer_metadata_heap",
+     "EncryptedUpperDigitsPlan::output_shape",
+     "EncryptedUpperDigitsPlan::payload",
+     "EncryptedUpperDigitsPlan::preflight",
+     "EncryptedUpperDigitsPlan::preflight_bank",
+     "EncryptedUpperDigitsPlan::scalar_plaintext",
+     "EncryptedUpperDigitsPlan::slots",
+     "product",
+     "reserve",
+     "same_shape",
+     "sum",
+     "word"
+    ]
+   },
+   "test_gated": {"rns_bgv.unit_tests": ["mod tests"]}
+  },
+  {
+   "path": "crates/iroha_fhe/src/bgv/upper_digits/compiler.rs",
+   "production": {
+    "rns_bgv.upper_digits": [
+     "Compiler::add",
+     "Compiler::block",
+     "Compiler::blocks",
+     "Compiler::constant",
+     "Compiler::emit",
+     "Compiler::lift",
+     "Compiler::modulus",
+     "Compiler::multiply",
+     "Compiler::power",
+     "Count::emit",
+     "Count::new",
+     "Count::step",
+     "Count::visit_coefficient",
+     "Operation::arguments",
+     "Sink::emit",
+     "Sink::visit_coefficient",
+     "Store::emit",
+     "Store::visit_coefficient",
+     "Value::depth",
+     "Value::id",
+     "Value::is_zero",
+     "Value::precision",
+     "compile"
+    ]
+   },
+   "test_gated": {}
+  },
+  {
+   "path": "crates/iroha_fhe/src/bgv/upper_digits/planning.rs",
+   "production": {"rns_bgv.upper_digits": ["add", "ceiling", "live_bytes", "mul", "polynomial_bytes", "preallocation", "replay"]},
+   "test_gated": {}
+  },
   {"path": "crates/iroha_fhe/src/constant_time.rs", "production": {}, "test_gated": {"shared.unit_tests": ["mod tests"]}},
   {"path": "crates/iroha_fhe/src/key_switch.rs", "production": {}, "test_gated": {"shared.unit_tests": ["mod tests"]}},
   {"path": "crates/iroha_fhe/src/modular.rs", "production": {}, "test_gated": {"shared.unit_tests": ["mod tests"]}},
-  {"path": "crates/iroha_fhe/src/natural.rs", "production": {}, "test_gated": {"shared.unit_tests": ["mod tests"]}},
+  {
+   "path": "crates/iroha_fhe/src/natural.rs",
+   "production": {"rns_bgv.plan_metadata": ["Natural::allocated_words"]},
+   "test_gated": {"shared.unit_tests": ["mod tests"]}
+  },
   {"path": "crates/iroha_fhe/src/ntt.rs", "production": {}, "test_gated": {"shared.unit_tests": ["mod tests"]}},
   {"path": "crates/iroha_fhe/src/ntt_plan.rs", "production": {}, "test_gated": {"shared.unit_tests": ["mod tests"]}},
   {"path": "crates/iroha_fhe/src/polynomial.rs", "production": {}, "test_gated": {"shared.unit_tests": ["mod tests"]}},
+  {
+   "path": "crates/iroha_fhe/src/prime_power.rs",
+   "production": {
+    "shared.prime_power_preparation": [
+     "Coefficients::drop",
+     "Coefficients::zeroed",
+     "LiftingPolynomial::coefficients",
+     "LiftingPolynomial::context",
+     "LiftingPolynomial::fmt",
+     "LiftingPolynomial::prepare",
+     "LiftingPolynomialPlan::context",
+     "LiftingPolynomialPlan::geometry",
+     "LiftingPolynomialPlan::new",
+     "LiftingPolynomialPlan::required",
+     "PreparationArithmetic::add",
+     "PreparationArithmetic::at_public_node",
+     "PreparationArithmetic::mul",
+     "PreparationArithmetic::power",
+     "PreparationArithmetic::sub",
+     "PrimePowerContext::at_precision",
+     "PrimePowerContext::modulus",
+     "PrimePowerContext::new",
+     "PrimePowerContext::precision",
+     "PrimePowerContext::prime",
+     "UpperDigitsPlan::context",
+     "UpperDigitsPlan::geometry",
+     "UpperDigitsPlan::new",
+     "UpperDigitsPlan::preparation_owner_bytes",
+     "UpperDigitsPlan::required",
+     "UpperDigitsPlan::retained_digits",
+     "UpperDigitsProgram::fmt",
+     "UpperDigitsProgram::instructions",
+     "UpperDigitsProgram::output_register",
+     "UpperDigitsProgram::plan",
+     "UpperDigitsProgram::polynomials",
+     "UpperDigitsProgram::prepare",
+     "allocation_checkpoint",
+     "checked_bytes",
+     "checked_power",
+     "power_operations",
+     "public_node"
+    ]
+   },
+   "test_gated": {"shared.unit_tests": ["mod tests"]}
+  },
   {"path": "crates/iroha_fhe/src/rns.rs", "production": {}, "test_gated": {"shared.unit_tests": ["mod tests"]}},
   {"path": "crates/iroha_fhe/src/rns_chain.rs", "production": {}, "test_gated": {"shared.unit_tests": ["mod tests"]}},
   {"path": "crates/iroha_fhe/src/rounding.rs", "production": {}, "test_gated": {"shared.unit_tests": ["mod tests"]}},
@@ -8508,6 +9221,28 @@
    }
   },
   {
+   "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/global_lookup_statement_v1/vector_arithmetic_plane_openings_v1/ordered_snapshot_v1/resource_budget_v1.rs",
+   "production": {
+    "mkhe.rns_native_profile_and_source": [
+     "OrderedStorageReservationV1::charge_read_io_v1",
+     "OrderedStorageReservationV1::charge_reserved_io_v1",
+     "OrderedStorageReservationV1::drop",
+     "OrderedStorageReservationV1::require_sealed_v1",
+     "OrderedStorageSessionBudgetV1::new_v1",
+     "OrderedStorageSessionBudgetV1::reserve_files_v1",
+     "StorageLedgerV1::lock_v1"
+    ]
+   },
+   "test_gated": {
+    "mkhe.reference_support": [
+     "OrderedStorageReservationV1::reserve_sibling_file_v1",
+     "OrderedStorageSessionBudgetV1::test_usage_words_v1",
+     "OrderedStorageSessionBudgetV1::usage_v1",
+     "OrderedStorageSessionBudgetV1::with_test_limits_v1"
+    ]
+   }
+  },
+  {
    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/manifest.rs",
    "production": {
     "mkhe.release_manifest_and_readiness": [
@@ -10111,6 +10846,31 @@
    }
   },
   {
+   "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_resource_budget.rs",
+   "production": {
+    "mkhe.rns_native_profile_and_source": [
+     "RnsNativeProofResourceBudgetV1::admit",
+     "RnsNativeProofResourceBudgetV1::reserve_workspace_v1",
+     "RnsNativeProofResourceBudgetV1::usage",
+     "RnsNativeResourceReservationV1::belongs_to_v1",
+     "RnsNativeResourceReservationV1::drop",
+     "RnsNativeResourceReservationV1::release_scratch",
+     "RnsNativeResourceReservationV1::reserve_child_workspace_v1",
+     "release_reserved_bytes_v1"
+    ]
+   },
+   "test_gated": {
+    "mkhe.reference_support": [
+     "RnsNativeProofResourceBudgetV1::charge",
+     "RnsNativeProofResourceBudgetV1::consumed",
+     "RnsNativeProofResourceBudgetV1::live_bytes",
+     "RnsNativeProofResourceBudgetV1::peak_bytes",
+     "RnsNativeProofResourceBudgetV1::set_test_workspace_limit_v1",
+     "RnsNativeProofResourceBudgetV1::with_test_workspace_limit_v1"
+    ]
+   }
+  },
+  {
    "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_rlwe_source_statement.rs",
    "production": {},
    "test_gated": {
@@ -10339,7 +11099,6 @@
      "ZkAmsMkheRnsNativeSourceLayoutV1::statement_digest",
      "ZkAmsMkheRnsNativeSourceLayoutV1::topology_digest",
      "ZkAmsMkheRnsNativeSourceLayoutV1::validate",
-     "ZkAmsMkheRnsNativeSourceProviderV1::create",
      "ZkAmsMkheRnsNativeSourceReceiptV1::new",
      "ZkAmsMkheRnsNativeSourceReceiptV1::validate",
      "ZkAmsMkheRnsNativeSourceSnapshotV1::layout",
@@ -10353,6 +11112,28 @@
      "digests_are_distinct_v1",
      "receipt_digest_v1",
      "source_binding_digest_v1"
+    ]
+   },
+   "test_gated": {}
+  },
+  {
+   "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_source_resources.rs",
+   "production": {
+    "mkhe.rns_native_profile_and_source": [
+     "ZkAmsMkheRnsNativeSourceReservationV1::charge_read_v1",
+     "ZkAmsMkheRnsNativeSourceReservationV1::charge_seal_v1",
+     "ZkAmsMkheRnsNativeSourceReservationV1::charge_write_v1",
+     "ZkAmsMkheRnsNativeSourceReservationV1::owns_workspace_v1",
+     "ZkAmsMkheRnsNativeSourceReservationV1::release_construction_scratch_v1",
+     "ZkAmsMkheRnsNativeSourceReservationV1::require_sealed_v1",
+     "ZkAmsMkheRnsNativeSourceReservationV1::reserve_workspace_v1",
+     "ZkAmsMkheRnsNativeSourceResourcesV1::admit_source_v1",
+     "ZkAmsMkheRnsNativeSourceResourcesV1::new_v1",
+     "ZkAmsMkheRnsNativeSourceWorkspaceV1::release_scratch_v1",
+     "arena_index_v1",
+     "map_memory_error_v1",
+     "map_storage_error_v1",
+     "record_bytes_v1"
     ]
    },
    "test_gated": {}
@@ -11851,6 +12632,211 @@
     {
      "path": "docs/validation/parliament_ballot_node_representation/resume-20261020/node-check-initial.log.txt",
      "purpose": "Historical Cargo compile/check transcript naming the hkdf dependency; it contains no executable HKDF call and is not a RAM-LFE backend."
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/UPSTREAM.json",
+     "purpose": "Pinned upstream metadata or generated table naming the preserved BoringSSL/Nearby HKDF dependency; not the RAM-LFE backend.",
+     "evidence": "\"crypto/evp/p_hkdf.cc\": \"b70228c5e02b6d0040c3a54b49bde075d9ab265bbf1a09454b31c7d384ee6bc0\","
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/ec/ec_derive.cc",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#include <openssl/hkdf.h>"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/ec/hash_to_curve.cc",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#include <openssl/hkdf.h>"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/err/err.cc",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "{\"HKDF functions\", \"HKDF\", \"HKDF_LIB\"},"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/evp/evp_ctx.cc",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "case EVP_PKEY_HKDF:"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/evp/internal.h",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#define EVP_PKEY_CTRL_HKDF_MODE (EVP_PKEY_ALG_CTRL + 14)"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/evp/p_hkdf.cc",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#include <openssl/hkdf.h>"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/fipsmodule/bcm.cc",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#include \"hkdf/hkdf.cc.inc\""
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/fipsmodule/hkdf/hkdf.cc.inc",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#include <openssl/hkdf.h>"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/fipsmodule/self_check/self_check.cc.inc",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#include <openssl/hkdf.h>"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/fipsmodule/tls/internal.h",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "// CRYPTO_tls13_hkdf_expand_label computes the TLS 1.3 KDF function of the same"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/fipsmodule/tls/kdf.cc.inc",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#include <openssl/hkdf.h>"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/hpke/hpke.cc",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#include <openssl/hkdf.h>"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/obj/obj_dat.h",
+     "purpose": "Pinned upstream metadata or generated table naming the preserved BoringSSL/Nearby HKDF dependency; not the RAM-LFE backend.",
+     "evidence": "{\"HKDF\", \"hkdf\", NID_hkdf, 0, NULL, 0},"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/spake2plus/internal.h",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "// the hash function, HKDF-SHA256 as the key derivation function, and"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/spake2plus/spake2plus.cc",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#include <openssl/hkdf.h>"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/gen/crypto/err_data.cc",
+     "purpose": "Pinned upstream metadata or generated table naming the preserved BoringSSL/Nearby HKDF dependency; not the RAM-LFE backend.",
+     "evidence": "static_assert(ERR_LIB_HKDF == 31, \"library value changed\");"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/gen/sources.json",
+     "purpose": "Pinned upstream metadata or generated table naming the preserved BoringSSL/Nearby HKDF dependency; not the RAM-LFE backend.",
+     "evidence": "\"crypto/fipsmodule/hkdf/hkdf.cc.inc\","
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/include/openssl/curve25519.h",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "//   -  Using as input keying material to HKDF to generate a variety of subkeys"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/include/openssl/ec.h",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "// returns one on success and zero on error. `salt` is the HKDF-Extract salt,"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/include/openssl/ec_key.h",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "// from an input secret using HKDF-SHA256. It returns a newly-allocated `EC_KEY`"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/include/openssl/err.h",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "ERR_LIB_HKDF,"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/include/openssl/evp.h",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#define EVP_PKEY_HKDF NID_hkdf"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/include/openssl/hkdf.h",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#ifndef OPENSSL_HEADER_HKDF_H"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/include/openssl/hpke.h",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#define EVP_HPKE_DHKEM_P256_HKDF_SHA256 0x0010"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/include/openssl/kdf.h",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "// HKDF-specific functions."
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/include/openssl/nid.h",
+     "purpose": "Pinned upstream metadata or generated table naming the preserved BoringSSL/Nearby HKDF dependency; not the RAM-LFE backend.",
+     "evidence": "#define SN_hkdf \"HKDF\""
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/include/openssl/prefix_symbols.h",
+     "purpose": "Pinned upstream metadata or generated table naming the preserved BoringSSL/Nearby HKDF dependency; not the RAM-LFE backend.",
+     "evidence": "#pragma redefine_extname EVP_HPKE_KDF_hkdf_md BORINGSSL_ADD_USER_LABEL_AND_PREFIX(EVP_HPKE_KDF_hkdf_md)"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/ssl/encrypted_client_hello.cc",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#include <openssl/hkdf.h>"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/ssl/internal.h",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "// HKDF-Extract. It returns true on success and false on error."
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/ssl/ssl_credential.cc",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#include <openssl/hkdf.h>"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/ssl/tls13_both.cc",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#include <openssl/hkdf.h>"
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/ssl/tls13_enc.cc",
+     "purpose": "Vendored BoringSSL HKDF implementation, API, dispatch or EC/HPKE/SPAKE2+/TLS derivation; unrelated to RAM-LFE. Provider identity: vendor/boringssl-swiftpm/UPSTREAM.json.",
+     "evidence": "#include <openssl/hkdf.h>"
+    },
+    {
+     "path": "vendor/nearby/UPSTREAM.json",
+     "purpose": "Pinned upstream metadata or generated table naming the preserved BoringSSL/Nearby HKDF dependency; not the RAM-LFE backend.",
+     "evidence": "\"internal/crypto_cros/hkdf.cc\": {"
+    },
+    {
+     "path": "vendor/nearby/connections/implementation/mediums/advertisements/dct_advertisement.cc",
+     "purpose": "Vendored Nearby advertisement or UKEY2/securemessage HKDF key derivation and API; unrelated to RAM-LFE. SwiftPM dependency edge: vendor/nearby/Package.swift.",
+     "evidence": "#include \"internal/crypto_cros/hkdf.h\""
+    },
+    {
+     "path": "vendor/nearby/internal/crypto_cros/hkdf.cc",
+     "purpose": "Vendored Nearby advertisement or UKEY2/securemessage HKDF key derivation and API; unrelated to RAM-LFE. SwiftPM dependency edge: vendor/nearby/Package.swift.",
+     "evidence": "#include <openssl/hkdf.h>"
+    },
+    {
+     "path": "vendor/nearby/internal/crypto_cros/hkdf.h",
+     "purpose": "Vendored Nearby advertisement or UKEY2/securemessage HKDF key derivation and API; unrelated to RAM-LFE. SwiftPM dependency edge: vendor/nearby/Package.swift.",
+     "evidence": "#ifndef THIRD_PARTY_NEARBY_INTERNAL_CRYPTO_HKDF_H_"
+    },
+    {
+     "path": "vendor/nearby/third_party/ukey2/ukey2/src/main/cpp/src/securegcm/d2d_crypto_ops.cc",
+     "purpose": "Vendored Nearby advertisement or UKEY2/securemessage HKDF key derivation and API; unrelated to RAM-LFE. SwiftPM dependency edge: vendor/nearby/Package.swift.",
+     "evidence": "std::unique_ptr<string> raw_derived_key = CryptoOps::Hkdf("
+    },
+    {
+     "path": "vendor/nearby/third_party/ukey2/ukey2/src/main/cpp/src/securegcm/ukey2_handshake.cc",
+     "purpose": "Vendored Nearby advertisement or UKEY2/securemessage HKDF key derivation and API; unrelated to RAM-LFE. SwiftPM dependency edge: vendor/nearby/Package.swift.",
+     "evidence": "const char kUkey2HkdfSalt[] = \"UKEY2 v1 next\";"
+    },
+    {
+     "path": "vendor/nearby/third_party/ukey2/ukey2/src/securemessage/include/securemessage/crypto_ops.h",
+     "purpose": "Vendored Nearby advertisement or UKEY2/securemessage HKDF key derivation and API; unrelated to RAM-LFE. SwiftPM dependency edge: vendor/nearby/Package.swift.",
+     "evidence": "// Implements HKDF (RFC 5869) with the SHA-256 hash and a 256-bit output key"
+    },
+    {
+     "path": "vendor/nearby/third_party/ukey2/ukey2/src/securemessage/src/securemessage/crypto_ops.cc",
+     "purpose": "Vendored Nearby advertisement or UKEY2/securemessage HKDF key derivation and API; unrelated to RAM-LFE. SwiftPM dependency edge: vendor/nearby/Package.swift.",
+     "evidence": "unique_ptr<ByteBuffer> CryptoOps::HkdfSha256Extract("
     }
    ]
   },
@@ -12155,6 +13141,48 @@
    "registered": false,
    "evidence": {"path": "crates/fastpq_prover/src/metal_artifact.rs", "literal": "The provenance record beside the library preserves"},
    "note": "Original generation record adjacent to the admitted embedded bundle; local identity evidence only, not signed provenance or complete hardware qualification."
+  },
+  {
+   "path": "vendor/boringssl-swiftpm/UPSTREAM.json",
+   "registered": false,
+   "purpose": "Vendored upstream source metadata or generated table; preserved transport dependency, not a RAM-LFE artifact.",
+   "evidence": {"path": "vendor/boringssl-swiftpm/verify_source.py", "literal": "UPSTREAM.json"}
+  },
+  {
+   "path": "vendor/boringssl-swiftpm/crypto/obj/obj_dat.h",
+   "registered": false,
+   "purpose": "Vendored upstream source metadata or generated table; preserved transport dependency, not a RAM-LFE artifact.",
+   "evidence": {"path": "vendor/boringssl-swiftpm/crypto/obj/obj_dat.h", "literal": "This file is generated by crypto/obj/objects.go."}
+  },
+  {
+   "path": "vendor/boringssl-swiftpm/gen/crypto/err_data.cc",
+   "registered": false,
+   "purpose": "Vendored upstream source metadata or generated table; preserved transport dependency, not a RAM-LFE artifact.",
+   "evidence": {"path": "vendor/boringssl-swiftpm/gen/crypto/err_data.cc", "literal": "This file was generated by go run ./util/pregenerate."}
+  },
+  {
+   "path": "vendor/boringssl-swiftpm/gen/sources.json",
+   "registered": false,
+   "purpose": "Vendored upstream source metadata or generated table; preserved transport dependency, not a RAM-LFE artifact.",
+   "evidence": {"path": "vendor/boringssl-swiftpm/Package.swift", "literal": "gen/sources.json"}
+  },
+  {
+   "path": "vendor/boringssl-swiftpm/include/openssl/nid.h",
+   "registered": false,
+   "purpose": "Vendored upstream source metadata or generated table; preserved transport dependency, not a RAM-LFE artifact.",
+   "evidence": {"path": "vendor/boringssl-swiftpm/include/openssl/nid.h", "literal": "This file is generated by crypto/obj/objects.go."}
+  },
+  {
+   "path": "vendor/boringssl-swiftpm/include/openssl/prefix_symbols.h",
+   "registered": false,
+   "purpose": "Vendored upstream source metadata or generated table; preserved transport dependency, not a RAM-LFE artifact.",
+   "evidence": {"path": "vendor/boringssl-swiftpm/include/openssl/prefix_symbols.h", "literal": "Generated by go ./util/pregenerate. Do not edit manually."}
+  },
+  {
+   "path": "vendor/nearby/UPSTREAM.json",
+   "registered": false,
+   "purpose": "Vendored upstream source metadata or generated table; preserved transport dependency, not a RAM-LFE artifact.",
+   "evidence": {"path": "vendor/nearby/verify_source.py", "literal": "UPSTREAM.json"}
   }
  ],
  "generated_sdk_code": {
@@ -12308,6 +13336,7 @@
     {"path": "crates/iroha_fhe/src/ntt.rs", "patterns": ["basis_conversion", "bfv", "fhe", "negacyclic", "ntt", "rns"]},
     {"path": "crates/iroha_fhe/src/ntt_plan.rs", "patterns": ["fhe", "negacyclic", "ntt"]},
     {"path": "crates/iroha_fhe/src/polynomial.rs", "patterns": ["fhe", "negacyclic", "ntt"]},
+    {"path": "crates/iroha_fhe/src/prime_power.rs", "patterns": ["bfv", "bgv", "fhe"]},
     {"path": "crates/iroha_fhe/src/rns.rs", "patterns": ["basis_conversion", "fhe", "ntt", "rns"]},
     {"path": "crates/iroha_fhe/src/rns_chain.rs", "patterns": ["bgv", "fhe", "rns"]},
     {"path": "crates/iroha_fhe/src/rounding.rs", "patterns": ["bfv", "fhe", "ram_lfe"]}
@@ -12463,10 +13492,10 @@
    "id": "crypto.ram_lfe",
    "component": "iroha_crypto",
    "role": "ram_lfe_implementation",
-   "tasks": ["R.0", "R.6", "R.8", "C.3"],
-   "summary": "RAM-LFE policy, backend, program, trace and canonical V1 owners, including the HKDF backend and the phone nullifier derivation recorded in the hkdf section.",
+   "tasks": ["R.0", "R.6", "R.8", "C.3", "R.3", "R.7"],
+   "summary": "RAM-LFE policy, backend, program, trace and canonical V1 owners, including the HKDF backend and the phone nullifier derivation recorded in the hkdf section. Includes the unqualified affine and complete generic bounded BGV evaluators of canonical normal forms under a fixed padded public schedule; runtime activation, normalization proof and circuit privacy remain incomplete.",
    "files": [
-    {"path": "crates/iroha_crypto/src/ram_lfe.rs", "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe", "rns"]},
+    {"path": "crates/iroha_crypto/src/ram_lfe.rs", "patterns": ["bfv", "bgv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe", "rns"]},
     {"path": "crates/iroha_crypto/src/ram_lfe/affine_secret.rs", "patterns": ["bfv", "ram_lfe"]},
     {
      "path": "crates/iroha_crypto/src/ram_lfe/availability_tests.rs",
@@ -12474,6 +13503,31 @@
      "cfg": ["test"],
      "test_only": true
     },
+    {"path": "crates/iroha_crypto/src/ram_lfe/bgv_affine.rs", "patterns": ["bgv", "fhe", "ram_lfe"]},
+    {
+     "path": "crates/iroha_crypto/src/ram_lfe/bgv_affine_maximum_tests.rs",
+     "patterns": ["bgv", "fhe", "ram_lfe", "rns"],
+     "cfg": ["test"],
+     "test_only": true
+    },
+    {"path": "crates/iroha_crypto/src/ram_lfe/bgv_affine_tests.rs", "patterns": ["bgv", "fhe", "ram_lfe"], "cfg": ["test"], "test_only": true},
+    {"path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded.rs", "patterns": ["bgv", "fhe", "ntt", "ram_lfe"]},
+    {"path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_compiler.rs", "patterns": ["bgv", "fhe", "ram_lfe"]},
+    {
+     "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_compiler_tests.rs",
+     "patterns": ["bgv", "fhe", "ram_lfe"],
+     "cfg": ["test"],
+     "test_only": true
+    },
+    {"path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_refresh.rs", "patterns": ["bgv", "fhe", "ram_lfe"]},
+    {
+     "path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_refresh_tests.rs",
+     "patterns": ["bgv", "fhe", "ram_lfe"],
+     "cfg": ["test"],
+     "test_only": true
+    },
+    {"path": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_tests.rs", "patterns": ["bgv", "fhe", "ram_lfe"], "cfg": ["test"], "test_only": true},
+    {"path": "crates/iroha_crypto/src/ram_lfe/bgv_input.rs", "patterns": ["bgv", "fhe", "ram_lfe"]},
     {"path": "crates/iroha_crypto/src/ram_lfe/canonical.rs", "patterns": ["fhe", "ram_lfe"]},
     {"path": "crates/iroha_crypto/src/ram_lfe/canonical_tests.rs", "patterns": ["bfv", "fhe", "ram_lfe"], "cfg": ["test"], "test_only": true},
     {
@@ -12488,7 +13542,13 @@
     {"path": "crates/iroha_crypto/src/ram_lfe/clearing.rs", "patterns": ["ram_lfe"]},
     {"path": "crates/iroha_crypto/src/ram_lfe/initialization.rs", "patterns": ["bfv", "fhe", "ram_lfe"]},
     {"path": "crates/iroha_crypto/src/ram_lfe/initialization_tests.rs", "patterns": ["bfv", "ram_lfe"], "cfg": ["test"], "test_only": true},
-    {"path": "crates/iroha_crypto/src/ram_lfe/normal_form.rs", "patterns": ["fhe", "ram_lfe"]},
+    {
+     "path": "crates/iroha_crypto/src/ram_lfe/input_encryption_relation_tests.rs",
+     "patterns": ["bgv", "fhe", "ram_lfe"],
+     "cfg": ["test"],
+     "test_only": true
+    },
+    {"path": "crates/iroha_crypto/src/ram_lfe/normal_form.rs", "patterns": ["bgv", "fhe", "ram_lfe", "rns"]},
     {
      "path": "crates/iroha_crypto/src/ram_lfe/normal_form_tests.rs",
      "patterns": ["bfv", "bgv", "fhe", "ram_lfe", "rns"],
@@ -12515,13 +13575,7 @@
      "test_only": true
     },
     {"path": "crates/iroha_crypto/src/ram_lfe/trace.rs", "patterns": ["bfv", "fhe", "ram_lfe"]},
-    {"path": "crates/iroha_crypto/src/ram_lfe/trace_tests.rs", "patterns": ["bfv", "fhe", "ram_lfe"], "cfg": ["test"], "test_only": true},
-    {
-     "path": "crates/iroha_crypto/src/ram_lfe/input_encryption_relation_tests.rs",
-     "patterns": ["bgv", "fhe", "ram_lfe"],
-     "cfg": ["test"],
-     "test_only": true
-    }
+    {"path": "crates/iroha_crypto/src/ram_lfe/trace_tests.rs", "patterns": ["bfv", "fhe", "ram_lfe"], "cfg": ["test"], "test_only": true}
    ]
   },
   {
@@ -13505,8 +14559,7 @@
     {
      "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/global_lookup_statement_v1/vector_arithmetic_plane_openings_v1/ordered_snapshot_v1/resource_budget_v1.rs",
      "patterns": ["mkhe", "rns"],
-     "cfg": ["feature = \"full\"", "test"],
-     "test_only": true
+     "cfg": ["feature = \"full\""]
     },
     {
      "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/global_lookup_statement_v1/vector_arithmetic_plane_openings_v1/ordered_snapshot_v1/resource_budget_v1_tests.rs",
@@ -13544,6 +14597,11 @@
      "cfg": ["feature = \"full\""]
     },
     {"path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/noise.rs", "patterns": ["mkhe", "negacyclic", "rns"], "cfg": ["feature = \"full\""]},
+    {
+     "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/noise_feasibility.rs",
+     "patterns": ["mkhe", "negacyclic", "rns"],
+     "cfg": ["feature = \"full\""]
+    },
     {
      "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/packing.rs",
      "patterns": ["bgv", "fhe", "mkhe", "negacyclic", "ntt", "rns"],
@@ -13889,11 +14947,18 @@
      "test_only": true
     },
     {
-     "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_resource_budget.rs",
-     "patterns": ["mkhe", "rns"],
+     "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_relation_polynomials.rs",
+     "patterns": ["fhe", "mkhe", "negacyclic", "ntt", "rns"],
      "cfg": ["feature = \"full\"", "test"],
      "test_only": true
     },
+    {
+     "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_relation_polynomials_tests.rs",
+     "patterns": ["fhe", "mkhe", "negacyclic", "rns"],
+     "cfg": ["feature = \"full\"", "test"],
+     "test_only": true
+    },
+    {"path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_resource_budget.rs", "patterns": ["mkhe", "rns"], "cfg": ["feature = \"full\""]},
     {
      "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_resource_budget_tests.rs",
      "patterns": ["mkhe", "rns"],
@@ -13944,6 +15009,13 @@
     },
     {
      "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_source_packing_same_opening_tests/owned_replay_v2.rs",
+     "patterns": ["mkhe", "rns"],
+     "cfg": ["feature = \"full\"", "test"],
+     "test_only": true
+    },
+    {"path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_source_resources.rs", "patterns": ["mkhe", "rns"], "cfg": ["feature = \"full\""]},
+    {
+     "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_source_resources_tests.rs",
      "patterns": ["mkhe", "rns"],
      "cfg": ["feature = \"full\"", "test"],
      "test_only": true
@@ -14018,12 +15090,7 @@
      "cfg": ["feature = \"full\"", "test"],
      "test_only": true
     },
-    {"path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/wire.rs", "patterns": ["bgv", "mkhe", "rns"], "cfg": ["feature = \"full\""]},
-    {
-     "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/noise_feasibility.rs",
-     "patterns": ["mkhe", "negacyclic", "rns"],
-     "cfg": ["feature = \"full\""]
-    }
+    {"path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/wire.rs", "patterns": ["bgv", "mkhe", "rns"], "cfg": ["feature = \"full\""]}
    ]
   },
   {
@@ -14188,6 +15255,20 @@
     },
     {"path": "crates/fastpq_prover/src/fft.rs", "patterns": [], "pinned": "Trace and LDE transform planner over Goldilocks domains."},
     {
+     "path": "crates/fastpq_prover/src/goldilocks_prefix_tests.rs",
+     "patterns": [],
+     "cfg": ["test"],
+     "test_only": true,
+     "pinned": "Independent external test-only native-prefix Goldilocks staging and canonical validation prototype; cfg(test) module origin, no production dispatch activation."
+    },
+    {
+     "path": "crates/fastpq_prover/src/goldilocks_prepared_forward_tests.rs",
+     "patterns": [],
+     "cfg": ["test"],
+     "test_only": true,
+     "pinned": "Test-only validation of wider prepared-forward Goldilocks transform admission and unchanged ordinary/inverse limits."
+    },
+    {
      "path": "crates/fastpq_prover/src/goldilocks_transform.rs",
      "patterns": [],
      "pinned": "Exact-root Goldilocks column transform with CPU fallback."
@@ -14197,6 +15278,13 @@
      "path": "crates/fastpq_prover/src/metal_artifact.rs",
      "patterns": ["ntt"],
      "cfg": ["any(test, all(feature = \"fastpq-gpu\", target_os = \"macos\"))"]
+    },
+    {
+     "path": "crates/fastpq_prover/src/metal_exact_root_prefix_tests.rs",
+     "patterns": [],
+     "cfg": ["all(feature = \"fastpq-gpu\", target_os = \"macos\")", "test"],
+     "test_only": true,
+     "pinned": "Independent external test-only native-prefix Goldilocks staging and canonical validation prototype; cfg(test) module origin, no production dispatch activation."
     },
     {"path": "crates/fastpq_prover/tests/shared_backend_inventory.rs", "patterns": ["bfv", "fhe", "ram_lfe", "rns"], "test_only": true},
     {"path": "pytests/scripts/fastpq_metal_toolchain_build_test.py", "patterns": ["ntt"], "test_only": true},
@@ -14969,12 +16057,15 @@
    "component": "iroha_fhe",
    "role": "fhe_implementation",
    "tasks": ["C.3", "C.4", "C.8", "C.9", "R.11", "R.8", "R.7"],
-   "summary": "The exact modular RNS-BGV starting candidate (task C.3): profiles and candidates, coins and samplers, keys and their canonical encodings, encryption and decryption, leveled evaluation with hybrid key switching, public noise accounting and shape planning, slot encodings and the cost model. The fixture module is compiled only for tests or with the bgv-test-fixtures feature. Not wired into any consumer; no profile is qualified. Offline dealer-assisted secret-key sharing uses explicit contexts and opaque clearing share custody; no threshold decryption or malicious-party proof is implemented.",
+   "summary": "The exact modular RNS-BGV starting candidate (C.3): profiles, coins, keys, encryption/decryption, leveled evaluation, hybrid key switching, noise/shape planning, slot encoding and costing. The local RAM-LFE affine primitive consumes it; no profile or production backend is qualified. Offline dealer-assisted custody and canonical subset weighting feed local consumed-subset opening under one trusted co-located owner. Distributed masked/proven threshold opening and malicious-party verification remain incomplete. Fixture access is test-only.",
    "files": [
+    {"path": "crates/iroha_fhe/src/bgv/bootstrap.rs", "patterns": ["bgv", "fhe", "ntt", "rns"]},
     {"path": "crates/iroha_fhe/src/bgv/cipher.rs", "patterns": ["bgv", "fhe", "rns"]},
+    {"path": "crates/iroha_fhe/src/bgv/coefficient_slots.rs", "patterns": ["bgv", "fhe", "ntt", "rns"]},
     {"path": "crates/iroha_fhe/src/bgv/coins.rs", "patterns": ["bgv", "fhe"]},
-    {"path": "crates/iroha_fhe/src/bgv/cost.rs", "patterns": ["bgv", "fhe"]},
+    {"path": "crates/iroha_fhe/src/bgv/cost.rs", "patterns": ["bgv", "fhe", "rns"]},
     {"path": "crates/iroha_fhe/src/bgv/encoding.rs", "patterns": ["bgv", "fhe", "negacyclic", "ntt"]},
+    {"path": "crates/iroha_fhe/src/bgv/encryption_witness.rs", "patterns": ["bgv", "fhe", "ntt", "rns"]},
     {"path": "crates/iroha_fhe/src/bgv/eval.rs", "patterns": ["bgv", "fhe", "negacyclic", "ntt", "rns"]},
     {"path": "crates/iroha_fhe/src/bgv/fault.rs", "patterns": ["bgv", "fhe"]},
     {
@@ -14984,13 +16075,20 @@
      "test_only": true
     },
     {"path": "crates/iroha_fhe/src/bgv/keys.rs", "patterns": ["bgv", "fhe", "negacyclic", "ntt", "rns"]},
+    {"path": "crates/iroha_fhe/src/bgv/metadata.rs", "patterns": ["bgv", "fhe"]},
     {"path": "crates/iroha_fhe/src/bgv/mod.rs", "patterns": ["bfv", "bgv", "fhe", "ntt", "ram_lfe", "rns"]},
     {"path": "crates/iroha_fhe/src/bgv/noise.rs", "patterns": ["bgv", "fhe"]},
     {"path": "crates/iroha_fhe/src/bgv/plan.rs", "patterns": ["bgv", "fhe"]},
     {"path": "crates/iroha_fhe/src/bgv/poly.rs", "patterns": ["bgv", "fhe", "negacyclic", "ntt", "rns"]},
     {"path": "crates/iroha_fhe/src/bgv/profile.rs", "patterns": ["bgv", "fhe", "negacyclic", "ntt", "ram_lfe", "rns"]},
+    {"path": "crates/iroha_fhe/src/bgv/relative_trace.rs", "patterns": ["bgv", "fhe", "ntt", "rns"]},
+    {"path": "crates/iroha_fhe/src/bgv/routing.rs", "patterns": ["bgv", "fhe", "ntt", "rns"]},
+    {"path": "crates/iroha_fhe/src/bgv/routing/layout.rs", "patterns": ["bgv", "fhe"]},
     {"path": "crates/iroha_fhe/src/bgv/threshold.rs", "patterns": ["bgv", "fhe", "rns"]},
-    {"path": "crates/iroha_fhe/src/bgv/encryption_witness.rs", "patterns": ["bgv", "fhe", "ntt", "rns"]}
+    {"path": "crates/iroha_fhe/src/bgv/threshold/opening.rs", "patterns": ["bgv", "fhe", "ntt", "rns"]},
+    {"path": "crates/iroha_fhe/src/bgv/upper_digits.rs", "patterns": ["bgv", "fhe", "ntt", "rns"]},
+    {"path": "crates/iroha_fhe/src/bgv/upper_digits/compiler.rs", "patterns": ["bgv", "fhe"]},
+    {"path": "crates/iroha_fhe/src/bgv/upper_digits/planning.rs", "patterns": ["bgv", "fhe", "rns"]}
    ]
   },
   {
@@ -14998,14 +16096,24 @@
    "component": "iroha_fhe",
    "role": "fhe_test_reference",
    "tasks": ["C.3", "C.4"],
-   "summary": "Independent references and tests of the RNS-BGV candidate and of the arbitrary-chain kernels: the Python reference and its known-answer file, the num-bigint oracle, vector, noise, clearing and surface tests, the costing harness that lowers the V1 tape instructions over shapes and over ciphertexts with its tests, the test that holds the tracked cost summary to the Rust model, and the measured workloads. Offline threshold-sharing tests use independent field interpolation and verify actual entropy, issuance and metadata refusals.",
+   "summary": "Independent references and tests of the RNS-BGV candidate and of the arbitrary-chain kernels: the Python reference and its known-answer file, the num-bigint oracle, vector, noise, clearing and surface tests, the costing harness that lowers the V1 tape instructions over shapes and over ciphertexts with its tests, the test that holds the tracked cost summary to the Rust model, and the measured workloads. Offline threshold-sharing tests use independent field interpolation and verify actual entropy, issuance and metadata refusals. Local opening tests compare every threshold/subset/level with independent scalar convolution and centered CRT, check exact owning refusals and clearing through unwind. Surface tests recurse nested BGV modules and explicitly constrain the opening API to prevent share or partial-decryption export.",
    "files": [
+    {"path": "crates/iroha_fhe/tests/bgv_ciphertext_packing.rs", "patterns": ["bgv", "fhe"], "test_only": true},
     {"path": "crates/iroha_fhe/tests/bgv_clearing.rs", "patterns": ["bgv", "fhe"], "test_only": true},
     {"path": "crates/iroha_fhe/tests/bgv_cost_measurement.rs", "patterns": ["bgv", "fhe", "ram_lfe"], "test_only": true},
     {"path": "crates/iroha_fhe/tests/bgv_cost_model_vectors.rs", "patterns": ["bgv", "fhe", "ram_lfe", "rns"], "test_only": true},
+    {"path": "crates/iroha_fhe/tests/bgv_f257_bootstrap_plan.rs", "patterns": ["bgv", "fhe"], "test_only": true},
+    {"path": "crates/iroha_fhe/tests/bgv_f257_local_bootstrap.rs", "patterns": ["bgv", "fhe", "negacyclic"], "test_only": true},
+    {"path": "crates/iroha_fhe/tests/bgv_f257_q23_bootstrap_plan.rs", "patterns": ["bgv", "fhe"], "test_only": true},
+    {"path": "crates/iroha_fhe/tests/bgv_local_bootstrap.rs", "patterns": ["bgv", "fhe", "negacyclic"], "test_only": true},
     {"path": "crates/iroha_fhe/tests/bgv_noise.rs", "patterns": ["bgv", "fhe"], "test_only": true},
+    {"path": "crates/iroha_fhe/tests/bgv_precision_transforms.rs", "patterns": ["bgv", "fhe"], "test_only": true},
+    {"path": "crates/iroha_fhe/tests/bgv_prime_precision.rs", "patterns": ["bgv", "fhe"], "test_only": true},
+    {"path": "crates/iroha_fhe/tests/bgv_streaming_bootstrap.rs", "patterns": ["bgv", "fhe"], "test_only": true},
     {"path": "crates/iroha_fhe/tests/bgv_surface.rs", "patterns": ["basis_conversion", "bgv", "fhe", "ntt", "ram_lfe", "rns"], "test_only": true},
     {"path": "crates/iroha_fhe/tests/bgv_tape_plan.rs", "patterns": ["bgv", "fhe", "rns"], "test_only": true},
+    {"path": "crates/iroha_fhe/tests/bgv_threshold.rs", "patterns": ["bgv", "fhe"], "test_only": true},
+    {"path": "crates/iroha_fhe/tests/bgv_threshold_opening.rs", "patterns": ["bgv", "fhe", "negacyclic"], "test_only": true},
     {"path": "crates/iroha_fhe/tests/bgv_vectors.rs", "patterns": ["bgv", "fhe", "rns"], "test_only": true},
     {"path": "crates/iroha_fhe/tests/rns_chain_vectors.rs", "patterns": ["bgv", "fhe", "rns"], "test_only": true},
     {"path": "crates/iroha_fhe/tests/support/kat.rs", "patterns": ["bgv", "fhe"], "test_only": true},
@@ -15013,8 +16121,7 @@
     {"path": "crates/iroha_fhe/tests/support/mod.rs", "patterns": ["bgv", "fhe"], "test_only": true},
     {"path": "crates/iroha_fhe/tests/support/oracle.rs", "patterns": ["bgv", "fhe", "negacyclic", "rns"], "test_only": true},
     {"path": "crates/iroha_fhe/tests/vectors/bgv_kat_v1.txt", "patterns": ["bgv", "fhe", "rns"], "test_only": true},
-    {"path": "crates/iroha_fhe/tests/vectors/bgv_reference.py", "patterns": ["bgv", "fhe", "rns"], "test_only": true},
-    {"path": "crates/iroha_fhe/tests/bgv_threshold.rs", "patterns": ["bgv", "fhe"], "test_only": true}
+    {"path": "crates/iroha_fhe/tests/vectors/bgv_reference.py", "patterns": ["bgv", "fhe", "rns"], "test_only": true}
    ]
   },
   {
@@ -15038,30 +16145,30 @@
    "tasks": ["R.6"],
    "summary": "Retained RAM-LFE authority originals and their tests, plus independent SCCP BLS KeyGen references. SCCP HKDF does not implement RAM-LFE.",
    "files": [
+    {"path": "contracts/evm/sccp/test/sccp_v1_model.js", "patterns": ["hkdf"], "test_only": true},
     {
      "path": "crates/iroha/src/client/authority_originals/tests.rs",
      "patterns": ["hkdf", "hkdf_ram_lfe", "ram_lfe"],
      "cfg": ["test"],
      "test_only": true
     },
+    {"path": "crates/iroha_core/src/state/world_state_snapshot/authority_originals.rs", "patterns": ["ram_lfe"]},
     {
      "path": "crates/iroha_core/src/state/world_state_snapshot/authority_originals/tests.rs",
      "patterns": ["hkdf", "hkdf_ram_lfe", "ram_lfe"],
      "cfg": ["test"],
      "test_only": true
     },
+    {"path": "crates/iroha_sccp/tests/reference_support/bls_support.rs", "patterns": ["hkdf"], "test_only": true},
+    {"path": "crates/iroha_torii_shared/src/authority_originals.rs", "patterns": ["ram_lfe"]},
     {
      "path": "crates/iroha_torii_shared/src/authority_originals/tests.rs",
      "patterns": ["hkdf", "hkdf_ram_lfe", "ram_lfe"],
      "cfg": ["test"],
      "test_only": true
     },
-    {"path": "scripts/tests/ledger_scoped_originals_openapi_test.py", "patterns": ["bfv", "hkdf", "hkdf_ram_lfe", "ram_lfe"], "test_only": true},
-    {"path": "crates/iroha_core/src/state/world_state_snapshot/authority_originals.rs", "patterns": ["ram_lfe"]},
-    {"path": "crates/iroha_torii_shared/src/authority_originals.rs", "patterns": ["ram_lfe"]},
-    {"path": "contracts/evm/sccp/test/sccp_v1_model.js", "patterns": ["hkdf"], "test_only": true},
-    {"path": "crates/iroha_sccp/tests/reference_support/bls_support.rs", "patterns": ["hkdf"], "test_only": true},
-    {"path": "scripts/sccp_reference/bls_sig.py", "patterns": ["hkdf"]}
+    {"path": "scripts/sccp_reference/bls_sig.py", "patterns": ["hkdf"]},
+    {"path": "scripts/tests/ledger_scoped_originals_openapi_test.py", "patterns": ["bfv", "hkdf", "hkdf_ram_lfe", "ram_lfe"], "test_only": true}
    ]
   },
   {
@@ -15615,6 +16722,9 @@
     {"path": "docs/validation/parliament_ballot_native_probe/dependency-metadata.json", "patterns": ["hkdf"]},
     {"path": "docs/validation/parliament_ballot_native_probe/generated/Cargo.lock.template", "patterns": ["hkdf"]},
     {"path": "docs/validation/parliament_ballot_native_probe/generated/root-Cargo.lock.template.template", "patterns": ["fhe", "hkdf"]},
+    {"path": "docs/validation/parliament_ballot_node_representation/resume-20261020/core-merge-diagnostic.log.txt", "patterns": ["fhe", "hkdf"]},
+    {"path": "docs/validation/parliament_ballot_node_representation/resume-20261020/model-initial.log.txt", "patterns": ["fhe", "hkdf"]},
+    {"path": "docs/validation/parliament_ballot_node_representation/resume-20261020/node-check-initial.log.txt", "patterns": ["fhe", "hkdf"]},
     {"path": "docs/validation/parliament_ballot_opaque_field_bound/capture/analysis.json", "patterns": ["hkdf"]},
     {
      "path": "docs/validation/parliament_ballot_opaque_field_bound/capture/pytest-tmp/test_cli_qualification_refusal0/qualified.json",
@@ -15641,10 +16751,7 @@
     {"path": "docs/validation/parliament_ballot_resource_contract/dependency-change/root-Cargo.lock.after.template", "patterns": ["fhe", "hkdf"]},
     {"path": "docs/validation/parliament_ballot_resource_contract/dependency-change/root-Cargo.lock.before.template", "patterns": ["fhe", "hkdf"]},
     {"path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_core/Cargo.toml.template", "patterns": ["bfv"]},
-    {"path": "docs/validation/parliament_ballot_typed_decoder_bound/analysis/report.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_node_representation/resume-20261020/core-merge-diagnostic.log.txt", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_node_representation/resume-20261020/model-initial.log.txt", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_node_representation/resume-20261020/node-check-initial.log.txt", "patterns": ["fhe", "hkdf"]}
+    {"path": "docs/validation/parliament_ballot_typed_decoder_bound/analysis/report.json", "patterns": ["hkdf"]}
    ]
   },
   {
@@ -15776,6 +16883,76 @@
    "tasks": ["C.5", "F.5"],
    "summary": "Canonical unkeyed raw32 BLAKE3 native commitment framing, role/domain descriptors and distinct SHA3 descriptor identities. Its MKHE and RNS mentions are protocol-domain references; this file implements neither FHE arithmetic nor a cryptographic qualification decision.",
    "files": [{"path": "crates/iroha_crypto/src/native_commitment.rs", "patterns": ["mkhe", "rns"]}]
+  },
+  {
+   "id": "vendor.mobile_crypto.hkdf",
+   "component": "vendor/nearby and vendor/boringssl-swiftpm",
+   "role": "unrelated_hkdf",
+   "tasks": ["C.1"],
+   "summary": "Already-present SwiftPM transport dependencies: BoringSSL HKDF implementation/API, EC/HPKE/SPAKE2+/TLS consumers and dispatch, and Nearby advertisement/UKEY2/securemessage derivations. IrohaSwift/Package.swift consumes vendor/nearby; vendor/nearby/Package.swift consumes the source-owned BoringSSL provider. These are unrelated to the RAM-LFE HKDF backend and remain preserved.",
+   "files": [
+    {"path": "vendor/boringssl-swiftpm/crypto/ec/ec_derive.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/ec/hash_to_curve.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/err/err.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/evp/evp_ctx.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/evp/internal.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/evp/p_hkdf.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/bcm.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/hkdf/hkdf.cc.inc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/self_check/self_check.cc.inc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/tls/internal.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/tls/kdf.cc.inc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/hpke/hpke.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/spake2plus/internal.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/spake2plus/spake2plus.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/curve25519.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/ec.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/ec_key.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/err.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/evp.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/hkdf.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/hpke.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/kdf.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/ssl/encrypted_client_hello.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/ssl/internal.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/ssl/ssl_credential.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/ssl/tls13_both.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/ssl/tls13_enc.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/nearby/connections/implementation/mediums/advertisements/dct_advertisement.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/nearby/internal/crypto_cros/hkdf.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/nearby/internal/crypto_cros/hkdf.h", "patterns": ["hkdf"]},
+    {"path": "vendor/nearby/third_party/ukey2/ukey2/src/main/cpp/src/securegcm/d2d_crypto_ops.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/nearby/third_party/ukey2/ukey2/src/main/cpp/src/securegcm/ukey2_handshake.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/nearby/third_party/ukey2/ukey2/src/securemessage/include/securemessage/crypto_ops.h", "patterns": ["hkdf"]},
+    {"path": "vendor/nearby/third_party/ukey2/ukey2/src/securemessage/src/securemessage/crypto_ops.cc", "patterns": ["hkdf"]}
+   ]
+  },
+  {
+   "id": "vendor.mobile_crypto.generated",
+   "component": "vendor/nearby and vendor/boringssl-swiftpm",
+   "role": "generated_artifact",
+   "tasks": ["C.1"],
+   "summary": "Pinned upstream source inventories, SwiftPM source list, and upstream generated error/object/symbol tables. Generated-consumer evidence identifies current readers or source generator declarations; no cryptographic qualification is inferred.",
+   "files": [
+    {"path": "vendor/boringssl-swiftpm/UPSTREAM.json", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/obj/obj_dat.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/gen/crypto/err_data.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/gen/sources.json", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/nid.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/prefix_symbols.h", "patterns": ["hkdf"]},
+    {"path": "vendor/nearby/UPSTREAM.json", "patterns": ["hkdf"]}
+   ]
+  },
+  {
+   "id": "vendor.mobile_crypto.pq",
+   "component": "vendor/boringssl-swiftpm",
+   "role": "distinct_arithmetic",
+   "tasks": ["C.1"],
+   "summary": "Vendored BoringSSL ML-DSA and ML-KEM transforms: mldsa.cc.inc anchors FIPS 204 Algorithm 41 and mlkem.cc.inc anchors FIPS 203 Algorithm 10. These retain their signature/KEM arithmetic owner; they are not application FHE kernels and do not replace iroha_fhe primitive ownership. Source identity is recorded by vendor/boringssl-swiftpm/UPSTREAM.json.",
+   "files": [
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/mldsa/mldsa.cc.inc", "patterns": ["ntt"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/mlkem/mlkem.cc.inc", "patterns": ["ntt"]}
+   ]
   }
  ]
 }

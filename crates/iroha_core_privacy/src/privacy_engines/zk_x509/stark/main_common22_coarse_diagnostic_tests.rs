@@ -35,6 +35,7 @@ fn original(columns: &[Column], native: u8, common: u8) -> Vec<Column> {
         evaluation_rows: 1 << common,
         device_columns: 0,
         receipt: MainTransformReceiptV1::default(),
+        selected_scratch: selected_coset::SelectedScratchV1::default(),
         coset_powers: None,
     };
     let result = evaluator.evaluate_v1(columns, native, common).unwrap();

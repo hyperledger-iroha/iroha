@@ -2909,6 +2909,7 @@ dependencies = [
  "iroha_primitives",
  "iroha_test_samples",
  "iroha_zkp_halo2",
+ "keccak 0.2.2",
  "metal",
  "norito",
  "rand 0.10.3",
@@ -6464,6 +6465,7 @@ checksum = "d8f198d1db720e4940b5a493201d199d9f24f568f8f746bd13706243a2f71598"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
+ "hybrid-array",
 ]
 
 [[package]]

@@ -428,3 +428,45 @@ fn sha_union_admits_measured_maximum_assembly_with_all_original_joint_owners() {
         Err(ZkX509StarkErrorV1::ProofTooLarge)
     );
 }
+
+#[test]
+fn retained_scalar_cuts_are_charged_through_finalization_inside_the_original_cap() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
+    let expected = aggregate::retained_scalar_commitment::oracle_payload_bound_v1(
+        AGGREGATE_PARAMETERS_V1,
+        &layout.as_shared().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(plan.common.retained_oracle_cuts, expected);
+    assert!((98_000..110_000).contains(&expected));
+    let finalization = plan.required_v1(MainCaBufferPhaseV1::Finalization).unwrap();
+    let mut omitted = plan;
+    omitted.common.retained_oracle_cuts = 0;
+    assert_eq!(
+        omitted
+            .required_v1(MainCaBufferPhaseV1::Finalization)
+            .unwrap()
+            + expected,
+        finalization
+    );
+    for phase in [
+        MainCaBufferPhaseV1::OriginalCommitments,
+        MainCaBufferPhaseV1::Registration,
+        MainCaBufferPhaseV1::ShaUnion,
+        MainCaBufferPhaseV1::PrivateLinks,
+    ] {
+        assert_eq!(omitted.required_v1(phase), plan.required_v1(phase));
+    }
+    let mut overflow = plan;
+    overflow.common.retained_oracle_cuts = usize::MAX;
+    assert!(
+        overflow
+            .required_v1(MainCaBufferPhaseV1::Finalization)
+            .is_err()
+    );
+    assert_eq!(
+        plan.common.maximum_live_buffers + plan.common.remaining_source_and_runtime_envelope,
+        12usize << 30
+    );
+}

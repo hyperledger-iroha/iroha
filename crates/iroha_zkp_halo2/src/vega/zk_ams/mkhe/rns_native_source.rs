@@ -1,12 +1,12 @@
 //! Dependency-neutral confidential-source boundary for the replacement
 //! RNS-native MKHE proof.
 //!
-//! The ZKP crate deliberately does not depend on Iroha's filesystem or AEAD
-//! implementation.  Instead, proof orchestration accepts this narrow provider
-//! interface.  `iroha_core` implements it with the already-locked
-//! `iroha_crypto::confidential_spool` backend.  The resulting receipt is only
+//! Backend-neutral writer and authenticated snapshot interfaces separate the
+//! proof's fixed geometry from Core's filesystem custody. `iroha_core_zk`
+//! constructs the existing `iroha_crypto::confidential_spool` backend through a
+//! consuming resource-session boundary. The resulting receipt is only
 //! structural provenance: it is neither a hiding commitment nor release
-//! authority.
+//! authority. Source/key/Phase23 correspondence remains a separate obligation.
 
 use super::rns_native_profile::{
     ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1, zk_ams_mkhe_rns_native_profile_v1,
@@ -440,18 +440,6 @@ pub trait ZkAmsMkheRnsNativeSourceWriterV1: Sized {
     ) -> Result<(), ZkAmsMkheRnsNativeSourceErrorV1>;
     /// Consume the writer and authenticate both complete arenas.
     fn seal(self) -> Result<Self::Snapshot, ZkAmsMkheRnsNativeSourceErrorV1>;
-}
-
-/// Injected factory for a real confidential source backend.
-pub trait ZkAmsMkheRnsNativeSourceProviderV1 {
-    /// Concrete move-only writer created by this provider.
-    type Writer: ZkAmsMkheRnsNativeSourceWriterV1;
-
-    /// Create both fixed arenas for one validated source layout.
-    fn create(
-        &self,
-        layout: ZkAmsMkheRnsNativeSourceLayoutV1,
-    ) -> Result<Self::Writer, ZkAmsMkheRnsNativeSourceErrorV1>;
 }
 
 /// Non-authorizing structural provenance of two authenticated source arenas.

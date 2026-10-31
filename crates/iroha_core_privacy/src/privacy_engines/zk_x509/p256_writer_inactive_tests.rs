@@ -461,6 +461,9 @@ fn selected_writer_stream_keeps_source_shape_and_terminal_refusals() {
             terminal,
             running: [F::ONE; 4],
             next_row,
+            end_row: P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1,
+            end_running: terminal,
+            checkpoints: None,
         }
     }
     // Both public slots are inactive; the original source range/canonicality

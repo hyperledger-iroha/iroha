@@ -994,6 +994,15 @@ pub struct ColumnStagingPhaseStats {
     pub flatten_ms: f64,
     /// Milliseconds spent waiting for GPU completions before a staging buffer could be reused.
     pub wait_ms: f64,
+    /// Successfully completed commands with all four valid host timestamps.
+    pub timestamped_commands: u32,
+    /// GPU command execution interval, from GPU start to GPU end.
+    pub gpu_execution_ms: f64,
+    /// CPU driver scheduling interval, from kernel start to kernel end.
+    /// These are CPU timestamps, not individual GPU kernel durations.
+    pub cpu_driver_scheduling_ms: f64,
+    /// Positive gap from CPU scheduling end to GPU execution start.
+    pub pre_gpu_queue_ms: f64,
 }
 impl ColumnStagingPhaseStats {
     fn record_flatten(&mut self, duration_ms: f64) {
@@ -1002,6 +1011,12 @@ impl ColumnStagingPhaseStats {
     }
     fn record_wait(&mut self, duration_ms: f64) {
         self.wait_ms += duration_ms;
+    }
+    fn record_command_timing(&mut self, gpu_ms: f64, driver_ms: f64, queue_ms: f64) {
+        self.timestamped_commands = self.timestamped_commands.saturating_add(1);
+        self.gpu_execution_ms += gpu_ms;
+        self.cpu_driver_scheduling_ms += driver_ms;
+        self.pre_gpu_queue_ms += queue_ms;
     }
 }
 /// Per-batch sample describing how long the host spent waiting vs flattening.
@@ -1099,6 +1114,18 @@ impl ColumnStagingStats {
         self.total.record_wait(wait_ms);
         self.phase_mut(phase).record_wait(wait_ms);
         self.pending_wait.add(phase, wait_ms);
+    }
+    fn record_command_timing(
+        &mut self,
+        phase: ColumnStagingPhase,
+        gpu_ms: f64,
+        driver_ms: f64,
+        queue_ms: f64,
+    ) {
+        self.total
+            .record_command_timing(gpu_ms, driver_ms, queue_ms);
+        self.phase_mut(phase)
+            .record_command_timing(gpu_ms, driver_ms, queue_ms);
     }
 }
 #[derive(Clone, Debug, Default)]
@@ -1853,10 +1880,22 @@ fn injected_poseidon_batch_wait_failure() -> bool {
 
 impl ColumnBatchTicket {
     fn wait(self, columns: &mut [Vec<u64>], extent: usize, record_wait: bool) -> MetalResult<()> {
+        let completed = self.complete(record_wait)?;
+        #[cfg(test)]
+        let diagnostic_copy = exact_root::diagnostic_start();
+        restore_range(columns, completed.range.clone(), &completed.buffer, extent);
+        #[cfg(test)]
+        exact_root::diagnostic_copy_back(diagnostic_copy);
+        Ok(())
+    }
+
+    /// Keep the original staging and Metal view together after the final wait.
+    /// A failed or uncertain wait never returns a publishable owner.
+    fn complete(self, record_wait: bool) -> MetalResult<CompletedColumnBatch> {
         let ColumnBatchTicket {
             range,
             buffer,
-            metal_buffer: _metal,
+            metal_buffer,
             tickets,
         } = self;
         #[cfg(test)]
@@ -1869,19 +1908,24 @@ impl ColumnBatchTicket {
         let wait_start = Instant::now();
         #[cfg(test)]
         let diagnostic_wait = exact_root::diagnostic_start();
-        wait_for_tickets(tickets)?;
+        wait_for_tickets_with_staging_phase(tickets, Some(ColumnStagingPhase::Fft))?;
         #[cfg(test)]
         exact_root::diagnostic_ticket_wait(diagnostic_wait);
         if record_wait {
             record_staging_wait(ColumnStagingPhase::Fft, wait_start.elapsed());
         }
-        #[cfg(test)]
-        let diagnostic_copy = exact_root::diagnostic_start();
-        restore_range(columns, range, &buffer, extent);
-        #[cfg(test)]
-        exact_root::diagnostic_copy_back(diagnostic_copy);
-        Ok(())
+        Ok(CompletedColumnBatch {
+            range,
+            buffer,
+            _metal_buffer: metal_buffer,
+        })
     }
+}
+
+struct CompletedColumnBatch {
+    range: Range<usize>,
+    buffer: PooledBuffer,
+    _metal_buffer: Buffer,
 }
 struct PoseidonBatchTicket {
     range: Range<usize>,
@@ -4703,6 +4747,13 @@ fn wait_for_ticket(mut ticket: DispatchTicket) -> MetalResult<()> {
 }
 
 fn wait_for_ticket_inner(ticket: &mut DispatchTicket, dropping: bool) -> MetalResult<()> {
+    wait_for_ticket_inner_with_staging_phase(ticket, dropping, None)
+}
+fn wait_for_ticket_inner_with_staging_phase(
+    ticket: &mut DispatchTicket,
+    dropping: bool,
+    staging_phase: Option<ColumnStagingPhase>,
+) -> MetalResult<()> {
     let trace_label = ticket.trace_label.clone();
     let timing_start = ticket.timing_start;
     let poll = || match ticket.command.status() {
@@ -4744,6 +4795,9 @@ fn wait_for_ticket_inner(ticket: &mut DispatchTicket, dropping: bool) -> MetalRe
         });
     }
     if status == Completion::Completed {
+        if let Some(phase) = staging_phase {
+            record_completed_command_timing(phase, &ticket.command);
+        }
         #[cfg(test)]
         exact_root::diagnostic_completed_command(&ticket.command);
         if let (Some(context), Some(elapsed)) = (ticket.kernel_context.as_ref(), duration) {
@@ -4766,14 +4820,66 @@ fn wait_for_tickets<T>(tickets: T) -> MetalResult<()>
 where
     T: IntoIterator<Item = DispatchTicket>,
 {
+    wait_for_tickets_with_staging_phase(tickets, None)
+}
+fn wait_for_tickets_with_staging_phase<T>(
+    tickets: T,
+    phase: Option<ColumnStagingPhase>,
+) -> MetalResult<()>
+where
+    T: IntoIterator<Item = DispatchTicket>,
+{
     let mut failure = None;
-    for ticket in tickets {
-        if let Err(error) = wait_for_ticket(ticket) {
+    for mut ticket in tickets {
+        if let Err(error) = wait_for_ticket_inner_with_staging_phase(&mut ticket, false, phase) {
             failure.get_or_insert(error);
         }
     }
     ensure_backend_available()?;
     failure.map_or(Ok(()), Err)
+}
+
+/// Read-only Metal timestamps, solely after the authoritative completed status.
+#[allow(unsafe_code)]
+fn record_completed_command_timing(phase: ColumnStagingPhase, command: &CommandBufferRef) {
+    if !COLUMN_STAGING_STATS_ENABLED.load(Ordering::Acquire) {
+        return;
+    }
+    // SAFETY: these macOS Metal properties are available after successful command
+    // completion. Their common clock is system mach time. No command is cloned.
+    let times: (f64, f64, f64, f64) = unsafe {
+        (
+            msg_send![command, GPUStartTime],
+            msg_send![command, GPUEndTime],
+            msg_send![command, kernelStartTime],
+            msg_send![command, kernelEndTime],
+        )
+    };
+    record_command_timing_values(phase, times);
+}
+
+fn record_command_timing_values(
+    phase: ColumnStagingPhase,
+    (gpu_start, gpu_end, driver_start, driver_end): (f64, f64, f64, f64),
+) {
+    if !COLUMN_STAGING_STATS_ENABLED.load(Ordering::Acquire)
+        || [gpu_start, gpu_end, driver_start, driver_end]
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+        || gpu_end < gpu_start
+        || driver_end < driver_start
+    {
+        return;
+    }
+    let store = COLUMN_STAGING_STATS.get_or_init(|| Mutex::new(ColumnStagingStats::default()));
+    if let Ok(mut stats) = store.lock() {
+        stats.record_command_timing(
+            phase,
+            (gpu_end - gpu_start) * 1000.0,
+            (driver_end - driver_start) * 1000.0,
+            (gpu_start - driver_end).max(0.0) * 1000.0,
+        );
+    }
 }
 fn record_lde_stats(stats: LdeHostStats) {
     if !LDE_STATS_ENABLED.load(Ordering::Acquire) {
@@ -4787,8 +4893,8 @@ fn record_lde_stats(stats: LdeHostStats) {
 fn elapsed_ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000.0
 }
-fn flatten_with_stats(
-    columns: &[Vec<u64>],
+fn flatten_with_stats<T: AsRef<[u64]>>(
+    columns: &[T],
     phase: ColumnStagingPhase,
 ) -> MetalResult<PooledBuffer> {
     let start = Instant::now();
@@ -4964,11 +5070,13 @@ impl BufferPool {
             Ok(buffer)
         }
     }
-    fn recycle(&mut self, mut buffer: Vec<MetalBufferPage>) {
+    // Sensitive owners return fully initialized, erased pages. Public owners
+    // return an empty Vec so acquire_buffer initializes them before host use.
+    // Preserve that initialized extent to avoid clearing erased pages twice.
+    fn recycle(&mut self, buffer: Vec<MetalBufferPage>) {
         if !buffer_pool_capacity_is_cacheable(buffer.capacity()) {
             return;
         }
-        buffer.clear();
         self.spare.push(buffer);
         self.spare.sort_unstable_by_key(Vec::capacity);
         if self.spare.len() > MAX_BUFFER_POOL_BUFFERS {
@@ -4986,6 +5094,14 @@ impl BufferPool {
         self.spare.len()
     }
 }
+// Eight MiB amortizes worker scheduling; each task clears one MiB in place.
+const COMPLETED_ERASE_MIN_PAGES_V1: usize = (8 << 20) / METAL_BUFFER_PAGE_BYTES;
+const COMPLETED_ERASE_TILE_PAGES_V1: usize = (1 << 20) / METAL_BUFFER_PAGE_BYTES;
+#[cfg(test)]
+std::thread_local! {
+    static COMPLETED_ERASE_PARALLEL_CALLS_V1: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 struct PooledBufferBacking {
     pages: Vec<MetalBufferPage>,
     logical_len: usize,
@@ -4993,22 +5109,80 @@ struct PooledBufferBacking {
 }
 impl PooledBufferBacking {
     fn wipe_sensitive_pages(&mut self) {
-        if self.sensitive {
-            use zeroize::Zeroize as _;
+        self.wipe_sensitive_pages_with_v1(false);
+    }
+
+    // Only explicit successful completion may request worker cleanup. Ordinary
+    // Drop also runs on device deallocator threads and must remain sequential.
+    fn wipe_sensitive_pages_with_v1(&mut self, completed_success: bool) {
+        if !self.sensitive {
+            return;
+        }
+        use rayon::prelude::*;
+        use zeroize::Zeroize as _;
+        let parallel = completed_success
+            && !std::thread::panicking()
+            && self.pages.len() >= COMPLETED_ERASE_MIN_PAGES_V1
+            && rayon::current_num_threads() > 1;
+        if parallel {
+            #[cfg(test)]
+            COMPLETED_ERASE_PARALLEL_CALLS_V1.with(|calls| calls.set(calls.get() + 1));
+            self.pages
+                .par_chunks_mut(COMPLETED_ERASE_TILE_PAGES_V1)
+                .for_each(|pages| {
+                    for page in pages {
+                        page.words.zeroize();
+                    }
+                });
+        } else {
             for page in &mut self.pages {
                 page.words.zeroize();
-                #[cfg(test)]
-                crate::gpu_secret::observe_cleared_words(&page.words);
             }
         }
+        // Observation is thread-local. Every worker has joined before the
+        // initiating thread observes the same complete logical/padding extent.
+        #[cfg(test)]
+        for page in &self.pages {
+            crate::gpu_secret::observe_cleared_words(&page.words);
+        }
+    }
+
+    fn recycle_completed_v1(&mut self) {
+        #[cfg(test)]
+        let diagnostic_drop = exact_root::diagnostic_start();
+        self.wipe_sensitive_pages_with_v1(true);
+        let mut pages = mem::take(&mut self.pages);
+        if !self.sensitive {
+            pages.clear();
+        }
+        if pages.capacity() == 0 {
+            return;
+        }
+        if let Ok(mut pool) = buffer_pool().lock() {
+            pool.recycle(pages);
+        }
+        #[cfg(test)]
+        exact_root::diagnostic_backing_drop(diagnostic_drop);
+    }
+
+    /// Preserve the initialized extent only after the complete sensitive erase.
+    /// Public buffers keep the original clear/resize initialization on reuse.
+    /// Exact capacity, zero padding and private erasure are independent of the
+    /// cache decision; oversized/evicted private allocations are erased too.
+    fn take_recyclable_pages(&mut self) -> Vec<MetalBufferPage> {
+        self.wipe_sensitive_pages();
+        let mut pages = mem::take(&mut self.pages);
+        if !self.sensitive {
+            pages.clear();
+        }
+        pages
     }
 }
 impl Drop for PooledBufferBacking {
     fn drop(&mut self) {
         #[cfg(test)]
         let diagnostic_drop = exact_root::diagnostic_start();
-        self.wipe_sensitive_pages();
-        let pages = mem::take(&mut self.pages);
+        let pages = self.take_recyclable_pages();
         if pages.capacity() == 0 {
             return;
         }
@@ -5023,6 +5197,15 @@ struct PooledBuffer {
     backing: Arc<PooledBufferBacking>,
 }
 impl PooledBuffer {
+    // Call only after authoritative completion and release of every owned Metal
+    // view. A delayed deallocator retention defeats exclusivity and safely uses
+    // the original sequential final Drop; never wait or mutate shared backing.
+    fn erase_completed_v1(self) {
+        if let Ok(mut backing) = Arc::try_unwrap(self.backing) {
+            backing.recycle_completed_v1();
+        }
+    }
+
     fn from_pages(pages: Vec<MetalBufferPage>, logical_len: usize) -> Self {
         Self {
             backing: Arc::new(PooledBufferBacking {
@@ -5044,10 +5227,10 @@ impl PooledBuffer {
             .sensitive = true;
         Ok(buffer)
     }
-    fn from_columns(columns: &[Vec<u64>]) -> MetalResult<Self> {
+    fn from_columns<T: AsRef<[u64]>>(columns: &[T]) -> MetalResult<Self> {
         let total_len = columns.iter().try_fold(0usize, |total, column| {
             total
-                .checked_add(column.len())
+                .checked_add(column.as_ref().len())
                 .ok_or(GpuError::InvalidInput(
                     "Metal pooled column buffer length exceeds platform limits",
                 ))
@@ -5055,6 +5238,7 @@ impl PooledBuffer {
         let mut buffer = Self::sensitive_zeroed(total_len)?;
         let mut offset = 0usize;
         for column in columns {
+            let column = column.as_ref();
             buffer.copy_from_slice_at(offset, column);
             offset += column.len();
         }
@@ -5942,3 +6126,7 @@ mod helper_tests;
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 #[path = "metal_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "metal_completed_erase_tests.rs"]
+mod completed_erase_tests;

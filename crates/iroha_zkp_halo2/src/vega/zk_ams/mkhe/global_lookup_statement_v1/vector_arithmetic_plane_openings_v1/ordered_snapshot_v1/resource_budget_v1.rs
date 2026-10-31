@@ -14,7 +14,7 @@ use crate::vega::zk_ams::mkhe::rns_native_profile::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in super::super) enum StorageBudgetErrorV1 {
+pub(in crate::vega::zk_ams::mkhe) enum StorageBudgetErrorV1 {
     Overflow,
     SpoolLimit,
     IoLimit,
@@ -23,11 +23,11 @@ pub(in super::super) enum StorageBudgetErrorV1 {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(in super::super) struct StorageUsageV1 {
-    pub(in super::super) live_spool_bytes: u64,
-    pub(in super::super) peak_spool_bytes: u64,
-    pub(in super::super) reserved_io_bytes: u64,
-    pub(in super::super) attempted_io_bytes: u64,
+pub(in crate::vega::zk_ams::mkhe) struct StorageUsageV1 {
+    pub(in crate::vega::zk_ams::mkhe) live_spool_bytes: u64,
+    pub(in crate::vega::zk_ams::mkhe) peak_spool_bytes: u64,
+    pub(in crate::vega::zk_ams::mkhe) reserved_io_bytes: u64,
+    pub(in crate::vega::zk_ams::mkhe) attempted_io_bytes: u64,
 }
 
 struct StorageLedgerV1 {
@@ -61,7 +61,10 @@ impl OrderedStorageSessionBudgetV1 {
         }
     }
 
-    pub(in super::super) fn usage_v1(&self) -> Result<StorageUsageV1, StorageBudgetErrorV1> {
+    #[cfg(test)]
+    pub(in crate::vega::zk_ams::mkhe) fn usage_v1(
+        &self,
+    ) -> Result<StorageUsageV1, StorageBudgetErrorV1> {
         Ok(*self.ledger.lock_v1()?)
     }
 
@@ -78,7 +81,7 @@ impl OrderedStorageSessionBudgetV1 {
 
     // Admission completes before any admitted file is created/sized. The caller
     // retains this move-only reservation after all leaves for field drop order.
-    pub(super) fn reserve_files_v1(
+    pub(in crate::vega::zk_ams::mkhe) fn reserve_files_v1(
         &mut self,
         spool_bytes: u64,
     ) -> Result<OrderedStorageReservationV1, StorageBudgetErrorV1> {
@@ -136,7 +139,7 @@ impl OrderedStorageSessionBudgetV1 {
 
 /// Move-only custody of exact file lengths and unspent write/seal I/O.
 /// Drop refunds only live file lengths and unattempted reserved operations.
-pub(super) struct OrderedStorageReservationV1 {
+pub(in crate::vega::zk_ams::mkhe) struct OrderedStorageReservationV1 {
     ledger: Arc<StorageLedgerV1>,
     spool_bytes: u64,
     reserved_io_bytes: u64,
@@ -144,7 +147,8 @@ pub(super) struct OrderedStorageReservationV1 {
 
 impl OrderedStorageReservationV1 {
     /// Reserve another exact file under this same sealed parent's ledger.
-    pub(super) fn reserve_sibling_file_v1(
+    #[cfg(test)]
+    pub(in crate::vega::zk_ams::mkhe) fn reserve_sibling_file_v1(
         &self,
         spool_bytes: u64,
     ) -> Result<Self, StorageBudgetErrorV1> {
@@ -156,7 +160,10 @@ impl OrderedStorageReservationV1 {
     }
 
     /// Consume already-reserved write/seal bytes before calling the actual leaf.
-    pub(super) fn charge_reserved_io_v1(&mut self, bytes: u64) -> Result<(), StorageBudgetErrorV1> {
+    pub(in crate::vega::zk_ams::mkhe) fn charge_reserved_io_v1(
+        &mut self,
+        bytes: u64,
+    ) -> Result<(), StorageBudgetErrorV1> {
         if bytes == 0 || bytes > self.reserved_io_bytes {
             return Err(StorageBudgetErrorV1::Order);
         }
@@ -176,7 +183,9 @@ impl OrderedStorageReservationV1 {
     }
 
     /// A sealed pair cannot retain a skipped write/seal reservation.
-    pub(super) fn require_sealed_v1(&self) -> Result<(), StorageBudgetErrorV1> {
+    pub(in crate::vega::zk_ams::mkhe) fn require_sealed_v1(
+        &self,
+    ) -> Result<(), StorageBudgetErrorV1> {
         let _guard = self.ledger.lock_v1()?;
         if self.reserved_io_bytes != 0 {
             return Err(StorageBudgetErrorV1::Order);
@@ -185,7 +194,10 @@ impl OrderedStorageReservationV1 {
     }
 
     /// Authorize one authenticated record read without borrowing another budget.
-    pub(super) fn charge_read_io_v1(&mut self, bytes: u64) -> Result<(), StorageBudgetErrorV1> {
+    pub(in crate::vega::zk_ams::mkhe) fn charge_read_io_v1(
+        &mut self,
+        bytes: u64,
+    ) -> Result<(), StorageBudgetErrorV1> {
         if bytes == 0 || self.reserved_io_bytes != 0 {
             return Err(StorageBudgetErrorV1::Order);
         }

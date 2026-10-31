@@ -260,7 +260,7 @@ scalar path, measured with `iroha_measurement` under
 | Evaluation-key generation | 10,222.6 ms | 31,657.8 ms | 3.10 |
 | Evaluation total, fastest to slowest of 3 and 3 runs | 15,240.6 ms to 16,756.1 ms | 38,850.0 ms to 39,861.2 ms | |
 | Evaluation keys (canonical frames) | 2,112.0 MiB | 6,188.0 MiB | 2.93 |
-| Input ciphertext (canonical frame) | 22.0 MiB | 25.0 MiB | 1.14 |
+| Input ciphertext (recorded historical frame) | 22.0 MiB | 25.0 MiB | 1.14 |
 | Process peak resident memory | 2,651.2 MiB | 6,809.9 MiB | 2.57 |
 | Main and special primes | 22 + 2 of 50 and 60 bits | 25 + 3 of 60 and 60 bits | |
 | System load at the start of the run | 13.2 | 11.1 | |
@@ -529,11 +529,15 @@ The seven Galois-key roles and relinearization role must be authenticated from
 the typed policy. The old diagnostic bundle's prohibition of rotation keys
 cannot be reused for this replacement. Required actual level/basis variants,
 decomposition digits, special primes and key sizes remain explicit unresolved
-profile requirements. No bootstrap/refresh algorithm is implemented. The
-`refresh.v1` class fixes only where a refresh occurs and how many are allowed:
-its schedule is a function of the tape and is private with it. A future reviewed
-encryption profile must specify the complete refresh/sanitization algorithm,
-extra authenticated keys, exact arithmetic and resource/noise rules. A refresh
+profile requirements. The shared local bootstrap now implements genuine
+homomorphic decryption, coefficient extraction, matched upper digits and inverse
+reconstruction through one consuming bank stream; see the
+[current implementation and qualification limits](ram_lfe_encryption_replacement.md).
+It does not activate a qualified `refresh.v1` application profile. That class
+fixes where refresh occurs and how many are allowed: its schedule is a function
+of the tape and is private with it. A reviewed production profile must still
+supply authenticated keys, external source and execution proofs, circuit privacy,
+and complete arithmetic, resource and noise qualification. A refresh
 mask is not a bootstrap, and no implicit modulus reset is permitted.
 
 ### Resource accounting and unresolved qualification

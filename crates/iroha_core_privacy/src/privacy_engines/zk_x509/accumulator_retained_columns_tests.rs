@@ -200,3 +200,175 @@ fn malformed_native_ca_input_is_cleared_before_any_entropy_is_read() {
         assert!(observations.iter().all(|item| item.nonzero_after == 0));
     }
 }
+
+fn public_coefficients_v1() -> CaOriginalMaskedColumnsV1 {
+    let count = ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1 + CA_MASK_DEGREE_V1 + 1;
+    CaOriginalMaskedColumnsV1 {
+        family: CaColumnFamilyV1::Auxiliary,
+        columns: PrivateTableV1::new(
+            (0..CaColumnFamilyV1::Auxiliary.width_v1())
+                .map(|column| {
+                    (0..count)
+                        .map(|degree| F::reduce((column * 17 + degree * degree + 3) as u128))
+                        .collect()
+                })
+                .collect(),
+            clear_columns_v1,
+        ),
+    }
+}
+
+#[test]
+fn parallel_ca_local_lde_matches_original_columns_and_exact_matrix_capacities() {
+    let owner = public_coefficients_v1();
+    let pointers = owner
+        .columns
+        .iter()
+        .map(|column| column.as_ptr())
+        .collect::<Vec<_>>();
+    let serial = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    for workers in [1, 4, 20] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        let actual = pool.install(|| owner.local_lde_v1()).unwrap();
+        assert_eq!(actual.len(), owner.family.width_v1());
+        assert_eq!(actual.capacity(), actual.len());
+        for (index, column) in actual.iter().enumerate() {
+            let reference = serial.install(|| owner.column_lde_v1(index)).unwrap();
+            assert_eq!(column, &*reference);
+            assert_eq!(column.len(), 1 << ZK_X509_CA_FRI_LDE_LOG2_V1);
+            assert_eq!(column.capacity(), column.len());
+        }
+        assert_eq!(
+            owner
+                .columns
+                .iter()
+                .map(|column| column.as_ptr())
+                .collect::<Vec<_>>(),
+            pointers
+        );
+    }
+}
+
+#[test]
+fn parallel_ca_local_lde_rejects_original_shape_errors_before_workers() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for malformed in 0..4 {
+        let mut owner = public_coefficients_v1();
+        let index = 3;
+        match malformed {
+            0 => owner.columns[index].clear(),
+            1 => owner.columns[index].resize((1 << ZK_X509_CA_FRI_LDE_LOG2_V1) + 1, F::ONE),
+            2 => owner.columns[index][0] = F(u64::MAX),
+            _ => {
+                owner.columns.truncate(index);
+            }
+        }
+        let expected = owner.column_lde_v1(index).err().unwrap();
+        let calls = AtomicUsize::new(0);
+        let result = owner.local_lde_with_v1(|_, _, _, _, _| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        });
+        assert_eq!(result.err().unwrap(), expected);
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+}
+
+#[test]
+fn parallel_ca_local_lde_selects_first_error_and_clears_all_outputs_on_unwind() {
+    let owner = public_coefficients_v1();
+    let width = owner.family.width_v1();
+    let rows = 1 << ZK_X509_CA_FRI_LDE_LOG2_V1;
+    for unwind in [false, true] {
+        let (result, cleared) = inspection::observe_v1(|| {
+            catch_unwind(AssertUnwindSafe(|| {
+                owner.local_lde_with_v1(|index, _, target, _, _| {
+                    target.fill(F((index + 1) as u64));
+                    if index == 9 {
+                        assert!(!unwind, "injected CA local column panic");
+                        return Err(ZkX509CaAccumulatorProofErrorV1::Resource);
+                    }
+                    if index == 13 {
+                        return Err(ZkX509CaAccumulatorProofErrorV1::ConstraintOpening);
+                    }
+                    Ok(())
+                })
+            }))
+        });
+        if unwind {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(
+                result.unwrap().err().unwrap(),
+                ZkX509CaAccumulatorProofErrorV1::Resource
+            );
+        }
+        assert_eq!(
+            cleared.iter().filter(|entry| entry.cells == rows).count(),
+            width
+        );
+        assert!(cleared.iter().all(|entry| entry.nonzero_after == 0));
+        assert!(cleared.iter().any(|entry| entry.nonzero_before != 0));
+        assert_eq!(owner.column_v1(0).unwrap()[0], F(3));
+    }
+    let ((), cleared) = inspection::observe_v1(|| {
+        drop(owner.local_lde_v1().unwrap());
+    });
+    assert_eq!(
+        cleared.iter().filter(|entry| entry.cells == rows).count(),
+        width
+    );
+    assert!(cleared.iter().all(|entry| entry.nonzero_after == 0));
+}
+
+#[test]
+#[ignore = "optimized native CA auxiliary full-matrix scheduling cost; preserves every output"]
+fn ca_local_lde_parallel_column_cost_preserves_full_matrix() {
+    use std::time::Instant;
+    let owner = public_coefficients_v1();
+    for round in 0..2 {
+        let mut originals = None;
+        let mut parallel = None;
+        let mut timings = [std::time::Duration::ZERO; 2];
+        for coarse in if round % 2 == 0 {
+            [false, true]
+        } else {
+            [true, false]
+        } {
+            let start = Instant::now();
+            let result = if coarse {
+                owner.local_lde_v1().unwrap()
+            } else {
+                let mut columns = PrivateTableV1::new(Vec::new(), clear_columns_v1);
+                columns.try_reserve_exact(owner.family.width_v1()).unwrap();
+                for index in 0..owner.family.width_v1() {
+                    columns.push(owner.column_lde_v1(index).unwrap().into_vec());
+                }
+                columns
+            };
+            timings[usize::from(coarse)] = start.elapsed();
+            if coarse {
+                parallel = Some(result);
+            } else {
+                originals = Some(result);
+            }
+        }
+        assert_eq!(
+            &**originals.as_ref().unwrap(),
+            &**parallel.as_ref().unwrap()
+        );
+        eprintln!(
+            "ca_local_lde rows=65536 columns={} round={round} workers={} original_serial_columns_inner_parallel_ns={} parallel_columns_coarse_fft_ns={} parity=exact includes=allocation-scaling-fft excludes=source-sampling-drop",
+            owner.family.width_v1(),
+            rayon::current_num_threads(),
+            timings[0].as_nanos(),
+            timings[1].as_nanos()
+        );
+    }
+}

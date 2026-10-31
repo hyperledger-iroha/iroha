@@ -415,9 +415,7 @@ impl MainShaUnionPlanV1 {
         ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
     ) -> Result<(), ZkX509StarkErrorV1> {
         use super::super::super::private_table::{PrivateTableV1, zeroize_field_rows_v1};
-        use fastpq_prover::goldilocks_transform::{
-            goldilocks_transform_completion_uncertain_v1, transform_goldilocks_columns_v1,
-        };
+        use fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1;
         if *self != Self::new_v1(layout)?
             || alphas.len() != UNION_QUOTIENTS_V1
             || alphas.iter().any(|alpha| !alpha.is_canonical())
@@ -539,17 +537,9 @@ impl MainShaUnionPlanV1 {
                     .par_iter_mut()
                     .zip(coefficients.par_iter())
                     .try_for_each(|(output, source)| stripe.fold_into_v1(source, output))?;
-                policy.forward_with_v1(
+                policy.forward_exact_v1(
                     active_batch,
                     stripe.root,
-                    &mut |words: &mut [Vec<u64>], root, direction| {
-                        transform_goldilocks_columns_v1(
-                            words,
-                            root,
-                            direction,
-                            fastpq_prover::ExecutionMode::Auto,
-                        )
-                    },
                     &mut goldilocks_transform_completion_uncertain_v1,
                 )?;
                 for (index, source) in active_batch.iter().enumerate() {

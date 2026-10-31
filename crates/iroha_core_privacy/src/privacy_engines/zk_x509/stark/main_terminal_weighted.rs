@@ -4,10 +4,11 @@
 
 use super::super::super::super::private_table::{zeroize_field_rows_v1, zeroize_words_v1};
 use super::*;
+use fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1;
+#[cfg(test)]
 use fastpq_prover::goldilocks_transform::{
     GoldilocksTransformBackendV1 as Backend, GoldilocksTransformDirectionV1 as Direction,
-    GoldilocksTransformErrorV1 as TransformError, goldilocks_transform_completion_uncertain_v1,
-    transform_goldilocks_columns_v1,
+    GoldilocksTransformErrorV1 as TransformError, transform_goldilocks_columns_v1,
 };
 
 type Fields = PrivateTableV1<F>;
@@ -320,7 +321,7 @@ pub(super) fn accumulate_v1(
 ) -> Result<(), ZkX509StarkErrorV1> {
     polynomials.validate_v1(layout, MainTraceColumnKindV1::Aux)?;
     let widths = family_widths_v1(plan, layout)?;
-    accumulate_with_batches_v1(
+    accumulate_with_native_batches_v1(
         &plan.links,
         &widths,
         alphas,
@@ -347,14 +348,7 @@ pub(super) fn accumulate_v1(
             }
             Ok(masks[0].coefficients())
         },
-        |words, root, direction| {
-            transform_goldilocks_columns_v1(
-                words,
-                root,
-                direction,
-                fastpq_prover::ExecutionMode::Auto,
-            )
-        },
+        &mut main_native_transform::ExactNativeTransformV1,
         goldilocks_transform_completion_uncertain_v1,
     )
 }
@@ -391,7 +385,35 @@ fn accumulate_with_v1<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn accumulate_with_batches_v1<'a>(
+    links: &[LinkV1],
+    widths: &[u8; 2 * LINK_COUNT_V1],
+    alphas: &[E],
+    masks: usize,
+    policy: main_bounded_transform::MainBoundedTransformPolicyV1,
+    chunk: &mut Vec<E>,
+    native: impl FnMut(ColumnV1, usize) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
+    original_mask: impl FnMut(ColumnV1) -> Result<&'a [F], ZkX509StarkErrorV1>,
+    transform: impl FnMut(&mut [Vec<u64>], u64, Direction) -> Result<Backend, TransformError>,
+    uncertain: impl FnMut() -> bool,
+) -> Result<(), ZkX509StarkErrorV1> {
+    accumulate_with_native_batches_v1(
+        links,
+        widths,
+        alphas,
+        masks,
+        policy,
+        chunk,
+        native,
+        original_mask,
+        &mut main_native_transform::WordInjectionV1(transform),
+        uncertain,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn accumulate_with_native_batches_v1<'a>(
     links: &[LinkV1],
     widths: &[u8; 2 * LINK_COUNT_V1],
     alphas: &[E],
@@ -403,7 +425,7 @@ fn accumulate_with_batches_v1<'a>(
         usize,
     ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
     mut original_mask: impl FnMut(ColumnV1) -> Result<&'a [F], ZkX509StarkErrorV1>,
-    mut transform: impl FnMut(&mut [Vec<u64>], u64, Direction) -> Result<Backend, TransformError>,
+    transform: &mut impl main_native_transform::MainNativeTransformV1,
     mut uncertain: impl FnMut() -> bool,
 ) -> Result<(), ZkX509StarkErrorV1> {
     if links.is_empty()
@@ -541,24 +563,22 @@ fn accumulate_with_batches_v1<'a>(
                         return Err(ZkX509StarkErrorV1::ConstraintOpening);
                     }
                     let scale = if side == 0 { alpha } else { E::ZERO.sub(alpha) };
-                    scalar[1] = scalar[0].mul(diagonal);
-                    let mut x = F::ONE;
-                    for row in 0..rows {
-                        if row != endpoint {
-                            scalar[2] = values[row].sub(scalar[0]).mul(inverse[row]);
-                            // L_i'(a) = -x_i/(a*(x_i-a)); only public inversion.
-                            scalar[1] = scalar[1]
-                                .sub(values[row].mul(x).mul(inverse[row]).mul(point_inverse));
-                            for lane in 0..4 {
-                                weighted[lane][row] = weighted[lane][row]
-                                    .add(scale.coefficients()[lane].mul(scalar[2]));
-                            }
+                    // Keep the individual endpoint refusal above. Only its
+                    // already-validated arithmetic is combined by linearity.
+                    // The mask-quotient buffer is empty until this point group's
+                    // native contribution is consumed below, so no new owner
+                    // or capacity is needed for the weighted native values.
+                    if rows >= 1 << 16 && rayon::current_num_threads() > 1 {
+                        quotient[..rows]
+                            .par_iter_mut()
+                            .zip(values.par_iter())
+                            .for_each(|(target, value)| {
+                                *target = target.add(scale.mul_base(*value));
+                            });
+                    } else {
+                        for (target, value) in quotient[..rows].iter_mut().zip(values.iter()) {
+                            *target = target.add(scale.mul_base(*value));
                         }
-                        x = x.mul(root);
-                    }
-                    for lane in 0..4 {
-                        weighted[lane][endpoint] =
-                            weighted[lane][endpoint].add(scale.coefficients()[lane].mul(scalar[1]));
                     }
                     for (target, &value) in weighted_mask.iter_mut().zip(mask) {
                         *target = target.add(scale.mul_base(value));
@@ -574,6 +594,33 @@ fn accumulate_with_batches_v1<'a>(
                 return Err(ZkX509StarkErrorV1::InternalInvariant);
             }
             drop(caches);
+            // For this public point, W = sum(scale * original_native).
+            // Away from the endpoint q(x)=(W(x)-W(a))/(x-a); at the endpoint
+            // q(a)=W'(a). Reuse the original four clearing scalar cells for
+            // the derivative, then consume the same buffer for mask division.
+            for lane in 0..4 {
+                scalar[lane] = quotient[endpoint].coefficients()[lane].mul(diagonal);
+            }
+            let mut x = F::ONE;
+            for row in 0..rows {
+                if row != endpoint {
+                    let derivative_factor = x.mul(inverse[row]).mul(point_inverse);
+                    for lane in 0..4 {
+                        scalar[lane] = scalar[lane]
+                            .sub(quotient[row].coefficients()[lane].mul(derivative_factor));
+                        weighted[lane][row] = weighted[lane][row].add(
+                            quotient[row].coefficients()[lane]
+                                .sub(quotient[endpoint].coefficients()[lane])
+                                .mul(inverse[row]),
+                        );
+                    }
+                }
+                x = x.mul(root);
+            }
+            for lane in 0..4 {
+                weighted[lane][endpoint] = weighted[lane][endpoint].add(scalar[lane]);
+            }
+            scalar.fill(F::ZERO);
             mask_quotient_v1(&weighted_mask, rows, point, &mut quotient)?;
             for (target, &value) in result.iter_mut().zip(quotient.iter()) {
                 *target = target.add(value);
@@ -581,7 +628,7 @@ fn accumulate_with_batches_v1<'a>(
             quotient.fill(E::ZERO);
             weighted_mask.fill(E::ZERO);
         }
-        policy.inverse_with_v1(&mut weighted, root, &mut transform, &mut uncertain)?;
+        policy.inverse_native_with_v1(&mut weighted, root, transform, &mut uncertain)?;
         for row in 0..rows {
             result[row] = result[row].add(
                 E::from_coefficients(core::array::from_fn(|lane| weighted[lane][row]))
@@ -1269,4 +1316,10 @@ mod tests {
 mod family_batch_tests {
     //! Ordered, clearing-owned family replay controls.
     include!("main_terminal_family_batch_tests.rs");
+}
+
+#[cfg(test)]
+mod linear_grouping_tests {
+    //! Test-only linear grouping candidate; production keeps the original accumulator.
+    include!("main_terminal_linear_tests.rs");
 }

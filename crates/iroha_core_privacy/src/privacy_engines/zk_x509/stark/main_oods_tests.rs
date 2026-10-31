@@ -805,12 +805,14 @@ fn maximum_fixed_polynomials_match_verifier_at_extension_point_and_native_shifts
                 assembly.allocated_payload_bytes_v1(),
             )
             .unwrap(),
+            |registration| main_resources::MainProverBufferPlanV1::new_v1(&layout)?.quotient_cache_plan_v1(&layout, registration),
             |set| {
             let registration = set.registration;
             let index = canonical_main_registration_index_v1(&layout, registration)?;
             assert_eq!(registration.segment.trace_log2, native_log);
-            assert_eq!(set.columns.len(), prepared.rows[index].len());
-            for (column, coefficients) in set.columns.iter().enumerate() {
+            let coefficients = set.full_coefficients_for_test_v1()?;
+            assert_eq!(coefficients.len(), prepared.rows[index].len());
+            for (column, coefficients) in coefficients.iter().enumerate() {
                 let [actual, shifted] = powers.evaluate_v1(coefficients)?;
                 assert_eq!(
                     actual, prepared.rows[index][column],

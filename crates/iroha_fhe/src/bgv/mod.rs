@@ -10,12 +10,23 @@
 //! candidates of [`BgvCandidate`] have no reviewed security estimate, no
 //! circuit-privacy construction, no client well-formedness proof and no
 //! verifiable opening. Those belong to the tasks that consume this module.
+//! [`LocalBootstrapKey`] supplies a closed local construction: its matching
+//! encrypted secret, exact homomorphic input, coefficient transforms and
+//! upper-digit execution use the same canonical master profile. It accepts no
+//! imported source/key authority and does not qualify the candidate parameters.
 //!
 //! # Ring, chain and levels
 //!
 //! `R = Z[X] / (X^N + 1)` with `N` a power of two. A profile pins main primes
 //! `q_0, ..., q_L` and special primes `p_0, ..., p_(K-1)`, all congruent to
-//! one modulo `2 * N * t`. A ciphertext at level `l` lives modulo
+//! one modulo `2 * N * t`, where the master modulus is `t = p^E` for an
+//! odd base prime `p`. Each plaintext/ciphertext shape also binds an effective
+//! exponent `1 <= k <= E`, with modulus `p^k`. The master modulus stays below
+//! `2^31`; all keys, sampled errors and congruent scale-down plans use it.
+//! Ordinary arithmetic preserves `k` and refuses mixed precisions. Only the
+//! concrete upper-digit executor lowers precision on its validated tableau;
+//! no generic public precision cast, division or noise reset is exposed.
+//! A ciphertext at level `l` lives modulo
 //! `Q_l = q_0 * ... * q_l`. Polynomials are limb-major canonical residues in
 //! coefficient form; that is also the canonical encoding.
 //!
@@ -23,9 +34,11 @@
 //!
 //! - Secret key `s`: uniform ternary coefficients.
 //! - Public key: `a` uniform modulo `Q_L`, `e` an error; `b = -a*s + t*e`.
-//! - Encryption of `m` (centered modulo `t`): `u` uniform ternary, errors
+//! - Encryption of `m` (centered modulo the effective `p^k`): `u` uniform ternary, errors
 //!   `e0, e1`; `c0 = b*u + t*e0 + m`, `c1 = a*u + t*e1`.
-//! - Decryption: `v = [c0 + c1*s]` centered modulo `Q_l`; `m = v mod t`.
+//! - Decryption: `v = [c0 + c1*s]` centered modulo `Q_l`; `m = v mod p^k`.
+//!   One level-owned conversion target computes `v mod p^E`, followed by a
+//!   canonical constant-time reduction modulo `p^k`.
 //! - Addition and plaintext operations act component-wise; multiplication
 //!   forms the tensor `(a0*b0, a0*b1 + a1*b0, a1*b1)` and relinearizes it.
 //! - Modulus switching drops `q_l` with the congruence-preserving rule of
@@ -64,9 +77,9 @@
 //! formulas are in [`noise`]; [`plan`] applies them to the public shape of a
 //! ciphertext, and every operation takes the shape of its result from there,
 //! so a sequence of operations can be planned without a key or a ciphertext
-//! and is admitted on ciphertexts exactly when its plan is. Decryption fails
-//! exactly when the infinity norm
-//! of the true `v` exceeds the capacity; because every sampled error has
+//! and is admitted on ciphertexts exactly when its plan is. An unwrapped
+//! phase within capacity guarantees correct decryption; exceeding capacity
+//! loses that guarantee and may shift the plaintext. Because every sampled error has
 //! magnitude at most 21 with certainty, a ciphertext produced from honest
 //! coins by admitted operations never fails. The bound is worst case and
 //! therefore pessimistic by many bits; that cost is part of the candidate.
@@ -91,7 +104,9 @@
 //! [`crate::constant_time`], [`crate::ntt_plan`] and [`crate::rns_chain`].
 //! Rejection sampling leaks only how many candidates were rejected, which is
 //! independent of the accepted values.
+mod bootstrap;
 mod cipher;
+mod coefficient_slots;
 pub mod coins;
 pub mod cost;
 mod encoding;
@@ -101,19 +116,45 @@ mod fault;
 #[cfg(any(test, feature = "bgv-test-fixtures"))]
 pub mod fixtures;
 mod keys;
+mod metadata;
 pub mod noise;
 pub mod plan;
 mod poly;
 mod profile;
+mod relative_trace;
+mod routing;
 pub mod threshold;
+mod upper_digits;
 
+pub use bootstrap::{
+    BootstrapBudget, BootstrapError, BootstrapMetadata, BootstrapPayload, BootstrapPlan,
+    LocalBootstrapCiphertext, LocalBootstrapKey, LocalBootstrapSetupBudget,
+};
 pub use cipher::{Ciphertext, Plaintext, PlaintextBound};
+pub use coefficient_slots::{
+    CoefficientSlotBanks, CoefficientSlotBudget, CoefficientSlotDecomposition,
+    CoefficientSlotError, CoefficientSlotOperations, CoefficientSlotPayload,
+    CoefficientSlotRecomposition,
+};
 pub use coins::{COIN_SEED_BYTES, ERROR_BOUND, ERROR_ETA};
 pub use encoding::SlotEncoding;
 pub use keys::{EvaluationKeys, KeySet, PublicKey, SecretKey, SwitchingKey, SwitchingKeyKind};
+pub use metadata::{PlanMetadataError, PlanMetadataRequirement};
 pub use noise::NoiseBound;
 pub use plan::CiphertextShape;
-pub use profile::{BgvCandidate, BgvParameters, BgvProfile, ParameterDefect};
+pub use profile::{BgvCandidate, BgvParameters, BgvProfile, ParameterDefect, PlaintextPrecision};
+pub use relative_trace::{
+    RelativeTraceBudget, RelativeTraceDecompositionPlan, RelativeTraceError,
+    RelativeTraceOperations, RelativeTracePayload, RelativeTraceRecompositionPlan,
+};
+pub use routing::{
+    SlotLinearBudget, SlotLinearError, SlotLinearLayout, SlotLinearMap, SlotLinearPlan,
+    SlotLinearSegment,
+};
+pub use upper_digits::{
+    EncryptedUpperDigitsPlan, UpperDigitsBudget, UpperDigitsError, UpperDigitsOperations,
+    UpperDigitsPayload,
+};
 
 use crate::{automorphism::AutomorphismError, ntt_plan::NttPlanError, rns_chain::RnsChainError};
 use thiserror::Error;
@@ -130,6 +171,12 @@ pub enum BgvError {
     /// An object belongs to another profile.
     #[error("object belongs to another BGV profile")]
     ProfileMismatch,
+    /// Effective plaintext precision is outside its master profile.
+    #[error("invalid effective plaintext precision")]
+    InvalidPlaintextPrecision,
+    /// Operands use different effective plaintext precisions.
+    #[error("effective plaintext precisions differ")]
+    PlaintextPrecisionMismatch,
     /// A level is above the top level of the profile.
     #[error("level {level} exceeds the top level {top}")]
     LevelOutOfRange {
@@ -204,6 +251,9 @@ pub enum BgvError {
     /// A canonical frame is malformed.
     #[error("malformed canonical frame")]
     MalformedFrame,
+    /// A publicly sized canonical frame or decoded residue allocation was refused.
+    #[error("canonical frame allocation failed")]
+    Allocation,
     /// An arithmetic kernel rejected its input; this indicates an internal shape error.
     #[error("arithmetic kernel rejected its input")]
     Kernel,

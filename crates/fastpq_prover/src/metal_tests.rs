@@ -1109,6 +1109,64 @@ fn buffer_pool_tiny_loan_stays_bounded_after_public_digest_refill() {
 }
 
 #[test]
+fn recycled_sensitive_pages_remain_initialized_and_public_pages_reinitialize() {
+    use crate::gpu_secret::ErasureObservation;
+
+    for sensitive in [false, true] {
+        let mut pool = BufferPool::default();
+        let mut pages = pool.take(2).unwrap();
+        pages.resize_with(2, MetalBufferPage::zeroed);
+        for page in &mut pages {
+            page.words.fill(23);
+        }
+        let pointer = pages.as_ptr();
+        let mut backing = PooledBufferBacking {
+            pages,
+            logical_len: METAL_BUFFER_PAGE_WORDS + 3,
+            sensitive,
+        };
+        let observation = ErasureObservation::begin();
+        let pages = backing.take_recyclable_pages();
+        assert!(backing.pages.is_empty());
+        assert_eq!(pages.as_ptr(), pointer);
+        assert_eq!(pages.capacity(), 2);
+        assert_eq!(pages.len(), if sensitive { 2 } else { 0 });
+        assert_eq!(
+            observation.counts(),
+            (
+                if sensitive {
+                    2 * METAL_BUFFER_PAGE_WORDS
+                } else {
+                    0
+                },
+                0
+            )
+        );
+        pool.recycle(pages);
+        let mut reused = pool.take(2).unwrap();
+        assert_eq!(reused.as_ptr(), pointer);
+        assert_eq!(reused.capacity(), 2);
+        let mut initialized = 0;
+        reused.resize_with(2, || {
+            initialized += 1;
+            MetalBufferPage::zeroed()
+        });
+        assert_eq!(initialized, if sensitive { 0 } else { 2 });
+        // Includes every padding word outside the old logical extent.
+        assert!(
+            reused
+                .iter()
+                .all(|page| page.words.iter().all(|word| *word == 0))
+        );
+        assert_eq!(reused.len(), reused.capacity());
+        drop(observation);
+        // Repeated extraction/drop cannot erase or return the same owner twice.
+        assert!(backing.take_recyclable_pages().is_empty());
+        drop(backing);
+    }
+}
+
+#[test]
 fn pooled_buffer_zeroed_is_preinitialized() {
     let buffer = PooledBuffer::zeroed(4).expect("allocate pooled buffer");
     assert_eq!(buffer.to_vec().expect("copy pooled buffer"), [0, 0, 0, 0]);
@@ -1334,6 +1392,17 @@ fn poseidon_dispatch_staging_uses_deeper_completion_backed_pipe() {
 #[test]
 fn column_staging_stats_capture_events() {
     super::enable_queue_depth_stats(true);
+    super::record_command_timing_values(super::ColumnStagingPhase::Fft, (3.0, 5.0, 1.0, 2.0));
+    super::record_command_timing_values(super::ColumnStagingPhase::Fft, (7.0, 8.0, 6.0, 9.0));
+    for invalid in [
+        (0.0, 5.0, 1.0, 2.0),
+        (3.0, 2.0, 1.0, 2.0),
+        (3.0, 5.0, 2.0, 1.0),
+        (f64::NAN, 5.0, 1.0, 2.0),
+        (3.0, f64::INFINITY, 1.0, 2.0),
+    ] {
+        super::record_command_timing_values(super::ColumnStagingPhase::Fft, invalid);
+    }
     super::record_staging_wait(super::ColumnStagingPhase::Fft, Duration::from_millis(2));
     super::record_staging_flatten(super::ColumnStagingPhase::Fft, Duration::from_millis(5));
     super::record_staging_flatten(
@@ -1341,11 +1410,43 @@ fn column_staging_stats_capture_events() {
         Duration::from_millis(3),
     );
     let stats = super::take_column_staging_stats().expect("staging stats captured");
+    assert_eq!(
+        super::take_column_staging_stats()
+            .unwrap()
+            .total()
+            .timestamped_commands,
+        0
+    );
     super::enable_queue_depth_stats(false);
+    super::record_command_timing_values(super::ColumnStagingPhase::Fft, (3.0, 5.0, 1.0, 2.0));
+    assert!(super::take_column_staging_stats().is_none());
+    assert_eq!(
+        super::COLUMN_STAGING_STATS
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .total()
+            .timestamped_commands,
+        0
+    );
     let total = stats.total();
     assert_eq!(total.batches, 2);
     assert!((total.flatten_ms - 8.0).abs() < f64::EPSILON);
     assert!((total.wait_ms - 2.0).abs() < f64::EPSILON);
+    assert_eq!(total.timestamped_commands, 2);
+    assert_eq!(total.gpu_execution_ms, 3000.0);
+    assert_eq!(total.cpu_driver_scheduling_ms, 4000.0);
+    assert_eq!(total.pre_gpu_queue_ms, 1000.0);
+    assert_eq!(stats.fft().timestamped_commands, 2);
+    assert_eq!(stats.fft().gpu_execution_ms, total.gpu_execution_ms);
+    assert_eq!(
+        stats.fft().cpu_driver_scheduling_ms,
+        total.cpu_driver_scheduling_ms
+    );
+    assert_eq!(stats.fft().pre_gpu_queue_ms, total.pre_gpu_queue_ms);
+    assert_eq!(stats.lde().timestamped_commands, 0);
+    assert_eq!(stats.poseidon().timestamped_commands, 0);
     assert_eq!(stats.fft().batches, 1);
     assert!((stats.fft().flatten_ms - 5.0).abs() < f64::EPSILON);
     assert!((stats.fft().wait_ms - 2.0).abs() < f64::EPSILON);

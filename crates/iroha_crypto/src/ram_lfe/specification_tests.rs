@@ -727,7 +727,7 @@ fn specification_states_the_normalizing_lowering_contract() {
         "- **A fixed schedule alone does not establish circuit privacy.**",
         "The `NL-S` rows are the semantic-equivalence obligations.",
         "The `NL-L` rows are the leakage obligations",
-        "No encrypted normalizer exists",
+        "An affine encrypted normal-form algorithm exists; complete qualified normalization remains open.",
         // The existing candidates stay unqualified, and folding does not
         // qualify them.
         "They are counterexamples, not a qualification. The candidates are unqualified.",
@@ -751,8 +751,16 @@ fn specification_states_the_normalizing_lowering_contract() {
     }
     // The oracle says of itself what the specification says of it.
     let oracle = repository_file("crates/iroha_crypto/src/ram_lfe/normal_form.rs");
-    assert!(oracle.contains("TODO(R.3): this is a cleartext oracle."));
-    assert!(oracle.contains("TODO(R.3): only tests call this oracle."));
+    assert!(
+        oracle
+            .contains("The sibling `bgv_affine` module consumes affine forms with genuine RNS-BGV")
+    );
+    assert!(oracle.contains("TODO(R.3, R.11): prove normalization and the encrypted relation"));
+    assert!(
+        oracle.contains(
+            "TODO: R.3 must prove that the encrypted affine evaluation uses the committed"
+        )
+    );
 }
 
 #[test]
@@ -1081,7 +1089,8 @@ const PINNED_PARAGRAPHS: [&str; 17] = [
      and the initial symbolic machine of a normalization or the plaintext column values of an \
      evaluation were written, and during unwinding. After its last reservation a \
      normalization returns no error, so no error is returned while a folded form holds data. \
-     No encrypted normalizer exists; task R.3 builds it and compares it with this oracle.",
+     The affine BGV evaluator consumes this oracle with a padded arithmetic schedule; \
+     its complete proof, privacy and qualification remain open.",
     "Never public: the tape, its instruction count, opcodes, indexes and immediates, the \
      output count, the program key, the state lanes, the plaintext input, the plaintext \
      output and every refresh point. The [normal form](#normalizing-lowering) of the tape is \

@@ -781,10 +781,21 @@ fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool
         if let Some(staging) = staging {
             let fft = staging.fft();
             record(format!(
-                "metal_fft_staging_batches={}\nmetal_fft_flatten_seconds={:.6}\nmetal_fft_wait_seconds={:.6}",
+                concat!(
+                    "metal_fft_staging_batches={}\nmetal_fft_flatten_seconds={:.6}\n",
+                    "metal_fft_wait_seconds={:.6}\nmetal_fft_timestamped_commands={}\n",
+                    "metal_fft_gpu_execution_seconds={:.6}\n",
+                    "metal_fft_cpu_driver_scheduling_seconds={:.6}\n",
+                    "metal_fft_pre_gpu_queue_seconds={:.6}\n",
+                    "metal_fft_timing_scope=successful-command-intervals-not-additive",
+                ),
                 fft.batches,
                 fft.flatten_ms / 1_000.0,
                 fft.wait_ms / 1_000.0,
+                fft.timestamped_commands,
+                fft.gpu_execution_ms / 1_000.0,
+                fft.cpu_driver_scheduling_ms / 1_000.0,
+                fft.pre_gpu_queue_ms / 1_000.0,
             ));
         }
     }

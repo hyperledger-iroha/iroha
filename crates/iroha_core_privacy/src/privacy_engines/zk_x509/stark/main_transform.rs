@@ -69,6 +69,15 @@ pub(super) struct MainTraceCosetEvaluatorV1 {
     receipt: MainTransformReceiptV1,
     // One owner for the entire joined commitment/replay; released with self.
     coset_powers: Option<PublicCosetPowersV1>,
+    // Field payload replaces the existing eight-output replay allowance. Its
+    // inline owner is included by PUBLIC_COSET_POWERS_ALLOWANCE_V1 above.
+    selected_scratch: selected_coset::SelectedScratchV1,
+}
+
+/// Outer taken owner, previous owner, fallback match binding and active matrix
+/// headers, conservatively simultaneous inside the unchanged runtime reserve.
+pub(super) const fn selected_scratch_metadata_v1() -> usize {
+    4 * core::mem::size_of::<selected_coset::SelectedScratchV1>()
 }
 
 impl MainTraceCosetEvaluatorV1 {
@@ -110,11 +119,186 @@ impl MainTraceCosetEvaluatorV1 {
             device_columns,
             receipt: MainTransformReceiptV1::default(),
             coset_powers,
+            selected_scratch: selected_coset::SelectedScratchV1::default(),
         })
     }
 
     pub(super) fn receipt_v1(&self) -> &MainTransformReceiptV1 {
         &self.receipt
+    }
+
+    /// Keep completed initial outputs in their original clearing GPU backing.
+    /// Selected replay retains its existing field outputs and pruning policy.
+    pub(super) fn evaluate_initial_v1(
+        &mut self,
+        columns: &[Column],
+        native_log: u8,
+        common_log: u8,
+    ) -> Result<
+        Vec<aggregate::initial_evaluated_column::InitialEvaluatedColumnV1>,
+        AggregateStarkErrorV1,
+    > {
+        use aggregate::initial_evaluated_column::InitialEvaluatedColumnV1 as Evaluated;
+        if self.device_columns == 0 {
+            return self
+                .evaluate_v1(columns, native_log, common_log)
+                .map(|columns| columns.into_iter().map(Evaluated::from_field_v1).collect());
+        }
+        // End a previous query matrix before every validation/dispatch/fallback.
+        self.selected_scratch.release_v1();
+        let result = self.evaluate_initial_inner_v1(columns, native_log, common_log);
+        #[cfg(test)]
+        if result.is_err() {
+            prover_observation::failed_transform_v1();
+        }
+        result
+    }
+
+    fn evaluate_initial_inner_v1(
+        &mut self,
+        columns: &[Column],
+        native_log: u8,
+        common_log: u8,
+    ) -> Result<
+        Vec<aggregate::initial_evaluated_column::InitialEvaluatedColumnV1>,
+        AggregateStarkErrorV1,
+    > {
+        use crate::privacy_engines::transparent_stark::goldilocks_words_v1;
+        use aggregate::initial_evaluated_column::InitialEvaluatedColumnV1 as Evaluated;
+        use fastpq_prover::goldilocks_transform::{
+            PreparedGoldilocksColumnsOutcomeV1 as Prepared,
+            goldilocks_transform_completion_uncertain_v1, prepare_goldilocks_prefix_columns_v1,
+            prepared_goldilocks_columns_payload_bound_v1,
+        };
+        if goldilocks_transform_completion_uncertain_v1() {
+            return Err(AggregateStarkErrorV1::InternalInvariant);
+        }
+        let rows = 1_usize
+            .checked_shl(u32::from(common_log))
+            .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+        let native_rows = 1_usize
+            .checked_shl(u32::from(native_log))
+            .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+        let root = goldilocks_primitive_root_v1(common_log)
+            .map_err(aggregate::map_transparent_error_v1)?;
+        let shift = F(GOLDILOCKS_GENERATOR_V1);
+        if rows != self.evaluation_rows
+            || columns.is_empty()
+            || columns.len() > aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            || rows <= native_rows
+            || shift.pow(rows as u128) == F::ONE
+            || shift.pow(native_rows as u128) == F::ONE
+            || columns
+                .iter()
+                .any(|column| column.is_empty() || column.len() > rows)
+        {
+            return Err(AggregateStarkErrorV1::InvalidLayout);
+        }
+        if columns
+            .iter()
+            .flat_map(|column| column.iter())
+            .any(|value| F::canonical(value.0).is_none())
+        {
+            return Err(AggregateStarkErrorV1::NonCanonicalField);
+        }
+        // Retained pages replace existing field cells only when each column
+        // fills whole shared pages. Tiny domains use the original CPU owner;
+        // no uncharged page padding can survive into a source callback.
+        if rows < fastpq_prover::goldilocks_transform::MIN_UNPADDED_GOLDILOCKS_COLUMN_ROWS_V1 {
+            let outputs = columns
+                .par_iter()
+                .map(|column| {
+                    masked_trace_coefficients_on_coset_v1(column, native_log, common_log)
+                        .map(Column::from_vec_v1)
+                        .map(Evaluated::from_field_v1)
+                        .map_err(aggregate::map_transparent_error_v1)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if goldilocks_transform_completion_uncertain_v1() {
+                return Err(AggregateStarkErrorV1::InternalInvariant);
+            }
+            self.receipt.cpu_columns += columns.len();
+            #[cfg(test)]
+            prover_observation::completed_transform_v1(false, columns.len());
+            return Ok(outputs);
+        }
+        let powers = &self
+            .coset_powers
+            .as_ref()
+            .ok_or(AggregateStarkErrorV1::InvalidLayout)?
+            .values;
+        if columns.iter().any(|column| column.len() > powers.len()) {
+            return Err(AggregateStarkErrorV1::InvalidLayout);
+        }
+        let mut outputs = Vec::new();
+        outputs
+            .try_reserve_exact(columns.len())
+            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+        if outputs.capacity() != columns.len() {
+            return Err(AggregateStarkErrorV1::AllocationFailure);
+        }
+        for batch in columns.chunks(self.device_columns) {
+            let views: [&[u64]; 8] = core::array::from_fn(|index| {
+                batch
+                    .get(index)
+                    .map_or::<&[u64], _>(&[], |column| goldilocks_words_v1(column))
+            });
+            match prepare_goldilocks_prefix_columns_v1(
+                &views[..batch.len()],
+                rows,
+                root.0,
+                goldilocks_words_v1(powers),
+                fastpq_prover::ExecutionMode::Auto,
+            )
+            .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
+            {
+                Prepared::Metal(prepared) => {
+                    let allowed = prepared_goldilocks_columns_payload_bound_v1(rows, batch.len())
+                        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?;
+                    if prepared
+                        .allocated_payload_bytes_v1()
+                        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
+                        > allowed
+                    {
+                        return Err(AggregateStarkErrorV1::AllocationFailure);
+                    }
+                    let completed = prepared
+                        .into_readonly_v1()
+                        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?;
+                    outputs.extend(Evaluated::from_completed_v1(completed)?);
+                    self.receipt.metal_columns += batch.len();
+                    #[cfg(test)]
+                    prover_observation::completed_transform_v1(true, batch.len());
+                }
+                Prepared::Cpu => {
+                    if goldilocks_transform_completion_uncertain_v1() {
+                        return Err(AggregateStarkErrorV1::InternalInvariant);
+                    }
+                    // Only this still-borrowed native batch falls back. Earlier
+                    // completed chunks remain outputs; no second full matrix exists.
+                    let evaluated = batch
+                        .par_iter()
+                        .map(|column| {
+                            masked_trace_coefficients_on_coset_v1(column, native_log, common_log)
+                                .map(Column::from_vec_v1)
+                                .map(Evaluated::from_field_v1)
+                                .map_err(aggregate::map_transparent_error_v1)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    outputs.extend(evaluated);
+                    self.receipt.cpu_columns += batch.len();
+                    #[cfg(test)]
+                    prover_observation::completed_transform_v1(false, batch.len());
+                }
+            }
+        }
+        // A concurrent device owner may become uncertain while CPU fallback,
+        // canonical validation or output-handle allocation was completing.
+        // Refuse before the accumulated columns reach any hashing callback.
+        if goldilocks_transform_completion_uncertain_v1() {
+            return Err(AggregateStarkErrorV1::InternalInvariant);
+        }
+        Ok(outputs)
     }
 
     pub(super) fn evaluate_v1(
@@ -147,6 +331,7 @@ impl MainTraceCosetEvaluatorV1 {
         // An already admitted CPU phase must also stop if another device call
         // has since left a live private allocation with uncertain completion.
         if fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1() {
+            self.selected_scratch.release_v1();
             #[cfg(test)]
             prover_observation::failed_transform_v1();
             return Err(AggregateStarkErrorV1::InternalInvariant);
@@ -207,6 +392,9 @@ impl MainTraceCosetEvaluatorV1 {
         selected: Option<&[usize]>,
         mut transform: impl FnMut(&mut [Vec<u64>], u64) -> Result<Backend, AggregateStarkErrorV1>,
     ) -> Result<Vec<Column>, AggregateStarkErrorV1> {
+        // Local custody covers validation failures and unwinds as well as
+        // arithmetic errors. Only a complete selected evaluation restores it.
+        let mut selected_scratch = core::mem::take(&mut self.selected_scratch);
         let rows = 1_usize
             .checked_shl(u32::from(common_log))
             .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
@@ -265,11 +453,17 @@ impl MainTraceCosetEvaluatorV1 {
                     )
                 })
             });
+        if !use_pruned_fft {
+            // Never overlap a retained selected matrix with scalar/device FFT
+            // allocations. This also releases it before partial-column batches.
+            selected_scratch.release_v1();
+        }
         // Selection follows complete original validation and the outer
         // uncertain-completion check, before allocating any device words.
         if self.device_columns == 0 || use_horner || use_pruned_fft {
             let result = if use_pruned_fft {
                 selected_coset::evaluate_batched_v1(
+                    &mut selected_scratch,
                     columns,
                     native_log,
                     common_log,
@@ -305,6 +499,7 @@ impl MainTraceCosetEvaluatorV1 {
             self.receipt.cpu_columns += columns.len();
             #[cfg(test)]
             prover_observation::completed_transform_v1(false, columns.len());
+            self.selected_scratch = selected_scratch;
             return Ok(result);
         }
         let powers = &self
@@ -434,7 +629,7 @@ fn select_metal_columns_v1(rows: usize, available: usize) -> usize {
     use fastpq_prover::goldilocks_transform::metal_goldilocks_transform_extra_payload_v1;
     // Conversion overlaps only one completed word column. Its allowance is
     // bounded by every admitted Metal dispatch allowance (which includes cache).
-    [4, 2, 1]
+    [8, 4, 2, 1]
         .into_iter()
         .find(|&columns| {
             metal_goldilocks_transform_extra_payload_v1(rows, columns)
@@ -476,7 +671,7 @@ mod tests {
         );
         assert_eq!(
             select_device_columns_v1(layout.common_lde_size(), available, Some(Backend::Metal),),
-            4
+            8
         );
         assert_eq!(evaluator.receipt_v1(), &MainTransformReceiptV1::default());
     }
@@ -524,9 +719,9 @@ mod tests {
         assert!(joined_available > assembly_limit - 288_345_698);
         assert_eq!(
             select_metal_columns_v1(layout.common_lde_size(), joined_available),
-            4
+            8
         );
-        for count in [1, 2, 4] {
+        for count in [1, 2, 4, 8] {
             let required =
                 metal_goldilocks_transform_extra_payload_v1(layout.common_lde_size(), count)
                     .unwrap();
@@ -550,6 +745,7 @@ mod tests {
                     evaluation_rows: 64,
                     device_columns,
                     receipt: MainTransformReceiptV1::default(),
+                    selected_scratch: selected_coset::SelectedScratchV1::default(),
                     coset_powers: Some(PublicCosetPowersV1::new_v1(64).unwrap()),
                 };
                 let mut original_allocations = Vec::new();
@@ -619,6 +815,7 @@ mod tests {
                         evaluation_rows: 64,
                         device_columns: 2,
                         receipt: MainTransformReceiptV1::default(),
+                        selected_scratch: selected_coset::SelectedScratchV1::default(),
                         coset_powers: Some(PublicCosetPowersV1::new_v1(64).unwrap()),
                     };
                     evaluator.evaluate_with_v1(&columns, 4, 6, |batch, _| {
@@ -654,6 +851,7 @@ mod tests {
             evaluation_rows: 64,
             device_columns: 2,
             receipt: MainTransformReceiptV1::default(),
+            selected_scratch: selected_coset::SelectedScratchV1::default(),
             coset_powers: Some(PublicCosetPowersV1::new_v1(64).unwrap()),
         };
         let mut columns = columns_v1(3);
@@ -729,6 +927,7 @@ mod tests {
                         evaluation_rows: 64,
                         device_columns,
                         receipt: MainTransformReceiptV1::default(),
+                        selected_scratch: selected_coset::SelectedScratchV1::default(),
                         coset_powers: (device_columns != 0)
                             .then(|| PublicCosetPowersV1::new_v1(64).unwrap()),
                     };
@@ -764,6 +963,7 @@ mod tests {
             evaluation_rows: 64,
             device_columns: 1,
             receipt: MainTransformReceiptV1::default(),
+            selected_scratch: selected_coset::SelectedScratchV1::default(),
             coset_powers: Some(PublicCosetPowersV1::new_v1(64).unwrap()),
         };
         let result = evaluator.evaluate_selected_with_v1(&columns, 4, 6, Some(&[0]), |batch, _| {
@@ -811,6 +1011,7 @@ mod tests {
                                 receipt: MainTransformReceiptV1::default(),
                                 // Any attempt to enter device staging fails even
                                 // before the injected dispatch can be reached.
+                                selected_scratch: selected_coset::SelectedScratchV1::default(),
                                 coset_powers: None,
                             };
                             let actual = evaluator
@@ -861,12 +1062,13 @@ mod tests {
                     evaluation_rows: rows,
                     device_columns: 4,
                     receipt: MainTransformReceiptV1::default(),
+                    selected_scratch: selected_coset::SelectedScratchV1::default(),
                     coset_powers: None,
                 };
                 let ((actual, erased), batched_erased) =
                     selected_coset::observe_batch_clear_v1(|| {
                         inspection::observe_v1(|| {
-                            evaluator
+                            let actual = evaluator
                                 .evaluate_selected_with_v1(
                                     &columns,
                                     native,
@@ -874,11 +1076,14 @@ mod tests {
                                     Some(&selected),
                                     |_, _| panic!("measured selected batch reached device staging"),
                                 )
-                                .unwrap()
+                                .unwrap();
+                            assert_eq!(evaluator.receipt.cpu_columns, 8);
+                            assert_eq!(evaluator.receipt.metal_columns, 0);
+                            assert!(evaluator.selected_scratch.retained_identity_v1().is_some());
+                            drop(evaluator);
+                            actual
                         })
                     });
-                assert_eq!(evaluator.receipt.cpu_columns, 8);
-                assert_eq!(evaluator.receipt.metal_columns, 0);
                 for (column, output) in actual.iter().enumerate() {
                     for (&row, &value) in selected.iter().zip(output.iter()) {
                         let point = F(GOLDILOCKS_GENERATOR_V1).mul(root.pow(row as u128));
@@ -923,6 +1128,7 @@ mod tests {
             evaluation_rows: rows,
             device_columns: 4,
             receipt: MainTransformReceiptV1::default(),
+            selected_scratch: selected_coset::SelectedScratchV1::default(),
             coset_powers: None,
         };
         for failure in 0..8 {
@@ -987,6 +1193,7 @@ mod tests {
             evaluation_rows: rows,
             device_columns: 4,
             receipt: MainTransformReceiptV1::default(),
+            selected_scratch: selected_coset::SelectedScratchV1::default(),
             coset_powers: None,
         };
         let valid = vec![F::ONE; (1 << 5) + MASK_DEGREE + 1];
@@ -1100,6 +1307,7 @@ mod tests {
                     evaluation_rows: rows,
                     device_columns: 0,
                     receipt: MainTransformReceiptV1::default(),
+                    selected_scratch: selected_coset::SelectedScratchV1::default(),
                     coset_powers: None,
                 };
                 let pruned = cpu
@@ -1130,3 +1338,11 @@ mod common22_coarse_diagnostic_tests;
 #[cfg(test)]
 #[path = "main_public_coset_powers_tests.rs"]
 mod public_coset_powers_tests;
+
+#[cfg(test)]
+#[path = "main_selected_owner_tests.rs"]
+mod selected_owner_tests;
+
+#[cfg(test)]
+#[path = "main_initial_readonly_tests.rs"]
+mod initial_readonly_tests;

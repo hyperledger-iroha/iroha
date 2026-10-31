@@ -1,6 +1,7 @@
 //! Direct-field oracles, shape rejection and complete-profile work accounting.
 
 use super::*;
+use crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
 use rand::SeedableRng;
 use rand_chacha::ChaCha12Rng;
 
@@ -250,6 +251,73 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
             aux_current: &rows[2],
             aux_next: &rows[3],
         };
+        if let MainProverConstraintProviderV1::Log19(native) = provider {
+            let mut context =
+                MainLog19CompositionRegistrationV1::new_v1(native, registration).unwrap();
+            assert_eq!(
+                context.index,
+                native.source.registration_index_v1(registration).unwrap()
+            );
+            context.validate_owner_v1(native, registration).unwrap();
+            let other =
+                MainLog19ProverConstraintSourceV1::for_main_v1(&layout, native.source).unwrap();
+            assert!(context.validate_owner_v1(&other, registration).is_err());
+            let mut wrong_registration = registration;
+            wrong_registration.segment.instance ^= 0x4000;
+            assert!(
+                context
+                    .validate_owner_v1(native, wrong_registration)
+                    .is_err()
+            );
+            for field in 0..6 {
+                for shortened in [false, true] {
+                    let mut malformed = rows.clone();
+                    if shortened {
+                        malformed[field].pop();
+                    } else {
+                        malformed[field][0] = F(GOLDILOCKS_MODULUS_V1);
+                    }
+                    let malformed_opening = RegisteredOpenedRowsV1 {
+                        base_current: &malformed[0],
+                        base_next: &malformed[1],
+                        aux_current: &malformed[2],
+                        aux_next: &malformed[3],
+                    };
+                    let expected = native
+                        .validate_constraint_opening_v1(
+                            registration,
+                            malformed_opening,
+                            &malformed[4],
+                            &malformed[5],
+                        )
+                        .unwrap_err();
+                    assert_eq!(
+                        native
+                            .validate_constraint_opening_at_v1(
+                                registration,
+                                context.index,
+                                malformed_opening,
+                                &malformed[4],
+                                &malformed[5]
+                            )
+                            .unwrap_err(),
+                        expected
+                    );
+                }
+            }
+            context.index = usize::MAX;
+            assert!(
+                native
+                    .validate_constraint_opening_at_v1(
+                        registration,
+                        context.index,
+                        opening,
+                        &rows[4],
+                        &rows[5]
+                    )
+                    .is_err()
+            );
+        }
         let alphas = (0..segment.constraint_count)
             .map(|_| {
                 E::from_coefficients(core::array::from_fn(|_| {
@@ -260,6 +328,7 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
                 .unwrap()
             })
             .collect::<Vec<_>>();
+        let mut residue_scratch = MainResidueScratchV1::new_v1(segment.constraint_count).unwrap();
         for ordinal in [0, first.count - 1] {
             let stripe = main_quotient_stripes::MainQuotientStripeV1::new_v1(
                 segment.trace_log2,
@@ -282,6 +351,7 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
                         &rows[4],
                         &rows[5],
                         &alphas,
+                        &mut residue_scratch,
                     )
                     .unwrap();
                 assert_eq!(
@@ -299,7 +369,8 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
                         opening,
                         &rows[4],
                         &rows[5],
-                        &alphas
+                        &alphas,
+                        &mut residue_scratch,
                     )
                     .is_err()
             );
@@ -312,7 +383,8 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
                         opening,
                         &rows[4],
                         &rows[5],
-                        &alphas[1..]
+                        &alphas[1..],
+                        &mut residue_scratch,
                     )
                     .is_err()
             );

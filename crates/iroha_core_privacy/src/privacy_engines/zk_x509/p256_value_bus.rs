@@ -45,6 +45,8 @@ pub const P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1: usize = 2;
 pub const P256_VALUE_BUS_SEGMENT_ROWS_V1: usize = 64;
 /// Canonical first-release native domain for either P-256 value-bus endpoint.
 pub const P256_VALUE_BUS_STARK_TRACE_SIZE_V1: usize = 1 << 19;
+/// Public native-row extent of independently checked auxiliary replay chunks.
+pub(crate) const P256_VALUE_AUX_REPLAY_CHUNK_ROWS_V1: usize = 1 << 10;
 /// Numeric aggregate base width: two limbs and their little-endian bits.
 pub const P256_VALUE_BUS_STARK_BASE_WIDTH_V1: usize =
     P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 * (1 + P256_VALUE_BUS_LIMBS_V1);
@@ -2424,6 +2426,8 @@ pub struct P256ValueBusStarkAuxSourceV1<'a> {
     running: [F; P256_VALUE_BUS_LANES_V1],
     next_row: usize,
     trace_size: usize,
+    end_row: usize,
+    end_running: [F; P256_VALUE_BUS_LANES_V1],
 }
 #[cfg(test)]
 impl<'a> P256ValueBusStarkAuxSourceV1<'a> {
@@ -2443,6 +2447,8 @@ impl<'a> P256ValueBusStarkAuxSourceV1<'a> {
             running: [F::ONE; P256_VALUE_BUS_LANES_V1],
             next_row: 0,
             trace_size,
+            end_row: trace_size,
+            end_running: terminal,
         })
     }
 }
@@ -2451,8 +2457,11 @@ impl P256ValueBusStarkAuxSourceV1<'_> {
     pub(crate) fn next_aux_row_v1(
         &mut self,
     ) -> Result<Option<[F; P256_VALUE_BUS_STARK_AUX_WIDTH_V1]>, P256ValueBusErrorV1> {
-        if self.next_row == self.trace_size {
+        if self.next_row == self.end_row {
             return Ok(None);
+        }
+        if self.next_row > self.end_row || self.end_row > self.trace_size {
+            return Err(P256ValueBusErrorV1::Topology);
         }
         let mut aux = zeroize::Zeroizing::new([F::ZERO; P256_VALUE_BUS_STARK_AUX_WIDTH_V1]);
         aux[stark_aux_product_offset_v1(0)
@@ -2478,12 +2487,14 @@ impl P256ValueBusStarkAuxSourceV1<'_> {
             aux[offset..offset + P256_VALUE_BUS_LANES_V1].copy_from_slice(&self.running);
         }
         self.next_row += 1;
-        if self.next_row == self.trace_size && self.running != self.terminal {
+        if (self.next_row == self.end_row && self.running != self.end_running)
+            || (self.next_row == self.trace_size && self.running != self.terminal)
+        {
             return Err(P256ValueBusErrorV1::Constraint);
         }
         Ok(Some(*aux))
     }
-    /// Restart deterministic auxiliary replay.
+    /// Restart deterministic auxiliary replay over the complete native domain.
     pub(crate) fn replay_v1(&self) -> Self {
         Self {
             endpoint: self.endpoint,
@@ -2492,6 +2503,8 @@ impl P256ValueBusStarkAuxSourceV1<'_> {
             running: [F::ONE; P256_VALUE_BUS_LANES_V1],
             next_row: 0,
             trace_size: self.trace_size,
+            end_row: self.trace_size,
+            end_running: self.terminal,
         }
     }
     /// Endpoint terminal under the bound X5B1 challenges.
@@ -2503,9 +2516,11 @@ impl Drop for P256ValueBusStarkAuxSourceV1<'_> {
     fn drop(&mut self) {
         super::private_table::zeroize_fields_v1(&mut self.running[..]);
         super::private_table::zeroize_fields_v1(&mut self.terminal[..]);
+        super::private_table::zeroize_fields_v1(&mut self.end_running[..]);
         self.next_row = self.trace_size;
     }
 }
+#[cfg(test)]
 fn compute_base_endpoint_terminal_v1(
     endpoint: &P256ValueBusBaseEndpointTraceV1,
     challenges: P256ValueBusChallengesV1,
@@ -2523,6 +2538,54 @@ fn compute_base_endpoint_terminal_v1(
         }
     }
     Ok(terminal)
+}
+
+/// Mint private checkpoints during the original, ordered terminal recurrence.
+/// Padding consumes the same identity factors as the native auxiliary stream.
+fn compute_base_endpoint_checkpoints_v1(
+    endpoint: &P256ValueBusBaseEndpointTraceV1,
+    challenges: P256ValueBusChallengesV1,
+) -> Result<super::private_table::PrivateTableV1<[F; P256_VALUE_BUS_LANES_V1]>, P256ValueBusErrorV1>
+{
+    challenges.validate()?;
+    if endpoint.rows.len()
+        > P256_VALUE_BUS_STARK_TRACE_SIZE_V1 * P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1
+    {
+        return Err(P256ValueBusErrorV1::Topology);
+    }
+    let count = P256_VALUE_BUS_STARK_TRACE_SIZE_V1 / P256_VALUE_AUX_REPLAY_CHUNK_ROWS_V1 + 1;
+    let mut checkpoints = super::private_table::PrivateTableV1::new(
+        Vec::new(),
+        super::private_table::zeroize_field_rows_v1,
+    );
+    checkpoints
+        .try_reserve_exact(count)
+        .map_err(|_| P256ValueBusErrorV1::Resource)?;
+    if checkpoints.capacity() != count {
+        return Err(P256ValueBusErrorV1::Resource);
+    }
+    checkpoints.resize(count, [F::ZERO; P256_VALUE_BUS_LANES_V1]);
+    let mut running = zeroize::Zeroizing::new([F::ONE; P256_VALUE_BUS_LANES_V1]);
+    checkpoints[0] = *running;
+    for row in 0..P256_VALUE_BUS_STARK_TRACE_SIZE_V1 {
+        for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
+            let ordinal = row * P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 + slot;
+            if let Some(cell) = endpoint.rows.get(ordinal).copied() {
+                validate_base_cell_v1(cell)?;
+                for lane in 0..P256_VALUE_BUS_LANES_V1 {
+                    running[lane] = running[lane].mul(compress_access_v1(
+                        cell.fixed,
+                        cell.value,
+                        challenges.lanes[lane],
+                    ));
+                }
+            }
+        }
+        if (row + 1).is_multiple_of(P256_VALUE_AUX_REPLAY_CHUNK_ROWS_V1) {
+            checkpoints[(row + 1) / P256_VALUE_AUX_REPLAY_CHUNK_ROWS_V1] = *running;
+        }
+    }
+    Ok(checkpoints)
 }
 /// Conservative construction scratch for one serial value-source build.
 /// Charges the temporary arithmetic matrix, copied operations, four full event
@@ -2590,6 +2653,8 @@ pub fn p256_value_source_allocation_forecast_v1(
         2 * (arc_header + core::mem::size_of::<P256ValueBusStarkFixedProviderV1>()),
         execution.allocated_heap_bytes_v1(),
         sorted.allocated_heap_bytes_v1(),
+        2 * (P256_VALUE_BUS_STARK_TRACE_SIZE_V1 / P256_VALUE_AUX_REPLAY_CHUNK_ROWS_V1 + 1)
+            * core::mem::size_of::<[F; P256_VALUE_BUS_LANES_V1]>(),
     ]))
 }
 /// Pre-commitment value-bus capability.
@@ -2747,10 +2812,16 @@ impl P256ValueBusBaseSourceV1 {
             .p256_cross()
             .validate()
             .map_err(|_| P256ValueBusErrorV1::Challenge)?;
-        let execution_terminal =
-            compute_base_endpoint_terminal_v1(material.execution_v1(), value_challenges)?;
-        let sorted_terminal =
-            compute_base_endpoint_terminal_v1(material.sorted_v1(), value_challenges)?;
+        let execution_checkpoints =
+            compute_base_endpoint_checkpoints_v1(material.execution_v1(), value_challenges)?;
+        let sorted_checkpoints =
+            compute_base_endpoint_checkpoints_v1(material.sorted_v1(), value_challenges)?;
+        let execution_terminal = *execution_checkpoints
+            .last()
+            .ok_or(P256ValueBusErrorV1::Topology)?;
+        let sorted_terminal = *sorted_checkpoints
+            .last()
+            .ok_or(P256ValueBusErrorV1::Topology)?;
         if execution_terminal != sorted_terminal {
             return Err(P256ValueBusErrorV1::Terminal);
         }
@@ -2761,6 +2832,8 @@ impl P256ValueBusBaseSourceV1 {
             post_base: Some(*post_base),
             execution_terminal,
             sorted_terminal,
+            execution_checkpoints: Some(execution_checkpoints),
+            sorted_checkpoints: Some(sorted_checkpoints),
         })
     }
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -2807,6 +2880,9 @@ pub struct P256ValueBusBoundSourceV1 {
     post_base: Option<ZkX509CredentialMainPostBaseChallengesV1>,
     execution_terminal: [F; P256_VALUE_BUS_LANES_V1],
     sorted_terminal: [F; P256_VALUE_BUS_LANES_V1],
+    execution_checkpoints:
+        Option<super::private_table::PrivateTableV1<[F; P256_VALUE_BUS_LANES_V1]>>,
+    sorted_checkpoints: Option<super::private_table::PrivateTableV1<[F; P256_VALUE_BUS_LANES_V1]>>,
 }
 impl core::fmt::Debug for P256ValueBusBoundSourceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -2845,6 +2921,12 @@ impl P256ValueBusBoundSourceV1 {
                     fixed.allocated_heap_bytes_v1(),
                 ])
             }),
+            self.execution_checkpoints
+                .as_ref()
+                .map_or(0, |values| vector_v1(values)),
+            self.sorted_checkpoints
+                .as_ref()
+                .map_or(0, |values| vector_v1(values)),
         ])
     }
     fn material_v1(&self) -> Result<&P256ValueBusBaseMaterialV1, P256ValueBusErrorV1> {
@@ -2925,7 +3007,37 @@ impl P256ValueBusBoundSourceV1 {
             running: [F::ONE; P256_VALUE_BUS_LANES_V1],
             next_row: 0,
             trace_size: P256_VALUE_BUS_STARK_TRACE_SIZE_V1,
+            end_row: P256_VALUE_BUS_STARK_TRACE_SIZE_V1,
+            end_running: terminal,
         })
+    }
+    /// Mint one public chunk using only this owner's original private states.
+    /// Every chunk checks its successor checkpoint; the last also checks the
+    /// original bound terminal. Callers cannot supply a prefix or terminal.
+    pub(crate) fn aux_chunk_v1(
+        &self,
+        expected: P256ValueBusStarkEndpointV1,
+        chunk: usize,
+    ) -> Result<P256ValueBusStarkAuxSourceV1<'_>, P256ValueBusErrorV1> {
+        let mut stream = self.bound_aux_source_v1(expected)?;
+        let checkpoints = match expected {
+            P256ValueBusStarkEndpointV1::Execution => self.execution_checkpoints.as_ref(),
+            P256ValueBusStarkEndpointV1::Sorted => self.sorted_checkpoints.as_ref(),
+        }
+        .ok_or(P256ValueBusErrorV1::Phase)?;
+        let chunks = P256_VALUE_BUS_STARK_TRACE_SIZE_V1 / P256_VALUE_AUX_REPLAY_CHUNK_ROWS_V1;
+        if chunk >= chunks
+            || checkpoints.len() != chunks + 1
+            || checkpoints[0] != [F::ONE; P256_VALUE_BUS_LANES_V1]
+            || checkpoints[chunks] != stream.terminal
+        {
+            return Err(P256ValueBusErrorV1::Constraint);
+        }
+        stream.running = checkpoints[chunk];
+        stream.next_row = chunk * P256_VALUE_AUX_REPLAY_CHUNK_ROWS_V1;
+        stream.end_row = stream.next_row + P256_VALUE_AUX_REPLAY_CHUNK_ROWS_V1;
+        stream.end_running = checkpoints[chunk + 1];
+        Ok(stream)
     }
     /// Challenge-bound execution product replay.
     pub(crate) fn execution_aux_source_v1(
@@ -2967,6 +3079,8 @@ impl P256ValueBusBoundSourceV1 {
         self.material = None;
         self.execution_fixed = None;
         self.sorted_fixed = None;
+        self.execution_checkpoints = None;
+        self.sorted_checkpoints = None;
     }
 }
 impl Drop for P256ValueBusBoundSourceV1 {
@@ -5206,6 +5320,91 @@ mod tests {
         for (index, value) in flat.iter().enumerate() {
             assert!(!flat[..index].contains(value));
         }
+    }
+    #[test]
+    fn bound_endpoint_checkpoints_match_every_native_row_and_reject_corruption() {
+        let program = program(1);
+        let mut base = base_source_v1(&program);
+        let before = base.allocated_heap_bytes_v1();
+        let mut bound = base.bind_v1(&post_base_v1(43)).unwrap();
+        let chunks = P256_VALUE_BUS_STARK_TRACE_SIZE_V1 / P256_VALUE_AUX_REPLAY_CHUNK_ROWS_V1;
+        assert_eq!(
+            bound.allocated_heap_bytes_v1(),
+            before + 2 * (chunks + 1) * core::mem::size_of::<[F; P256_VALUE_BUS_LANES_V1]>()
+        );
+        for endpoint in [
+            P256ValueBusStarkEndpointV1::Execution,
+            P256ValueBusStarkEndpointV1::Sorted,
+        ] {
+            let mut dense = bound.bound_aux_source_v1(endpoint).unwrap();
+            for chunk in 0..chunks {
+                let mut replay = bound.aux_chunk_v1(endpoint, chunk).unwrap();
+                for _ in 0..P256_VALUE_AUX_REPLAY_CHUNK_ROWS_V1 {
+                    let actual =
+                        zeroize::Zeroizing::new(replay.next_aux_row_v1().unwrap().unwrap());
+                    let expected =
+                        zeroize::Zeroizing::new(dense.next_aux_row_v1().unwrap().unwrap());
+                    assert_eq!(*actual, *expected);
+                }
+                assert!(replay.next_aux_row_v1().unwrap().is_none());
+            }
+            assert!(dense.next_aux_row_v1().unwrap().is_none());
+            drop(dense);
+            assert!(bound.aux_chunk_v1(endpoint, chunks).is_err());
+            let table = match endpoint {
+                P256ValueBusStarkEndpointV1::Execution => {
+                    bound.execution_checkpoints.as_mut().unwrap()
+                }
+                P256ValueBusStarkEndpointV1::Sorted => bound.sorted_checkpoints.as_mut().unwrap(),
+            };
+            table[1][0] = table[1][0].add(F::ONE);
+            let mut replay = bound.aux_chunk_v1(endpoint, 0).unwrap();
+            for _ in 0..P256_VALUE_AUX_REPLAY_CHUNK_ROWS_V1 - 1 {
+                let _clear = zeroize::Zeroizing::new(replay.next_aux_row_v1().unwrap().unwrap());
+            }
+            assert_eq!(
+                replay.next_aux_row_v1(),
+                Err(P256ValueBusErrorV1::Constraint)
+            );
+            drop(replay);
+            let table = match endpoint {
+                P256ValueBusStarkEndpointV1::Execution => {
+                    bound.execution_checkpoints.as_mut().unwrap()
+                }
+                P256ValueBusStarkEndpointV1::Sorted => bound.sorted_checkpoints.as_mut().unwrap(),
+            };
+            table[1][0] = table[1][0].sub(F::ONE);
+            table[chunks][0] = table[chunks][0].add(F::ONE);
+            assert!(matches!(
+                bound.aux_chunk_v1(endpoint, 0),
+                Err(P256ValueBusErrorV1::Constraint)
+            ));
+            let table = match endpoint {
+                P256ValueBusStarkEndpointV1::Execution => {
+                    bound.execution_checkpoints.as_mut().unwrap()
+                }
+                P256ValueBusStarkEndpointV1::Sorted => bound.sorted_checkpoints.as_mut().unwrap(),
+            };
+            table[chunks][0] = table[chunks][0].sub(F::ONE);
+        }
+        let material = Arc::get_mut(bound.material.as_mut().unwrap()).unwrap();
+        material.execution.rows[0].value = F(u64::MAX);
+        let mut replay = bound
+            .aux_chunk_v1(P256ValueBusStarkEndpointV1::Execution, 0)
+            .unwrap();
+        assert!(replay.next_aux_row_v1().is_err());
+        drop(replay);
+        let (_, observations) =
+            super::super::private_table::inspection::observe_v1(|| bound.zeroize_private_v1());
+        assert!(bound.execution_checkpoints.is_none() && bound.sorted_checkpoints.is_none());
+        assert_eq!(
+            observations
+                .iter()
+                .filter(|item| item.cells == (chunks + 1) * P256_VALUE_BUS_LANES_V1)
+                .count(),
+            2
+        );
+        assert!(observations.iter().all(|item| item.nonzero_after == 0));
     }
     #[test]
     fn bound_endpoint_replay_matches_direct_terminals_and_rejects_cached_mutation() {

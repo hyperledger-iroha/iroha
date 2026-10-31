@@ -201,7 +201,7 @@ fn assert_cleared(label: &str, observation: Observation) {
 }
 
 fn profile() -> BgvProfile {
-    BgvProfile::new(BgvParameters::derive(8, 257, (40, 3), (41, 2), 2).expect("parameters"))
+    BgvProfile::new(BgvParameters::derive(8, 257, 1, (40, 3), (41, 2), 2).expect("parameters"))
         .expect("profile")
 }
 
@@ -219,6 +219,7 @@ fn message(profile: &BgvProfile) -> Plaintext {
     // Non-zero everywhere, so an uncleared copy cannot look cleared.
     Plaintext::new(
         profile,
+        profile.master_plaintext(),
         (0..DEGREE as u64).map(|index| 1 + index % 256).collect(),
     )
     .expect("plaintext")
@@ -402,7 +403,7 @@ fn encryption_and_decryption_clear_every_buffer_on_success() {
     let ((), observation) = observe(POLYNOMIAL_BYTES, move || drop(plaintext));
     assert_cleared("plaintext", observation);
     // Slot encodings hold the scalars and their transform in clearing buffers too.
-    let encoding = SlotEncoding::new(&profile).expect("encoding");
+    let encoding = SlotEncoding::new(&profile, profile.master_plaintext()).expect("encoding");
     let values: Vec<u64> = (0..128).map(|index| 1 + index).collect();
     let (decoded, observation) = observe(POLYNOMIAL_BYTES, || {
         let encoded = encoding.encode(&profile, &values).expect("encoded");
@@ -490,7 +491,7 @@ fn every_error_exit_clears_the_secrets_built_so_far() {
     assert_cleared("rejected secret coefficients", observation);
     // A plaintext with a non-canonical coefficient: the rejected buffer is cleared.
     let (result, observation) = observe(POLYNOMIAL_BYTES, || {
-        Plaintext::new(&profile, vec![257_u64; DEGREE])
+        Plaintext::new(&profile, profile.master_plaintext(), vec![257_u64; DEGREE])
     });
     assert_eq!(result.err(), Some(BgvError::NonCanonical { index: 0 }));
     assert_cleared("rejected plaintext", observation);
@@ -512,7 +513,7 @@ fn every_error_exit_clears_the_secrets_built_so_far() {
     assert_eq!(observation.uncleared, 0);
     assert_coins_cleared("encryption with stuck entropy", observation, 1);
     let other =
-        BgvProfile::new(BgvParameters::derive(8, 257, (40, 2), (41, 2), 2).expect("parameters"))
+        BgvProfile::new(BgvParameters::derive(8, 257, 1, (40, 2), (41, 2), 2).expect("parameters"))
             .expect("profile");
     let ciphertext = keys
         .public
@@ -615,7 +616,7 @@ fn every_unwind_clears_the_secrets_built_so_far() {
 
 /// A ring whose secret-key custody frame (32 + 4096 / 4 bytes) is a watched block.
 fn custody_profile() -> BgvProfile {
-    BgvProfile::new(BgvParameters::derive(12, 257, (40, 1), (41, 1), 1).expect("parameters"))
+    BgvProfile::new(BgvParameters::derive(12, 257, 1, (40, 1), (41, 1), 1).expect("parameters"))
         .expect("profile")
 }
 
@@ -848,7 +849,8 @@ fn retained_encryption_witness_clears_on_drop_refusal_and_unwind() {
             .expect("relation");
     });
     assert_cleared("witness relation scratch", observation);
-    let other = Plaintext::constant(&profile, 0).expect("different input");
+    let other =
+        Plaintext::constant(&profile, profile.master_plaintext(), 0).expect("different input");
     let ((), observation) = observe(POLYNOMIAL_BYTES, || {
         assert_eq!(
             witness.check(&profile, &public, &other, &ciphertext, limit),
@@ -1043,4 +1045,106 @@ fn threshold_subset_refusal_and_mid_conversion_unwind_clear_owned_secrets() {
     assert_eq!(observation.freed, 1);
     assert_coins_cleared("no conversion entropy", observation, 0);
     fixtures::disarm_fault();
+}
+
+#[test]
+fn threshold_local_opening_clears_success_refusal_and_both_unwind_stages() {
+    use iroha_fhe::bgv::threshold::{DealerKeyShares, ThresholdError, ThresholdSelection};
+    quiet_injected_faults();
+    let profile = profile();
+    let context = threshold_context(&profile);
+    let dealer_budget = DealerKeyShares::required_secret_bytes(&profile, &context).expect("budget");
+    for scenario in 0..4 {
+        let secret =
+            fixtures::secret_key(&profile, &mut FixtureEntropy::new(master(80))).expect("key");
+        let public = fixtures::public_key(&profile, &secret, &mut FixtureEntropy::new(master(81)))
+            .expect("public");
+        let expected = message(&profile);
+        let cipher = fixtures::encrypt(
+            &profile,
+            &public,
+            &expected,
+            &mut FixtureEntropy::new(master(82)),
+        )
+        .expect("cipher");
+        let mut dealer = fixtures::threshold_dealer(
+            &profile,
+            context.clone(),
+            secret,
+            dealer_budget,
+            &mut FixtureEntropy::new(master(83)),
+        )
+        .expect("dealer");
+        let plan =
+            ThresholdSelection::new(&profile, &context, *dealer.instance(), &[1, 2]).expect("plan");
+        let local: Vec<_> = [1, 2]
+            .into_iter()
+            .map(|participant| {
+                dealer
+                    .take_share(participant)
+                    .expect("share")
+                    .try_into_subset_additive(&profile, &plan)
+                    .expect("conversion")
+            })
+            .collect();
+        drop(dealer);
+        let budget = plan
+            .required_opening_secret_bytes(&profile, cipher.level())
+            .expect("opening budget");
+        match scenario {
+            0 => {
+                let ((), observation) = observe(POLYNOMIAL_BYTES, || {
+                    let plain = plan
+                        .open_local(&profile, &cipher, local, budget)
+                        .expect("open");
+                    assert_eq!(plain.coefficients(), expected.coefficients());
+                });
+                assert_cleared("local opening success", observation);
+                // Two inputs, two share products, c1, accumulator and returned plaintext.
+                assert_eq!(observation.freed, 7);
+                assert_coins_cleared("opening needs no entropy", observation, 0);
+            }
+            1 => {
+                let address = local.as_ptr();
+                let (result, allocations) =
+                    count_allocations(|| plan.open_local(&profile, &cipher, local, budget - 1));
+                assert_eq!(allocations, 0, "preflight refusal allocates nothing");
+                let error = result.expect_err("under budget");
+                assert_eq!(
+                    error.reason(),
+                    ThresholdError::SecretBufferLimit {
+                        required: budget,
+                        limit: budget - 1
+                    }
+                );
+                let (_, retained) = error.into_parts();
+                assert_eq!(retained.as_ptr(), address, "exact original handle vector");
+                let error = plan
+                    .open_local(&profile, &cipher, retained, budget - 1)
+                    .expect_err("refused again");
+                let ((), observation) = observe(POLYNOMIAL_BYTES, move || drop(error));
+                assert_cleared("abandoned opening refusal", observation);
+                assert_eq!(observation.freed, 2);
+                assert_coins_cleared("refusal needs no entropy", observation, 0);
+            }
+            _ => {
+                let (point, expected_freed) = if scenario == 2 {
+                    (FaultPoint::ThresholdOpeningAfterFirstProduct, 5)
+                } else {
+                    (FaultPoint::ThresholdOpeningAfterInnerProduct, 6)
+                };
+                fixtures::arm_fault(point);
+                let (result, observation) = observe(POLYNOMIAL_BYTES, || {
+                    catch_unwind(AssertUnwindSafe(|| {
+                        let _ = plan.open_local(&profile, &cipher, local, budget);
+                    }))
+                });
+                assert!(result.is_err());
+                assert_cleared("local opening unwind", observation);
+                assert_eq!(observation.freed, expected_freed);
+                assert_coins_cleared("unwind needs no entropy", observation, 0);
+                fixtures::disarm_fault();
+            }
+        }
+    }
 }

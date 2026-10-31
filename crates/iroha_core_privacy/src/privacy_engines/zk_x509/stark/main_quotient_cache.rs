@@ -1,15 +1,26 @@
 //! Registration-local coefficient reuse within the admitted quotient envelope.
+//! Already retained RFC originals remain borrowed, leaving local cache bytes for fixed coefficients.
 
 use super::super::super::private_table::{
     PrivateTableV1, zeroize_field_rows_v1, zeroize_fields_v1,
 };
 use super::main_bounded_transform::{MainBoundedTransformPolicyV1, check_completion_v1};
 use super::*;
+#[cfg(test)]
 use fastpq_prover::goldilocks_transform::{
     GoldilocksTransformBackendV1 as Backend, GoldilocksTransformDirectionV1 as Direction,
-    GoldilocksTransformErrorV1 as TransformError, goldilocks_transform_completion_uncertain_v1,
-    transform_goldilocks_columns_v1,
+    GoldilocksTransformErrorV1 as TransformError, transform_goldilocks_columns_v1,
 };
+
+use fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1;
+
+/// Public grouping cursors, closure captures and descriptors, separate from the
+/// prepared adapter's two view arrays and the original eight source views.
+pub(super) const GROUPING_METADATA_BYTES_V1: usize = core::mem::size_of::<(
+    main_quotient_stripes::MainQuotientStripeV1,
+    MainBoundedTransformPolicyV1,
+    [usize; 24],
+)>();
 
 /// Public geometry fixes each retained kind prefix before private replay.
 #[derive(Clone, Copy, Debug)]
@@ -105,6 +116,17 @@ impl MainQuotientCachePlanV1 {
         })
     }
 
+    /// Reserve descriptors from the fixed-prefix remainder while preserving
+    /// every private replay-cache column. A shortage is terminal, never a
+    /// different cache policy or a dense arithmetic-basis fallback.
+    pub(super) fn reserve_fixed_owner_v1(self, bytes: usize) -> Result<Self, ZkX509StarkErrorV1> {
+        let narrowed = self.reserve_additional_v1(bytes)?;
+        if narrowed.base_columns != self.base_columns || narrowed.aux_columns != self.aux_columns {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
+        Ok(narrowed)
+    }
+
     /// Fit an ordered prefix using only public dimensions and admitted bytes.
     pub(super) fn from_budget_v1(
         base_width: usize,
@@ -175,6 +197,34 @@ pub(super) struct MainQuotientReplayCacheV1 {
 }
 
 impl MainQuotientReplayCacheV1 {
+    /// Existing global owners replace local private copies. The same admitted
+    /// registration allowance is available to the public fixed prefix.
+    pub(super) fn from_retained_v1(
+        plan: MainQuotientCachePlanV1,
+        base: &[PrivateTableV1<F>],
+        aux: &[PrivateTableV1<F>],
+    ) -> Result<Self, ZkX509StarkErrorV1> {
+        if base.is_empty()
+            || aux.is_empty()
+            || plan.base_columns > base.len()
+            || plan.aux_columns > aux.len()
+            || base
+                .iter()
+                .chain(aux)
+                .any(|column| column.len() != plan.coefficient_count)
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        Self::from_replay_v1(
+            MainQuotientCachePlanV1 {
+                base_columns: 0,
+                aux_columns: 0,
+                ..plan
+            },
+            |_, _| Err(ZkX509StarkErrorV1::InternalInvariant),
+        )
+    }
+
     /// Replay bounded batches directly into capacity-checked clearing owners.
     pub(super) fn from_replay_v1(
         plan: MainQuotientCachePlanV1,
@@ -327,24 +377,45 @@ impl MainQuotientReplayCacheV1 {
             core::ops::Range<usize>,
         ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
     ) -> Result<ZeroizingBaseColumnsV1, ZkX509StarkErrorV1> {
-        self.evaluate_with_v1(
+        self.evaluate_sources_using_v1(
             kind,
             width,
             stripe,
-            policy,
+            None,
             replay,
-            |words, root, direction| {
-                transform_goldilocks_columns_v1(
-                    words,
-                    root,
-                    direction,
-                    fastpq_prover::ExecutionMode::Auto,
-                )
-            },
+            policy
+                .forward_columns_v1(stripe.rows)
+                .max(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1),
+            |columns, root, uncertain| policy.forward_exact_v1(columns, root, uncertain),
             goldilocks_transform_completion_uncertain_v1,
         )
     }
 
+    /// Fold immutable original coefficients without a replay allocation. The
+    /// original global owner remains responsible for their lifetime and erasure.
+    pub(super) fn evaluate_retained_v1(
+        &self,
+        kind: MainTraceColumnKindV1,
+        width: usize,
+        stripe: main_quotient_stripes::MainQuotientStripeV1,
+        policy: MainBoundedTransformPolicyV1,
+        retained: &[PrivateTableV1<F>],
+    ) -> Result<ZeroizingBaseColumnsV1, ZkX509StarkErrorV1> {
+        self.evaluate_sources_using_v1(
+            kind,
+            width,
+            stripe,
+            Some(retained),
+            |_| Err(ZkX509StarkErrorV1::InternalInvariant),
+            policy
+                .forward_columns_v1(stripe.rows)
+                .max(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1),
+            |columns, root, uncertain| policy.forward_exact_v1(columns, root, uncertain),
+            goldilocks_transform_completion_uncertain_v1,
+        )
+    }
+
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn evaluate_with_v1(
         &self,
@@ -352,20 +423,96 @@ impl MainQuotientReplayCacheV1 {
         width: usize,
         stripe: main_quotient_stripes::MainQuotientStripeV1,
         policy: MainBoundedTransformPolicyV1,
-        mut replay: impl FnMut(
+        replay: impl FnMut(
+            core::ops::Range<usize>,
+        ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
+        transform: impl FnMut(&mut [Vec<u64>], u64, Direction) -> Result<Backend, TransformError>,
+        uncertain: impl FnMut() -> bool,
+    ) -> Result<ZeroizingBaseColumnsV1, ZkX509StarkErrorV1> {
+        self.evaluate_sources_with_v1(
+            kind, width, stripe, policy, None, replay, transform, uncertain,
+        )
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_sources_with_v1(
+        &self,
+        kind: MainTraceColumnKindV1,
+        width: usize,
+        stripe: main_quotient_stripes::MainQuotientStripeV1,
+        policy: MainBoundedTransformPolicyV1,
+        retained: Option<&[PrivateTableV1<F>]>,
+        replay: impl FnMut(
             core::ops::Range<usize>,
         ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
         mut transform: impl FnMut(&mut [Vec<u64>], u64, Direction) -> Result<Backend, TransformError>,
+        uncertain: impl FnMut() -> bool,
+    ) -> Result<ZeroizingBaseColumnsV1, ZkX509StarkErrorV1> {
+        self.evaluate_sources_using_v1(
+            kind,
+            width,
+            stripe,
+            retained,
+            replay,
+            aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
+            |columns, root, uncertain| {
+                policy.forward_with_v1(columns, root, &mut transform, uncertain)
+            },
+            uncertain,
+        )
+    }
+
+    /// Source replay remains ordered and bounded to eight columns. Folded values
+    /// accumulate only in the final admitted matrix, then a complete group is
+    /// published. With wider groups a later source refusal can precede device
+    /// dispatch that previously ran earlier; no partial matrix ever escapes. The
+    /// original eight-column route still dispatches each source batch separately,
+    /// including a short cached prefix, preserving its source/dispatch order.
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_sources_using_v1(
+        &self,
+        kind: MainTraceColumnKindV1,
+        width: usize,
+        stripe: main_quotient_stripes::MainQuotientStripeV1,
+        retained: Option<&[PrivateTableV1<F>]>,
+        mut replay: impl FnMut(
+            core::ops::Range<usize>,
+        ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
+        dispatch_columns: usize,
+        mut transform: impl FnMut(
+            &mut [Vec<F>],
+            F,
+            &mut dyn FnMut() -> bool,
+        ) -> Result<(), ZkX509StarkErrorV1>,
         mut uncertain: impl FnMut() -> bool,
     ) -> Result<ZeroizingBaseColumnsV1, ZkX509StarkErrorV1> {
         check_completion_v1(uncertain())?;
+        if ![
+            aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
+            fastpq_prover::goldilocks_transform::MAX_GOLDILOCKS_PREPARED_FORWARD_COLUMNS_V1,
+        ]
+        .contains(&dispatch_columns)
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
         let cached = match kind {
             MainTraceColumnKindV1::Base => &self.columns[..self.base_columns],
             MainTraceColumnKindV1::Aux => &self.columns[self.base_columns..],
         };
-        if cached.len() > width {
+        if cached.len() > width
+            || retained.is_some_and(|columns| {
+                !self.columns.is_empty()
+                    || self.base_columns != 0
+                    || columns.len() != width
+                    || columns
+                        .iter()
+                        .any(|column| column.len() != self.coefficient_count)
+            })
+        {
             return Err(ZkX509StarkErrorV1::InternalInvariant);
         }
+        let cached = retained.unwrap_or(cached);
         let mut output = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1::<Vec<F>>);
         output
             .try_reserve_exact(width)
@@ -376,26 +523,21 @@ impl MainQuotientReplayCacheV1 {
         if output.capacity() != width {
             return Err(ZkX509StarkErrorV1::ProofTooLarge);
         }
-        let mut append = |coefficients: &[&[F]]| -> Result<(), ZkX509StarkErrorV1> {
-            check_completion_v1(uncertain())?;
-            let start = output.len();
-            for _ in coefficients {
-                let mut column = PrivateTableV1::new(Vec::new(), zeroize_fields_v1);
-                column
-                    .try_reserve_exact(stripe.rows)
-                    .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-                if column.capacity() != stripe.rows {
-                    return Err(ZkX509StarkErrorV1::ProofTooLarge);
-                }
-                column.resize(stripe.rows, F::ZERO);
-                output.push(column.into_vec());
+        let mut finished = 0;
+        let mut flush = |output: &mut PrivateTableV1<Vec<F>>,
+                         finished: &mut usize,
+                         complete: bool,
+                         uncertain: &mut dyn FnMut() -> bool|
+         -> Result<(), ZkX509StarkErrorV1> {
+            while output.len() - *finished >= dispatch_columns
+                || (complete && output.len() != *finished)
+            {
+                check_completion_v1(uncertain())?;
+                let end = output.len().min(*finished + dispatch_columns);
+                transform(&mut output[*finished..end], stripe.root, uncertain)?;
+                *finished = end;
             }
-            let batch = &mut output[start..];
-            batch
-                .par_iter_mut()
-                .zip(coefficients.par_iter())
-                .try_for_each(|(values, coefficients)| stripe.fold_into_v1(coefficients, values))?;
-            policy.forward_with_v1(batch, stripe.root, &mut transform, &mut uncertain)
+            Ok(())
         };
         // Stack-only borrowed views add no private field matrix or heap batch.
         for batch in cached.chunks(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
@@ -404,11 +546,21 @@ impl MainQuotientReplayCacheV1 {
             for (target, source) in coefficients.iter_mut().zip(batch) {
                 *target = source;
             }
-            append(&coefficients[..batch.len()])?;
+            check_completion_v1(uncertain())?;
+            append_folded_batch_v1(&mut output, &coefficients[..batch.len()], stripe)?;
+            flush(
+                &mut output,
+                &mut finished,
+                dispatch_columns == aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
+                &mut uncertain,
+            )?;
         }
         for first in (cached.len()..width).step_by(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
             let end = width.min(first + aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1);
-            let batch = replay(first..end)?;
+            let replayed = replay(first..end);
+            // A source error cannot hide newly latched uncertain completion.
+            check_completion_v1(uncertain())?;
+            let batch = replayed?;
             if batch.len() != end - first
                 || batch
                     .iter()
@@ -428,11 +580,54 @@ impl MainQuotientReplayCacheV1 {
             for (target, source) in coefficients.iter_mut().zip(&batch) {
                 *target = source;
             }
-            append(&coefficients[..batch.len()])?;
+            append_folded_batch_v1(&mut output, &coefficients[..batch.len()], stripe)?;
+            // Native/masked replay owners are gone before a larger device group
+            // begins. Only final output columns accumulate between batches.
+            drop(batch);
+            flush(
+                &mut output,
+                &mut finished,
+                dispatch_columns == aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
+                &mut uncertain,
+            )?;
         }
+        flush(&mut output, &mut finished, true, &mut uncertain)?;
         check_completion_v1(uncertain())?;
         Ok(ZeroizingBaseColumnsV1(output.into_vec()))
     }
+}
+
+/// Append one original eight-column source batch under the whole-matrix guard.
+fn append_folded_batch_v1(
+    output: &mut PrivateTableV1<Vec<F>>,
+    coefficients: &[&[F]],
+    stripe: main_quotient_stripes::MainQuotientStripeV1,
+) -> Result<(), ZkX509StarkErrorV1> {
+    if coefficients.is_empty() || coefficients.len() > aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1 {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    let start = output.len();
+    if start
+        .checked_add(coefficients.len())
+        .is_none_or(|end| end > output.capacity())
+    {
+        return Err(ZkX509StarkErrorV1::ProofTooLarge);
+    }
+    for _ in coefficients {
+        let mut column = PrivateTableV1::new(Vec::new(), zeroize_fields_v1);
+        column
+            .try_reserve_exact(stripe.rows)
+            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+        if column.capacity() != stripe.rows {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
+        column.resize(stripe.rows, F::ZERO);
+        output.push(column.into_vec());
+    }
+    output[start..]
+        .par_iter_mut()
+        .zip(coefficients.par_iter())
+        .try_for_each(|(values, coefficients)| stripe.fold_into_v1(coefficients, values))
 }
 
 #[cfg(test)]

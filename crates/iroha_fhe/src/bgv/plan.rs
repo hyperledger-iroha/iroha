@@ -1,7 +1,8 @@
 //! Public shapes of ciphertexts and the admission of every operation on them.
 //!
 //! A [`CiphertextShape`] is what an evaluator may reveal about a ciphertext
-//! without a key: its level, its number of components and its public noise
+//! without a key: its master identity, effective plaintext precision, level,
+//! number of components and public noise
 //! bound. The `plan_*` methods of [`BgvProfile`] map the shapes of the
 //! operands of an operation to the shape of its result by the transfer rules
 //! of [`super::noise`], and refuse a result whose bound exceeds the capacity
@@ -14,21 +15,89 @@
 //! is admitted on ciphertexts exactly when it is admitted on their shapes,
 //! and both end with the same bound.
 //!
-//! Planning needs the public profile only. It takes no key, no plaintext value
-//! and no coin; a plaintext operand enters through its declared
-//! [`PlaintextBound`].
-use super::{BgvError, BgvProfile, Ciphertext, PlaintextBound, noise};
+//! Planning needs public inputs only. It takes no key, private plaintext value
+//! or coin. A general plaintext operand enters through its declared
+//! [`PlaintextBound`]; an explicitly public scalar enters as its canonical
+//! residue, from which the centered coefficient and exact norm are derived.
+use super::{BgvError, BgvProfile, Ciphertext, PlaintextBound, PlaintextPrecision, noise};
 use crate::natural::Natural;
 
-/// The public shape of a ciphertext: level, component count and noise bound.
+/// One validated public constant and its inseparable exact centered norm.
+pub(super) struct PublicScalar {
+    pub(super) centered: i64,
+    pub(super) bound: PlaintextBound,
+}
+impl PublicScalar {
+    pub(super) fn new(precision: PlaintextPrecision, scalar: u64) -> Result<Self, BgvError> {
+        let modulus = precision.modulus();
+        if scalar >= modulus {
+            return Err(BgvError::NonCanonical { index: 0 });
+        }
+        // Both operands are below 2^31 by the canonical BGV precision contract.
+        // This branch depends only on the explicitly public scalar.
+        let centered = if scalar > modulus / 2 {
+            scalar.cast_signed() - modulus.cast_signed()
+        } else {
+            scalar.cast_signed()
+        };
+        let magnitude = centered.unsigned_abs();
+        Ok(Self {
+            centered,
+            bound: PlaintextBound {
+                linf: magnitude,
+                l1: magnitude,
+            },
+        })
+    }
+}
+
+/// The public master identity, effective precision, level, component count and noise bound.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CiphertextShape {
+    precision: PlaintextPrecision,
     level: usize,
     components: usize,
     bound: Natural,
 }
 
 impl CiphertextShape {
+    /// Typed retained shape metadata bound, including requested spare bound words.
+    ///
+    /// # Errors
+    /// Refuses byte overflow. The profile is borrowed and excluded.
+    pub fn metadata_requirement(
+        profile: &BgvProfile,
+    ) -> Result<super::PlanMetadataRequirement, super::PlanMetadataError> {
+        Ok(super::PlanMetadataRequirement {
+            inline_bytes: core::mem::size_of::<Self>(),
+            retained_heap_bytes: super::metadata::shape_heap_bound(profile)?,
+            preparation_scratch_bytes: 0,
+        })
+    }
+
+    /// Visible retained shape allocation; allocator excess may exceed a prebound.
+    ///
+    /// # Errors
+    /// Refuses byte overflow; creates no source or precision authority.
+    pub fn retained_metadata(
+        &self,
+    ) -> Result<super::PlanMetadataRequirement, super::PlanMetadataError> {
+        Ok(super::PlanMetadataRequirement {
+            inline_bytes: core::mem::size_of::<Self>(),
+            retained_heap_bytes: super::metadata::shape_heap(self)?,
+            preparation_scratch_bytes: 0,
+        })
+    }
+
+    /// Effective plaintext precision, including its master profile identity.
+    #[must_use]
+    pub const fn plaintext_precision(&self) -> PlaintextPrecision {
+        self.precision
+    }
+    pub(super) fn check_profile(&self, profile: &BgvProfile) -> Result<(), BgvError> {
+        self.precision.check_profile(profile)
+    }
+
     /// The level: the index of the last main prime of the modulus.
     #[must_use]
     pub const fn level(&self) -> usize {
@@ -63,6 +132,7 @@ impl Ciphertext {
     #[must_use]
     pub fn shape(&self) -> CiphertextShape {
         CiphertextShape {
+            precision: self.plaintext_precision(),
             level: self.level(),
             components: self.component_count(),
             bound: self.noise_bound().as_natural().clone(),
@@ -74,14 +144,17 @@ impl BgvProfile {
     /// Admit a shape: the bound must not exceed the capacity of the level.
     fn admit(
         &self,
+        precision: PlaintextPrecision,
         level: usize,
         components: usize,
         bound: Natural,
     ) -> Result<CiphertextShape, BgvError> {
+        precision.check_profile(self)?;
         if bound > *self.capacity(level)? {
             return Err(BgvError::NoiseBudgetExceeded { level });
         }
         Ok(CiphertextShape {
+            precision,
             level,
             components,
             bound,
@@ -99,6 +172,7 @@ impl BgvProfile {
     }
 
     fn check_same_level(lhs: &CiphertextShape, rhs: &CiphertextShape) -> Result<(), BgvError> {
+        lhs.precision.check_same(rhs.precision)?;
         if lhs.level == rhs.level {
             Ok(())
         } else {
@@ -116,6 +190,7 @@ impl BgvProfile {
     /// other than two or three, or [`BgvError::NoiseBudgetExceeded`].
     pub fn plan_claimed(
         &self,
+        precision: PlaintextPrecision,
         level: usize,
         components: usize,
         bound: Natural,
@@ -124,23 +199,39 @@ impl BgvProfile {
         if !(2..=3).contains(&components) {
             return Err(BgvError::ComponentCount { found: components });
         }
-        self.admit(level, components, bound)
+        self.admit(precision, level, components, bound)
     }
 
     /// Shape of a fresh public-key encryption: the top level and the fresh bound.
     ///
     /// # Errors
     /// [`BgvError::NoiseBudgetExceeded`] when the chain cannot hold a fresh ciphertext.
-    pub fn plan_fresh(&self) -> Result<CiphertextShape, BgvError> {
-        self.admit(self.top_level(), 2, self.fresh_noise().clone())
+    pub fn plan_fresh(&self, precision: PlaintextPrecision) -> Result<CiphertextShape, BgvError> {
+        precision.check_profile(self)?;
+        let bound = noise::fresh_noise(
+            self.degree(),
+            self.master_plaintext_modulus(),
+            precision.modulus(),
+            self.error_bound(),
+        );
+        self.admit(precision, self.top_level(), 2, bound)
     }
 
     /// Shape of the noiseless embedding of a plaintext at `level`.
     ///
     /// # Errors
     /// [`BgvError::LevelOutOfRange`] or [`BgvError::NoiseBudgetExceeded`].
-    pub fn plan_trivial(&self, level: usize) -> Result<CiphertextShape, BgvError> {
-        self.admit(level, 2, noise::plaintext_noise(self.plaintext_modulus()))
+    pub fn plan_trivial(
+        &self,
+        precision: PlaintextPrecision,
+        level: usize,
+    ) -> Result<CiphertextShape, BgvError> {
+        self.admit(
+            precision,
+            level,
+            2,
+            noise::plaintext_noise(precision.modulus()),
+        )
     }
 
     /// Shape of a sum or a difference. Bound: `V_lhs + V_rhs`.
@@ -153,13 +244,20 @@ impl BgvProfile {
         lhs: &CiphertextShape,
         rhs: &CiphertextShape,
     ) -> Result<CiphertextShape, BgvError> {
+        lhs.check_profile(self)?;
+        rhs.check_profile(self)?;
         Self::check_same_level(lhs, rhs)?;
         if lhs.components != rhs.components {
             return Err(BgvError::ComponentCount {
                 found: rhs.components,
             });
         }
-        self.admit(lhs.level, lhs.components, lhs.bound.add(&rhs.bound))
+        self.admit(
+            lhs.precision,
+            lhs.level,
+            lhs.components,
+            lhs.bound.add(&rhs.bound),
+        )
     }
 
     /// Shape of a plaintext sum or difference. Bound: `V + linf` of the plaintext bound.
@@ -172,6 +270,7 @@ impl BgvProfile {
         plaintext: PlaintextBound,
     ) -> Result<CiphertextShape, BgvError> {
         self.admit(
+            shape.precision,
             shape.level,
             shape.components,
             shape.bound.add_u64(plaintext.linf),
@@ -188,10 +287,36 @@ impl BgvProfile {
         plaintext: PlaintextBound,
     ) -> Result<CiphertextShape, BgvError> {
         self.admit(
+            shape.precision,
             shape.level,
             shape.components,
             shape.bound.mul_u64(plaintext.l1),
         )
+    }
+
+    /// Shape of multiplication by a canonical **public** scalar at the effective precision.
+    ///
+    /// Derives the centered representative and exact norm together. The transfer
+    /// is the ordinary plaintext-product bound `V * abs(centered_scalar)`;
+    /// neither the master profile nor effective precision changes.
+    ///
+    /// # Errors
+    /// Wrong profile, invalid level/components, noncanonical scalar or exceeded
+    /// noise capacity. No ciphertext residues are read.
+    pub fn plan_mul_public_scalar(
+        &self,
+        shape: &CiphertextShape,
+        scalar: u64,
+    ) -> Result<CiphertextShape, BgvError> {
+        shape.check_profile(self)?;
+        self.level(shape.level)?;
+        if !(2..=3).contains(&shape.components) {
+            return Err(BgvError::ComponentCount {
+                found: shape.components,
+            });
+        }
+        let scalar = PublicScalar::new(shape.precision, scalar)?;
+        self.plan_mul_plain(shape, scalar.bound)
     }
 
     /// Shape of the tensor product of two two-component ciphertexts.
@@ -205,10 +330,13 @@ impl BgvProfile {
         lhs: &CiphertextShape,
         rhs: &CiphertextShape,
     ) -> Result<CiphertextShape, BgvError> {
+        lhs.check_profile(self)?;
+        rhs.check_profile(self)?;
         Self::check_same_level(lhs, rhs)?;
         Self::check_two_components(lhs)?;
         Self::check_two_components(rhs)?;
         self.admit(
+            lhs.precision,
             lhs.level,
             3,
             noise::product_noise(&lhs.bound, &rhs.bound, self.degree()),
@@ -218,7 +346,7 @@ impl BgvProfile {
     /// Shape after one key switch at the level of `shape`. Bound: `V + E_ks(level)`.
     fn plan_key_switch(&self, shape: &CiphertextShape) -> Result<CiphertextShape, BgvError> {
         let bound = shape.bound.add(self.key_switch_noise(shape.level)?);
-        self.admit(shape.level, 2, bound)
+        self.admit(shape.precision, shape.level, 2, bound)
     }
 
     /// Shape of a relinearized three-component product. Bound: `V + E_ks(level)`.
@@ -226,6 +354,7 @@ impl BgvProfile {
     /// # Errors
     /// [`BgvError::ComponentCount`] or [`BgvError::NoiseBudgetExceeded`].
     pub fn plan_relinearize(&self, shape: &CiphertextShape) -> Result<CiphertextShape, BgvError> {
+        shape.check_profile(self)?;
         if shape.components != 3 {
             return Err(BgvError::ComponentCount {
                 found: shape.components,
@@ -251,6 +380,7 @@ impl BgvProfile {
     /// # Errors
     /// [`BgvError::ComponentCount`] or [`BgvError::NoiseBudgetExceeded`].
     pub fn plan_galois(&self, shape: &CiphertextShape) -> Result<CiphertextShape, BgvError> {
+        shape.check_profile(self)?;
         Self::check_two_components(shape)?;
         self.plan_key_switch(shape)
     }
@@ -262,6 +392,7 @@ impl BgvProfile {
     /// [`BgvError::ComponentCount`], [`BgvError::NoLevelLeft`] at level zero
     /// or [`BgvError::NoiseBudgetExceeded`].
     pub fn plan_switch_down(&self, shape: &CiphertextShape) -> Result<CiphertextShape, BgvError> {
+        shape.check_profile(self)?;
         Self::check_two_components(shape)?;
         self.level(shape.level)?;
         if shape.level == 0 {
@@ -270,10 +401,10 @@ impl BgvProfile {
         let bound = noise::switch_down_noise(
             &shape.bound,
             self.degree(),
-            self.plaintext_modulus(),
+            self.master_plaintext_modulus(),
             self.parameters().main_primes[shape.level],
         );
-        self.admit(shape.level - 1, 2, bound)
+        self.admit(shape.precision, shape.level - 1, 2, bound)
     }
 
     /// Shape after switching down to `level`; a shape already there is returned unchanged.
@@ -286,6 +417,7 @@ impl BgvProfile {
         shape: &CiphertextShape,
         level: usize,
     ) -> Result<CiphertextShape, BgvError> {
+        shape.check_profile(self)?;
         if level > shape.level {
             return Err(BgvError::LevelMismatch {
                 lhs: shape.level,
@@ -322,6 +454,8 @@ impl BgvProfile {
         lhs: &CiphertextShape,
         rhs: &CiphertextShape,
     ) -> Result<Option<(CiphertextShape, CiphertextShape)>, BgvError> {
+        lhs.check_profile(self)?;
+        rhs.check_profile(self)?;
         Self::check_same_level(lhs, rhs)?;
         Self::check_two_components(lhs)?;
         Self::check_two_components(rhs)?;
@@ -351,12 +485,13 @@ mod tests {
     use crate::bgv::BgvParameters;
 
     fn profile() -> BgvProfile {
-        BgvProfile::new(BgvParameters::derive(4, 257, (30, 5), (31, 2), 2).expect("parameters"))
+        BgvProfile::new(BgvParameters::derive(4, 257, 1, (30, 5), (31, 2), 2).expect("parameters"))
             .expect("profile")
     }
 
     fn shape(level: usize, components: usize, bound: u64) -> CiphertextShape {
         CiphertextShape {
+            precision: profile().master_plaintext(),
             level,
             components,
             bound: Natural::from_u64(bound),
@@ -376,39 +511,47 @@ mod tests {
     #[test]
     fn fresh_trivial_and_claimed_shapes_are_admitted_within_the_capacity() {
         let profile = profile();
-        let fresh = profile.plan_fresh().expect("fresh");
+        let fresh = profile
+            .plan_fresh(profile.master_plaintext())
+            .expect("fresh");
         assert_eq!(fresh.level(), 4);
         assert_eq!(fresh.components(), 2);
         assert_eq!(fresh.bound(), profile.fresh_noise());
-        let trivial = profile.plan_trivial(2).expect("trivial");
+        let trivial = profile
+            .plan_trivial(profile.master_plaintext(), 2)
+            .expect("trivial");
         assert_eq!(trivial, shape(2, 2, 128));
         assert_eq!(
-            profile.plan_trivial(5),
+            profile.plan_trivial(profile.master_plaintext(), 5),
             Err(BgvError::LevelOutOfRange { level: 5, top: 4 })
         );
         let capacity = profile.capacity(1).expect("capacity").clone();
-        assert!(profile.plan_claimed(1, 3, capacity.clone()).is_ok());
+        assert!(
+            profile
+                .plan_claimed(profile.master_plaintext(), 1, 3, capacity.clone())
+                .is_ok()
+        );
         assert_eq!(
-            profile.plan_claimed(1, 2, capacity.add_u64(1)),
+            profile.plan_claimed(profile.master_plaintext(), 1, 2, capacity.add_u64(1)),
             Err(BgvError::NoiseBudgetExceeded { level: 1 })
         );
         for components in [0, 1, 4] {
             assert_eq!(
-                profile.plan_claimed(1, components, Natural::zero()),
+                profile.plan_claimed(profile.master_plaintext(), 1, components, Natural::zero()),
                 Err(BgvError::ComponentCount { found: components })
             );
         }
         assert_eq!(
-            profile.plan_claimed(5, 2, Natural::zero()),
+            profile.plan_claimed(profile.master_plaintext(), 5, 2, Natural::zero()),
             Err(BgvError::LevelOutOfRange { level: 5, top: 4 })
         );
         // One 17-bit prime (74,017) cannot hold a fresh ciphertext, whose bound is 178,229.
         let narrow = BgvProfile::new(
-            BgvParameters::derive(4, 257, (17, 1), (18, 1), 1).expect("parameters"),
+            BgvParameters::derive(4, 257, 1, (17, 1), (18, 1), 1).expect("parameters"),
         )
         .expect("profile");
         assert_eq!(
-            narrow.plan_fresh(),
+            narrow.plan_fresh(narrow.master_plaintext()),
             Err(BgvError::NoiseBudgetExceeded { level: 0 })
         );
     }
@@ -541,6 +684,7 @@ mod tests {
         );
         // A bound on the capacity of two primes rounds above the capacity of one.
         let full = CiphertextShape {
+            precision: profile.master_plaintext(),
             level: 1,
             components: 2,
             bound: profile.capacity(1).expect("capacity").clone(),
@@ -590,6 +734,7 @@ mod tests {
         // are just above 2^29: the product of two 2^100 bounds exceeds the capacity here and
         // one level lower, and is admitted three levels lower.
         let huge = CiphertextShape {
+            precision: profile.master_plaintext(),
             level: 4,
             components: 2,
             bound: Natural::from_u128(1 << 100),
@@ -609,6 +754,7 @@ mod tests {
             Ok(None)
         );
         let full = CiphertextShape {
+            precision: profile.master_plaintext(),
             level: 1,
             components: 2,
             bound: profile.capacity(1).expect("capacity").clone(),
@@ -625,6 +771,39 @@ mod tests {
         assert_eq!(
             profile.plan_lower_multiplication(&large, &shape(4, 3, 5)),
             Err(BgvError::ComponentCount { found: 3 })
+        );
+    }
+
+    #[test]
+    fn public_scalar_shape_refuses_components_levels_and_binds_the_exact_norm() {
+        let profile = BgvProfile::new(
+            super::super::BgvParameters::derive(4, 257, 1, (30, 3), (31, 2), 2)
+                .expect("parameters"),
+        )
+        .expect("profile");
+        let shape = profile
+            .plan_fresh(profile.master_plaintext())
+            .expect("fresh");
+        for scalar in [0, 1, 128, 129, 256] {
+            let result = profile
+                .plan_mul_public_scalar(&shape, scalar)
+                .expect("scalar");
+            let magnitude = scalar.min(257 - scalar);
+            assert_eq!(result.bound(), &shape.bound().mul_u64(magnitude));
+        }
+        for count in [0, 1, 4, usize::MAX] {
+            let mut invalid = shape.clone();
+            invalid.components = count;
+            assert_eq!(
+                profile.plan_mul_public_scalar(&invalid, 1),
+                Err(BgvError::ComponentCount { found: count })
+            );
+        }
+        let mut invalid = shape;
+        invalid.level = 3;
+        assert_eq!(
+            profile.plan_mul_public_scalar(&invalid, 1),
+            Err(BgvError::LevelOutOfRange { level: 3, top: 2 })
         );
     }
 }

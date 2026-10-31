@@ -87,6 +87,7 @@ pub(in super::super::super) enum MainMixedInputV1<'a> {
     Retained(&'a [F]),
 }
 pub(in super::super::super) type MainMixedColumnV1<'a> = (MainMixedInputV1<'a>, [E; 2], [E; 2]);
+type RetainedColumnV1<'a> = (&'a [F], [E; 2], [E; 2]);
 
 pub(in super::super::super) struct MainMixedDeepPointsV1 {
     native: MainNativeDeepPointsV1,
@@ -113,6 +114,7 @@ impl MainMixedDeepPointsV1 {
             2 * core::mem::size_of::<std::vec::IntoIter<ZeroizingMainTraceColumnV1>>(),
             core::mem::size_of::<[MainMixedColumnV1<'_>; BATCH]>(),
             core::mem::size_of::<[NativeColumnV1<'_>; BATCH]>(),
+            core::mem::size_of::<[RetainedColumnV1<'_>; BATCH]>(),
             core::mem::size_of::<MainDeepStackValuesV1<{ 2 * BATCH }>>(),
             core::mem::size_of::<MainDeepStackValuesV1<1>>(),
             BATCH * core::mem::size_of::<[E; 16]>(),
@@ -338,13 +340,17 @@ impl MainMixedDeepQuotientV1 {
             core::array::from_fn(|_| (empty, empty, [E::ZERO; 2], [E::ZERO; 2]));
         let mut native_count = 0;
         let mut retained_count = 0;
+        let mut retained_batch = [(empty, [E::ZERO; 2], [E::ZERO; 2]); BATCH];
         for &(input, values, scales) in columns {
             match input {
                 MainMixedInputV1::Native(native, mask) => {
                     native_batch[native_count] = (native, mask, values, scales);
                     native_count += 1;
                 }
-                MainMixedInputV1::Retained(_) => retained_count += 1,
+                MainMixedInputV1::Retained(coefficients) => {
+                    retained_batch[retained_count] = (coefficients, values, scales);
+                    retained_count += 1;
+                }
             }
         }
         let total_native = self
@@ -374,30 +380,56 @@ impl MainMixedDeepQuotientV1 {
                 .retained
                 .as_mut()
                 .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
-            for (side, target) in retained.coefficients.iter_mut().enumerate() {
+            Self::accumulate_validated_retained_batch_v1(
+                retained,
+                &retained_batch[..retained_count],
+                total_retained,
+            );
+        }
+        Ok(())
+    }
+
+    // Only the caller above admits these original claims and canonical shapes.
+    // Every private output keeps one owner and the original selected-column order.
+    fn accumulate_validated_retained_batch_v1(
+        retained: &mut MainGroupedDeepQuotientV1,
+        columns: &[RetainedColumnV1<'_>],
+        count: usize,
+    ) {
+        for (side, target) in retained.coefficients.iter_mut().enumerate() {
+            // Keep the measured widened gain for complete public batches;
+            // partial batches use the original scalar arithmetic.
+            if columns.len() < BATCH {
                 target
                     .par_iter_mut()
                     .enumerate()
                     .for_each(|(degree, target)| {
-                        for &(input, _, scales) in columns {
-                            if let MainMixedInputV1::Retained(coefficients) = input {
-                                *target = target.add(scales[side].mul_base(coefficients[degree]));
-                            }
+                        for (coefficients, _, scales) in columns {
+                            *target = target.add(scales[side].mul_base(coefficients[degree]));
                         }
                     });
+                continue;
             }
-            for &(input, values, scales) in columns {
-                if matches!(input, MainMixedInputV1::Retained(_)) {
-                    for side in 0..2 {
-                        retained.values[side] =
-                            retained.values[side].add(values[side].mul(scales[side]));
-                    }
-                }
-            }
-            retained.columns = total_retained;
+            target
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(degree, target)| {
+                    let weighted =
+                        main_composition_mix::mix_indexed_residues_v1(columns.len(), |offset| {
+                            let (coefficients, _, scales) = columns[offset];
+                            (coefficients[degree], scales[side])
+                        });
+                    *target = target.add(weighted);
+                });
         }
-        Ok(())
+        for (_, values, scales) in columns {
+            for side in 0..2 {
+                retained.values[side] = retained.values[side].add(values[side].mul(scales[side]));
+            }
+        }
+        retained.columns = count;
     }
+
     pub(in super::super::super) fn accumulate_v1(
         self,
         expected_native: usize,
@@ -424,3 +456,7 @@ impl MainMixedDeepQuotientV1 {
 #[cfg(test)]
 #[path = "main_mixed_deep_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "main_weighted_deep_cost_tests.rs"]
+mod cost_tests;

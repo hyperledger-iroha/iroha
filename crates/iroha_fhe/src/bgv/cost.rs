@@ -8,7 +8,9 @@
 //!
 //! # Sizes
 //!
-//! A residue is eight bytes. Every size is the length of a canonical frame
+//! A resident residue and every key-frame residue occupy eight bytes. Ciphertext
+//! frame residues use their profile-derived prime bit widths. Every frame size is
+//! the length of the canonical frame
 //! the crate encodes and decodes: [`super::Ciphertext::encoded_len`],
 //! [`super::PublicKey::encoded_len`], [`super::SwitchingKey::encoded_len`],
 //! [`super::EvaluationKeys::encoded_len`] and
@@ -188,6 +190,28 @@ impl<'profile> CostModel<'profile> {
                 + 2 * self.inverse_transform_units()))
     }
 
+    /// Units of an explicit public scalar product: `components * N * (level+1)`.
+    ///
+    /// Counts canonical residue products; public scalar reduction, validation,
+    /// copying and clearing are excluded. No transform or plaintext polynomial
+    /// allocation occurs. This is separate from general plaintext multiplication.
+    ///
+    /// # Errors
+    /// [`BgvError::LevelOutOfRange`] or [`BgvError::ComponentCount`].
+    pub fn scalar_multiplication_units(
+        self,
+        level: usize,
+        components: usize,
+    ) -> Result<u64, BgvError> {
+        let limbs = self.check_level(level)?;
+        if !(2..=3).contains(&components) {
+            return Err(BgvError::ComponentCount { found: components });
+        }
+        // Validated profiles bound N by 2^17 and the full RNS basis by 64
+        // primes, so this admitted two/three-component product fits u64.
+        Ok(word(components) * self.degree() * limbs)
+    }
+
     /// Units of one automorphism with its key switch at `level`.
     ///
     /// # Errors
@@ -256,7 +280,7 @@ mod tests {
     use crate::bgv::{BgvCandidate, BgvParameters};
 
     fn toy() -> BgvProfile {
-        BgvProfile::new(BgvParameters::derive(4, 257, (30, 3), (31, 2), 2).expect("parameters"))
+        BgvProfile::new(BgvParameters::derive(4, 257, 1, (30, 3), (31, 2), 2).expect("parameters"))
             .expect("profile")
     }
 
@@ -278,7 +302,10 @@ mod tests {
     fn sizes_match_the_encoded_objects() {
         let profile = toy();
         let model = CostModel::new(&profile);
-        assert_eq!(model.ciphertext_bytes(2, 2), Ok(36 + 16 + 8 * 2 * 3 * 16));
+        assert_eq!(
+            model.ciphertext_bytes(2, 2),
+            Ok(36 + 16 + 30 * 2 * 3 * 16 / 8)
+        );
         assert_eq!(
             model.ciphertext_bytes(3, 2),
             Err(BgvError::LevelOutOfRange { level: 3, top: 2 })
@@ -326,7 +353,8 @@ mod tests {
             word(keys.secret.to_custody_bytes(&profile).expect("frame").len()),
             model.secret_key_bytes()
         );
-        let plaintext = crate::bgv::Plaintext::constant(&profile, 1).expect("plaintext");
+        let plaintext = crate::bgv::Plaintext::constant(&profile, profile.master_plaintext(), 1)
+            .expect("plaintext");
         let ciphertext = keys
             .public
             .encrypt(&profile, &plaintext)
@@ -388,13 +416,37 @@ mod tests {
     fn candidate_sizes_are_the_documented_ones() {
         let affine = BgvProfile::candidate(BgvCandidate::AffineF257).expect("profile");
         let model = CostModel::new(&affine);
-        // Two components of six limbs of 2^14 residues: 1.5 MiB plus the frame.
+        // Two components of six limbs of 2^14 residues at 50 bits, plus the frame.
         assert_eq!(
             model.ciphertext_bytes(5, 2),
-            Ok(36 + 8 * 5 + 8 * 2 * 6 * 16_384)
+            Ok(36 + 8 * 5 + 50 * 2 * 6 * 16_384 / 8)
         );
         // Three digits, two polynomials, eight limbs: 6 MiB plus the frame.
         assert_eq!(model.switching_key_bytes(), 37 + 8 * 3 * 2 * 8 * 16_384);
         assert_eq!(model.public_key_bytes(), 32 + 8 * 2 * 6 * 16_384);
+    }
+
+    #[test]
+    fn public_scalar_units_count_every_component_and_refuse_invalid_geometry() {
+        let profile = toy();
+        let model = CostModel::new(&profile);
+        for level in 0..=profile.top_level() {
+            for components in [2_usize, 3] {
+                assert_eq!(
+                    model.scalar_multiplication_units(level, components),
+                    Ok((components * profile.degree() * (level + 1)) as u64)
+                );
+            }
+        }
+        for components in [0, 1, 4, usize::MAX] {
+            assert_eq!(
+                model.scalar_multiplication_units(0, components),
+                Err(BgvError::ComponentCount { found: components })
+            );
+        }
+        assert_eq!(
+            model.scalar_multiplication_units(3, 2),
+            Err(BgvError::LevelOutOfRange { level: 3, top: 2 })
+        );
     }
 }

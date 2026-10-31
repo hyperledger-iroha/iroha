@@ -652,10 +652,10 @@ mod tests {
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 mod heuristics_value_tests {
     use super::harness::heuristics_value;
-    use norito::json::Value;
     use fastpq_prover::{
         AdaptiveScheduleSnapshot, BatchHeuristicSnapshot, CommandLimitSnapshot, CommandLimitSource,
     };
+    use norito::json::Value;
     #[test]
     fn heuristics_preserve_fft_fields_and_omit_unused_scalar_geometry() {
         let snapshot = AdaptiveScheduleSnapshot {
@@ -1558,6 +1558,20 @@ mod harness {
             "wait_ratio".into(),
             json::to_value(&wait_ratio).expect("serialize wait ratio"),
         );
+        map.insert(
+            "timestamped_commands".into(),
+            json::to_value(&stats.timestamped_commands).expect("serialize timestamp count"),
+        );
+        for (name, value) in [
+            ("gpu_execution_ms", stats.gpu_execution_ms),
+            ("cpu_driver_scheduling_ms", stats.cpu_driver_scheduling_ms),
+            ("pre_gpu_queue_ms", stats.pre_gpu_queue_ms),
+        ] {
+            map.insert(
+                name.into(),
+                json::to_value(&round3(value)).expect("serialize command timing"),
+            );
+        }
         map
     }
     fn column_staging_samples_value(samples: &[ColumnStagingSample]) -> Value {
@@ -1597,6 +1611,12 @@ mod harness {
                 .expect("FFT/LDE staging count overflow"),
             flatten_ms: fft.flatten_ms + lde.flatten_ms,
             wait_ms: fft.wait_ms + lde.wait_ms,
+            timestamped_commands: fft
+                .timestamped_commands
+                .saturating_add(lde.timestamped_commands),
+            gpu_execution_ms: fft.gpu_execution_ms + lde.gpu_execution_ms,
+            cpu_driver_scheduling_ms: fft.cpu_driver_scheduling_ms + lde.cpu_driver_scheduling_ms,
+            pre_gpu_queue_ms: fft.pre_gpu_queue_ms + lde.pre_gpu_queue_ms,
         }
     }
     #[test]
@@ -1625,16 +1645,25 @@ mod harness {
                 batches: 2,
                 flatten_ms: 3.0,
                 wait_ms: 1.0,
+                timestamped_commands: 2,
+                gpu_execution_ms: 0.5,
+                cpu_driver_scheduling_ms: 0.25,
+                pre_gpu_queue_ms: 0.125,
             },
             ColumnStagingPhaseStats {
                 batches: 5,
                 flatten_ms: 7.0,
                 wait_ms: 4.0,
+                ..ColumnStagingPhaseStats::default()
             },
         );
         assert_eq!(total.batches, 7);
         assert_eq!(total.flatten_ms.to_bits(), 10.0_f64.to_bits());
         assert_eq!(total.wait_ms.to_bits(), 5.0_f64.to_bits());
+        assert_eq!(total.timestamped_commands, 2);
+        assert_eq!(total.gpu_execution_ms, 0.5);
+        assert_eq!(total.cpu_driver_scheduling_ms, 0.25);
+        assert_eq!(total.pre_gpu_queue_ms, 0.125);
         let value = Value::Object(column_staging_phase_value(&total));
         assert_eq!(value.get("wait_ratio").and_then(Value::as_f64), Some(0.333));
     }

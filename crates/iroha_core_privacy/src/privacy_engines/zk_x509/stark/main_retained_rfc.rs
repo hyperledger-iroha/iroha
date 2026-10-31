@@ -60,6 +60,8 @@ pub(super) struct MainRetainedRfcV1 {
     proof_instance: ZkX509ProofInstanceV1,
     plan: PlanV1,
     columns: ClearingVecV1<PrivateTableV1<F>>,
+    native_prepared: bool,
+    retained: usize,
 }
 impl MainRetainedRfcV1 {
     /// Additional split receivers and copy/iterator metadata, beyond the original
@@ -116,6 +118,8 @@ impl MainRetainedRfcV1 {
             proof_instance,
             plan,
             columns,
+            native_prepared: false,
+            retained: 0,
         })
     }
     pub(super) fn validate_v1(
@@ -130,7 +134,8 @@ impl MainRetainedRfcV1 {
         self.validate_complete_v1()
     }
     fn validate_complete_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
-        if self.columns.len() != self.plan.width_v1()
+        if self.retained != self.plan.width_v1()
+            || self.columns.len() != self.plan.width_v1()
             || self.columns.capacity_v1() != self.plan.width_v1()
             || self.columns.iter().any(|column| {
                 column.len() != self.plan.coefficients
@@ -150,6 +155,120 @@ impl MainRetainedRfcV1 {
             },
         )
     }
+    /// Scratch headers used while the final RFC allocation is populated with
+    /// native rows. The field allocations are already in forecast_all_v1.
+    pub(super) const fn native_preparation_scratch_v1() -> usize {
+        core::mem::size_of::<ClearingVecV1<PrivateTableV1<F>>>()
+            + core::mem::size_of::<[&mut [F]; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1]>()
+    }
+
+    /// Populate this final owner only at the first original RFC request. No RNG
+    /// is used here; the existing sampler retains its original column order.
+    pub(super) fn prepare_native_if_needed_v1(
+        &mut self,
+        group: usize,
+        range: core::ops::Range<usize>,
+        fill: impl FnOnce(&mut [&mut [F]]) -> Result<(), ZkX509StarkErrorV1>,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        if group != self.plan.group
+            || range.end <= self.plan.start
+            || range.start >= self.plan.end
+            || self.native_prepared
+        {
+            return Ok(());
+        }
+        if self.retained != 0
+            || !self.columns.is_empty()
+            || self.columns.capacity_v1() != self.plan.width_v1()
+            || self.plan.width_v1() > ZK_X509_RFC5280_STARK_BASE_WIDTH_V1
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let native_rows = self
+            .plan
+            .coefficients
+            .checked_sub(MASK_DEGREE + 1)
+            .filter(|rows| rows.is_power_of_two())
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+        // Move the already charged header allocation into a transactional owner.
+        // On error/unwind every constructed native column clears immediately;
+        // self remains incomplete and cannot expose a retained polynomial.
+        let mut columns = core::mem::replace(
+            &mut self.columns,
+            ClearingVecV1::try_with_capacity_v1(0)
+                .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?,
+        );
+        for _ in 0..self.plan.width_v1() {
+            let mut column = PrivateTableV1::new(Vec::new(), zeroize_fields_v1);
+            column
+                .try_reserve_exact(self.plan.coefficients)
+                .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+            if column.capacity() != self.plan.coefficients {
+                return Err(ZkX509StarkErrorV1::ProofTooLarge);
+            }
+            // Initialize the full charged allocation so its mask suffix also
+            // has clearing coverage before it is replaced by the original mask.
+            column.resize(self.plan.coefficients, F::ZERO);
+            columns.try_push_v1(column).map_err(|rejected| {
+                drop(rejected);
+                ZkX509StarkErrorV1::ProofTooLarge
+            })?;
+        }
+        {
+            let mut targets: [&mut [F]; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1] =
+                core::array::from_fn(|_| -> &mut [F] { &mut [] });
+            for (target, column) in targets.iter_mut().zip(columns.iter_mut()) {
+                *target = &mut column[..native_rows];
+            }
+            fill(&mut targets[..self.plan.width_v1()])?;
+        }
+        if columns
+            .iter()
+            .flat_map(|column| column.iter())
+            .any(|value| F::canonical(value.0).is_none())
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        self.columns = columns;
+        self.native_prepared = true;
+        Ok(())
+    }
+
+    /// Bounded native working copies leave the preallocated final owner. This
+    /// route is available only before that original column has been masked.
+    pub(super) fn copy_native_columns_v1(
+        &self,
+        group: usize,
+        range: core::ops::Range<usize>,
+    ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1> {
+        let width = range
+            .end
+            .checked_sub(range.start)
+            .filter(|&width| width > 0 && width <= aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+        if !self.native_prepared
+            || self.columns.len() != self.plan.width_v1()
+            || !self.plan.contains_v1(group, range.start)
+            || range.end > self.plan.end
+            || range.start < self.plan.start + self.retained
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let native_rows = self.plan.coefficients - (MASK_DEGREE + 1);
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact(width)
+            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+        if output.capacity() != width {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
+        for column in range {
+            output.push(copy_v1(
+                &self.columns[column - self.plan.start][..native_rows],
+            )?);
+        }
+        Ok(output)
+    }
     /// Preserve the exact complete batch returned after original source/entropy work.
     pub(super) fn retain_batch_v1(
         &mut self,
@@ -167,7 +286,7 @@ impl MainRetainedRfcV1 {
             if !self.plan.contains_v1(group, index) {
                 continue;
             }
-            if index != self.plan.start + self.columns.len()
+            if index != self.plan.start + self.retained
                 || column.len() != self.plan.coefficients
                 || column.0.capacity() != self.plan.coefficients
             {
@@ -178,10 +297,17 @@ impl MainRetainedRfcV1 {
             let working = copy_v1(column)?;
             let original = core::mem::replace(column, working);
             let original = PrivateTableV1::new(original.into_vec_v1(), zeroize_fields_v1);
-            self.columns.try_push_v1(original).map_err(|rejected| {
-                drop(rejected);
-                ZkX509StarkErrorV1::ProofTooLarge
-            })?;
+            if self.native_prepared {
+                // The outgoing native slot already occupies this final-owner
+                // allowance; its clearing destructor runs after the replacement.
+                self.columns[self.retained] = original;
+            } else {
+                self.columns.try_push_v1(original).map_err(|rejected| {
+                    drop(rejected);
+                    ZkX509StarkErrorV1::ProofTooLarge
+                })?;
+            }
+            self.retained += 1;
         }
         Ok(())
     }
@@ -215,6 +341,19 @@ impl MainRetainedRfcV1 {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
         Ok(&self.columns[column - self.plan.start])
+    }
+    /// Borrow exactly the original registration's complete coefficient owners.
+    /// Callers form bounded stack views; no private allocation changes custody.
+    pub(super) fn registration_columns_v1(
+        &self,
+        group: usize,
+        range: core::ops::Range<usize>,
+    ) -> Result<&[PrivateTableV1<F>], ZkX509StarkErrorV1> {
+        self.validate_complete_v1()?;
+        if group != self.plan.group || range != (self.plan.start..self.plan.end) {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        Ok(self.columns.as_slice_v1())
     }
     pub(super) fn group_width_v1(&self, group: usize) -> usize {
         if group == self.plan.group {
@@ -281,6 +420,32 @@ mod tests {
     fn column(value: u64) -> ZeroizingMainTraceColumnV1 {
         ZeroizingMainTraceColumnV1(vec![F(value); 32])
     }
+    #[test]
+    fn complete_registration_borrow_preserves_original_addresses_and_rejects_subsets() {
+        let mut retained = fixture();
+        assert!(retained.registration_columns_v1(5, 4..7).is_err());
+        let mut batch = vec![column(3), column(5), column(7)];
+        let pointers = batch
+            .iter()
+            .map(|column| column.as_ptr())
+            .collect::<Vec<_>>();
+        retained.retain_batch_v1(5, 4..7, &mut batch).unwrap();
+        let originals = retained.registration_columns_v1(5, 4..7).unwrap();
+        assert_eq!(
+            originals
+                .iter()
+                .map(|column| column.as_ptr())
+                .collect::<Vec<_>>(),
+            pointers
+        );
+        assert_eq!(originals[1][0], F(5));
+        for (group, range) in [(4, 4..7), (5, 3..7), (5, 4..6), (5, 4..8), (5, 7..4)] {
+            assert!(retained.registration_columns_v1(group, range).is_err());
+        }
+        retained.columns[0].pop();
+        assert!(retained.registration_columns_v1(5, 4..7).is_err());
+    }
+
     #[test]
     fn original_transfer_and_copies_retain_all_coefficients_without_aliasing() {
         let mut retained = fixture();
@@ -459,6 +624,123 @@ mod tests {
                 3 * core::mem::size_of::<PrivateTableV1<F>>()
             );
             assert_eq!(allocations[0].nonzero_after, 0);
+        }
+    }
+
+    #[test]
+    fn native_preparation_uses_final_capacity_and_original_coefficients_replace_each_slot() {
+        let mut retained = MainRetainedRfcV1::for_original_mask_test_v1(5, 3, 4);
+        assert!(retained.copy_native_columns_v1(5, 0..1).is_err());
+        retained
+            .prepare_native_if_needed_v1(4, 0..3, |_| panic!("wrong group read source"))
+            .unwrap();
+        assert!(!retained.native_prepared);
+        retained
+            .prepare_native_if_needed_v1(5, 0..3, |targets| {
+                for (column, target) in targets.iter_mut().enumerate() {
+                    target.fill(F((column + 1) as u64));
+                }
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            retained.allocated_payload_v1(),
+            retained.plan.payload_v1().unwrap()
+        );
+        assert!(retained.column_v1(5, 0).is_err());
+        for column in retained.columns.iter() {
+            assert_eq!(column.len(), retained.plan.coefficients);
+            assert_eq!(column.capacity(), retained.plan.coefficients);
+            assert!(column[16..].iter().all(|value| *value == F::ZERO));
+        }
+        let native = retained.copy_native_columns_v1(5, 0..3).unwrap();
+        for (column, copy) in native.iter().enumerate() {
+            assert_eq!(copy.0.capacity(), 16);
+            assert_eq!(&**copy, &[F((column + 1) as u64); 16]);
+        }
+        retained
+            .prepare_native_if_needed_v1(5, 0..3, |_| panic!("prepared source replayed"))
+            .unwrap();
+        let coefficients = retained.plan.coefficients;
+        let mut originals = (0..3)
+            .map(|column| ZeroizingMainTraceColumnV1(vec![F((column + 7) as u64); coefficients]))
+            .collect::<Vec<_>>();
+        let pointers = originals
+            .iter()
+            .map(|column| column.as_ptr())
+            .collect::<Vec<_>>();
+        retained
+            .retain_batch_v1(5, 0..1, &mut originals[..1])
+            .unwrap();
+        assert!(retained.copy_native_columns_v1(5, 0..1).is_err());
+        assert!(retained.copy_native_columns_v1(5, 1..3).is_ok());
+        assert!(retained.copy_columns_v1(5, 0..1).is_err());
+        retained
+            .retain_batch_v1(5, 1..3, &mut originals[1..])
+            .unwrap();
+        retained.validate_complete_v1().unwrap();
+        for (index, pointer) in pointers.into_iter().enumerate() {
+            assert_eq!(retained.columns[index].as_ptr(), pointer);
+            assert_ne!(originals[index].as_ptr(), pointer);
+        }
+        assert_eq!(
+            retained.allocated_payload_v1(),
+            retained.plan.payload_v1().unwrap()
+        );
+        assert_eq!(retained.copy_columns_v1(5, 0..3).unwrap(), originals);
+    }
+
+    #[test]
+    fn native_preparation_clears_complete_allocations_on_error_unwind_and_noncanonical_input() {
+        use super::super::super::super::private_table::{allocation_inspection, inspection};
+        for mode in 0..3 {
+            let ((result, fields), allocations) = allocation_inspection::observe_v1(|| {
+                inspection::observe_v1(|| {
+                    let mut retained = MainRetainedRfcV1::for_original_mask_test_v1(5, 3, 4);
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        retained.prepare_native_if_needed_v1(5, 0..3, |targets| {
+                            for column in targets.iter_mut() {
+                                column.fill(F(13));
+                            }
+                            if mode == 0 {
+                                return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                            }
+                            if mode == 1 {
+                                panic!("injected native preparation unwind");
+                            }
+                            targets[2][15] = F(u64::MAX);
+                            Ok(())
+                        })
+                    }));
+                    assert!(!retained.native_prepared);
+                    assert_eq!(retained.retained, 0);
+                    assert!(retained.columns.is_empty());
+                    assert_eq!(retained.columns.capacity_v1(), 0);
+                    assert!(retained.column_v1(5, 0).is_err());
+                    assert!(retained.copy_native_columns_v1(5, 0..1).is_err());
+                    result
+                })
+            });
+            assert!(result.map_or(mode == 1, |outcome| outcome.is_err()));
+            assert_eq!(
+                fields
+                    .iter()
+                    .map(|field| field.nonzero_before)
+                    .sum::<usize>(),
+                48
+            );
+            assert!(fields.iter().all(|field| field.nonzero_after == 0));
+            assert_eq!(allocations.len(), 2);
+            assert_eq!(
+                allocations[0].bytes,
+                3 * core::mem::size_of::<PrivateTableV1<F>>()
+            );
+            assert_eq!(allocations[1].bytes, 0);
+            assert!(
+                allocations
+                    .iter()
+                    .all(|allocation| allocation.nonzero_after == 0)
+            );
         }
     }
 }

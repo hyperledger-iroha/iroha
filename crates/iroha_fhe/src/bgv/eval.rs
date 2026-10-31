@@ -78,6 +78,9 @@ impl BgvProfile {
     ) -> Result<Ciphertext, BgvError> {
         ciphertext.check_profile(self)?;
         plaintext.check_profile(self)?;
+        ciphertext
+            .plaintext_precision()
+            .check_same(plaintext.plaintext_precision())?;
         let shape = self.plan_add_plain(&ciphertext.shape(), plaintext.bound())?;
         let plan_of = |limb: usize| self.main_plan(limb);
         let message = plaintext.centered_residues(self, ciphertext.level() + 1);
@@ -125,6 +128,9 @@ impl BgvProfile {
     ) -> Result<Ciphertext, BgvError> {
         ciphertext.check_profile(self)?;
         plaintext.check_profile(self)?;
+        ciphertext
+            .plaintext_precision()
+            .check_same(plaintext.plaintext_precision())?;
         let level = ciphertext.level();
         let shape = self.plan_mul_plain(&ciphertext.shape(), plaintext.bound())?;
         let plan_of = |limb: usize| self.main_plan(limb);
@@ -135,6 +141,36 @@ impl BgvProfile {
             component.forward(plan_of)?;
             component.pointwise_mul_assign(&multiplier, plan_of)?;
             component.inverse(plan_of)?;
+        }
+        Ok(Ciphertext::from_shape(self, shape, components))
+    }
+
+    /// Multiply by a canonical **public** scalar modulo the effective plaintext modulus.
+    ///
+    /// The exact centered coefficient and its norm are derived together. This is
+    /// identical to multiplying by that constant polynomial, including the
+    /// ciphertext residues and noise bound, but uses one modular product per
+    /// residue with no NTT or plaintext allocation. All residues are visited for
+    /// scalar zero and one as well. Public scalars must not encode hidden data.
+    ///
+    /// # Errors
+    /// The same profile, shape, canonicality and noise refusals as
+    /// [`Self::plan_mul_public_scalar`], all before copying or reading residues.
+    pub fn mul_public_scalar(
+        &self,
+        ciphertext: &Ciphertext,
+        scalar: u64,
+    ) -> Result<Ciphertext, BgvError> {
+        ciphertext.check_profile(self)?;
+        let shape = self.plan_mul_public_scalar(&ciphertext.shape(), scalar)?;
+        let scalar = super::plan::PublicScalar::new(ciphertext.plaintext_precision(), scalar)?;
+        #[cfg(test)]
+        tests::scalar_start();
+        let mut components = ciphertext.components().to_vec();
+        for component in &mut components {
+            component.mul_scalar_assign(scalar.centered, |limb| self.main_plan(limb));
+            #[cfg(test)]
+            tests::scalar_checkpoint()?;
         }
         Ok(Ciphertext::from_shape(self, shape, components))
     }
@@ -391,6 +427,35 @@ mod tests {
         natural::Natural,
     };
 
+    std::thread_local! {
+        static SCALAR_STARTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static SCALAR_STAGE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static SCALAR_FAULT: std::cell::Cell<(usize, bool)> = const { std::cell::Cell::new((usize::MAX, false)) };
+        static SCALAR_CLEARED_AT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    pub(super) fn scalar_start() {
+        SCALAR_STARTED.set(SCALAR_STARTED.get() + 1);
+    }
+    pub(super) fn scalar_checkpoint() -> Result<(), BgvError> {
+        let stage = SCALAR_STAGE.get() + 1;
+        SCALAR_STAGE.set(stage);
+        let (at, unwind) = SCALAR_FAULT.get();
+        if stage == at {
+            SCALAR_FAULT.set((usize::MAX, false));
+            SCALAR_CLEARED_AT.set(super::super::poly::tests::cleared_words());
+            if unwind {
+                panic!("public scalar output unwind control");
+            }
+            return Err(BgvError::Allocation);
+        }
+        Ok(())
+    }
+    fn scalar_reset() {
+        SCALAR_STARTED.set(0);
+        SCALAR_STAGE.set(0);
+        SCALAR_FAULT.set((usize::MAX, false));
+    }
+
     struct Fixture {
         profile: BgvProfile,
         secret: SecretKey,
@@ -408,7 +473,7 @@ mod tests {
     /// Five 30-bit primes: enough room for one multiplication and switches.
     fn fixture() -> Fixture {
         let profile = BgvProfile::new(
-            BgvParameters::derive(4, 257, (30, 5), (31, 2), 2).expect("parameters"),
+            BgvParameters::derive(4, 257, 1, (30, 5), (31, 2), 2).expect("parameters"),
         )
         .expect("profile");
         let secret = SecretKey::generate_with(&profile, &mut entropy(1, 1)).expect("secret");
@@ -433,7 +498,12 @@ mod tests {
 
     impl Fixture {
         fn encrypt(&self, values: &[u64], tag: u8) -> Ciphertext {
-            let plaintext = Plaintext::new(&self.profile, values.to_vec()).expect("plaintext");
+            let plaintext = Plaintext::new(
+                &self.profile,
+                self.profile.master_plaintext(),
+                values.to_vec(),
+            )
+            .expect("plaintext");
             self.public
                 .encrypt_with(&self.profile, &plaintext, &mut entropy(tag, 1))
                 .expect("ciphertext")
@@ -484,7 +554,8 @@ mod tests {
             crate::polynomial::neg_mod(&a, 257)
         );
         assert_eq!(negated.noise_bound().as_natural(), &fresh);
-        let plaintext = Plaintext::new(profile, b.clone()).expect("plaintext");
+        let plaintext =
+            Plaintext::new(profile, profile.master_plaintext(), b.clone()).expect("plaintext");
         let plain_sum = profile.add_plain(&ca, &plaintext).expect("plain sum");
         assert_eq!(
             fixture.decrypt(&plain_sum),
@@ -508,7 +579,8 @@ mod tests {
             &fresh.mul_u64(128 * 16)
         );
         // A constant multiplies by its value with the bound of every constant.
-        let constant = Plaintext::constant(profile, 256).expect("constant");
+        let constant =
+            Plaintext::constant(profile, profile.master_plaintext(), 256).expect("constant");
         let scaled = profile.mul_plain(&ca, &constant).expect("scaled");
         assert_eq!(
             fixture.decrypt(&scaled),
@@ -681,10 +753,11 @@ mod tests {
         assert_eq!(doubled.component_count(), 3);
         // Objects of another profile are refused by every operation.
         let other = BgvProfile::new(
-            BgvParameters::derive(4, 257, (30, 4), (31, 2), 2).expect("parameters"),
+            BgvParameters::derive(4, 257, 1, (30, 4), (31, 2), 2).expect("parameters"),
         )
         .expect("profile");
-        let foreign_plaintext = Plaintext::new(&other, message(1)).expect("plaintext");
+        let foreign_plaintext =
+            Plaintext::new(&other, other.master_plaintext(), message(1)).expect("plaintext");
         let foreign = Some(BgvError::ProfileMismatch);
         assert_eq!(other.add(&ciphertext, &ciphertext).err(), foreign);
         assert_eq!(other.negate(&ciphertext).err(), foreign);
@@ -733,12 +806,16 @@ mod tests {
             Ok(profile.switch_down(&product).expect("lower").shape()),
             profile.plan_switch_down(&product.shape())
         );
-        assert_eq!(Ok(ciphertext.shape()), profile.plan_fresh());
+        assert_eq!(
+            Ok(ciphertext.shape()),
+            profile.plan_fresh(profile.master_plaintext())
+        );
         assert_eq!(
             profile.negate(&product).expect("negated").shape(),
             product.shape()
         );
-        let plaintext = Plaintext::constant(profile, 3).expect("constant");
+        let plaintext =
+            Plaintext::constant(profile, profile.master_plaintext(), 3).expect("constant");
         assert_eq!(
             Ok(profile
                 .mul_plain(&product, &plaintext)
@@ -757,7 +834,7 @@ mod tests {
             Ok(Ciphertext::trivial(profile, &plaintext, 2)
                 .expect("trivial")
                 .shape()),
-            profile.plan_trivial(2)
+            profile.plan_trivial(profile.master_plaintext(), 2)
         );
     }
 
@@ -768,8 +845,15 @@ mod tests {
         let ciphertext = fixture.encrypt(&message(9), 18);
         let words = ciphertext.canonical_words();
         let at = |bound: Natural| {
-            Ciphertext::from_canonical_words(profile, 4, 2, &words, &NoiseBound::new(bound))
-                .expect("ciphertext")
+            Ciphertext::from_canonical_words(
+                profile,
+                profile.master_plaintext(),
+                4,
+                2,
+                &words,
+                &NoiseBound::new(bound),
+            )
+            .expect("ciphertext")
         };
         let capacity = profile.capacity(4).expect("capacity").clone();
         let exceeded = Some(BgvError::NoiseBudgetExceeded { level: 4 });
@@ -780,7 +864,8 @@ mod tests {
         assert!(profile.add(&full, &zero).is_ok());
         assert_eq!(profile.add(&full, &one).err(), exceeded);
         assert_eq!(profile.sub(&full, &one).err(), exceeded);
-        let plaintext = Plaintext::constant(profile, 1).expect("constant");
+        let plaintext =
+            Plaintext::constant(profile, profile.master_plaintext(), 1).expect("constant");
         assert_eq!(profile.add_plain(&full, &plaintext).err(), exceeded);
         assert_eq!(profile.sub_plain(&full, &plaintext).err(), exceeded);
         assert_eq!(profile.mul_plain(&full, &plaintext).err(), exceeded);
@@ -803,8 +888,15 @@ mod tests {
         let tensor = profile.tensor(&one, &one).expect("tensor");
         let tensor_words = tensor.canonical_words();
         let tensor_at = |bound: Natural| {
-            Ciphertext::from_canonical_words(profile, 4, 3, &tensor_words, &NoiseBound::new(bound))
-                .expect("ciphertext")
+            Ciphertext::from_canonical_words(
+                profile,
+                profile.master_plaintext(),
+                4,
+                3,
+                &tensor_words,
+                &NoiseBound::new(bound),
+            )
+            .expect("ciphertext")
         };
         let relinearization = fixture.keys.relinearization();
         assert!(
@@ -827,5 +919,191 @@ mod tests {
         let half = at(capacity.half_floor());
         let switched = profile.switch_down(&half).expect("switched");
         assert!(switched.noise_bound().as_natural() <= profile.capacity(3).expect("capacity"));
+    }
+
+    #[test]
+    fn public_scalar_matches_general_polynomial_at_every_precision_level_and_component() {
+        use super::super::PlaintextBound;
+        let profile = BgvProfile::new(
+            BgvParameters::derive(4, 257, 3, (60, 3), (61, 2), 2).expect("parameters"),
+        )
+        .expect("profile");
+        let secret = SecretKey::generate_with(&profile, &mut entropy(80, 1)).expect("secret");
+        let public =
+            PublicKey::generate_with(&profile, &secret, &mut entropy(81, 1)).expect("public");
+        for exponent in 1..=3 {
+            let precision = profile.plaintext_precision(exponent).expect("precision");
+            let t = precision.modulus();
+            let message: Vec<_> = (0..profile.degree())
+                .map(|i| (i as u64 * 97 + 1) % t)
+                .collect();
+            let plain = Plaintext::new(&profile, precision, message.clone()).expect("message");
+            let fresh = public
+                .encrypt_with(&profile, &plain, &mut entropy(82, 1))
+                .expect("encrypt");
+            for level in 0..=profile.top_level() {
+                let source = profile
+                    .switch_to_level(&fresh, level)
+                    .expect("lowered source");
+                // A zero s^2 term preserves the genuine encrypted phase while
+                // exercising the ordinary three-component tensor interface.
+                let mut components = source.components().to_vec();
+                components.push(RnsPoly::zero(level + 1, profile.degree()));
+                let shape = profile
+                    .plan_claimed(
+                        precision,
+                        level,
+                        3,
+                        source.noise_bound().as_natural().clone(),
+                    )
+                    .expect("three-component shape");
+                let tensor = Ciphertext::from_shape(&profile, shape, components);
+                for input in [&source, &tensor] {
+                    scalar_reset();
+                    for invalid in [t, u64::MAX] {
+                        assert_eq!(
+                            profile.mul_public_scalar(input, invalid).err(),
+                            Some(BgvError::NonCanonical { index: 0 })
+                        );
+                    }
+                    assert_eq!(SCALAR_STARTED.get(), 0);
+                    for scalar in [0, 1, t / 2, t / 2 + 1, t - 1] {
+                        let centered = if scalar > t / 2 {
+                            scalar as i64 - t as i64
+                        } else {
+                            scalar as i64
+                        };
+                        let mut values = vec![0; profile.degree()];
+                        values[0] = scalar;
+                        let constant = Plaintext::with_public_bound(
+                            &profile,
+                            precision,
+                            values,
+                            PlaintextBound {
+                                linf: centered.unsigned_abs(),
+                                l1: centered.unsigned_abs(),
+                            },
+                        )
+                        .expect("constant");
+                        scalar_reset();
+                        let actual = profile
+                            .mul_public_scalar(input, scalar)
+                            .expect("direct scalar");
+                        assert_eq!(SCALAR_STAGE.get(), input.component_count());
+                        let reference = profile
+                            .mul_plain(input, &constant)
+                            .expect("general polynomial");
+                        assert_eq!(actual.shape(), reference.shape());
+                        assert_eq!(actual.canonical_words(), reference.canonical_words());
+                        assert_eq!(
+                            actual.shape(),
+                            profile
+                                .plan_mul_public_scalar(&input.shape(), scalar)
+                                .expect("same plan")
+                        );
+                        let expected: Vec<_> = message
+                            .iter()
+                            .map(|&m| ((u128::from(m) * u128::from(scalar)) % u128::from(t)) as u64)
+                            .collect();
+                        assert_eq!(
+                            secret
+                                .decrypt(&profile, &actual)
+                                .expect("decrypt")
+                                .coefficients(),
+                            expected
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn public_scalar_preflight_and_output_cleanup_preserve_the_source() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        let f = fixture();
+        let source = f.encrypt(&[1; 16], 20);
+        let original = source.canonical_words();
+        scalar_reset();
+        for scalar in [257, u64::MAX] {
+            assert_eq!(
+                f.profile.mul_public_scalar(&source, scalar).err(),
+                Some(BgvError::NonCanonical { index: 0 })
+            );
+        }
+        let other = BgvProfile::new(
+            BgvParameters::derive(4, 257, 1, (31, 5), (32, 2), 2).expect("parameters"),
+        )
+        .expect("other profile");
+        assert_eq!(
+            other.mul_public_scalar(&source, 1).err(),
+            Some(BgvError::ProfileMismatch)
+        );
+        let capacity = f
+            .profile
+            .capacity(source.level())
+            .expect("capacity")
+            .clone();
+        let shape = f
+            .profile
+            .plan_claimed(source.plaintext_precision(), source.level(), 2, capacity)
+            .expect("claimed boundary");
+        let excessive = Ciphertext::from_shape(&f.profile, shape, source.components().to_vec());
+        assert_eq!(
+            f.profile.mul_public_scalar(&excessive, 2).err(),
+            Some(BgvError::NoiseBudgetExceeded {
+                level: source.level()
+            })
+        );
+        assert_eq!(SCALAR_STARTED.get(), 0);
+        assert_eq!(SCALAR_STAGE.get(), 0);
+        for count in [2, 3] {
+            let mut components = source.components().to_vec();
+            if count == 3 {
+                components.push(RnsPoly::zero(source.level() + 1, f.profile.degree()));
+            }
+            let shape = f
+                .profile
+                .plan_claimed(
+                    source.plaintext_precision(),
+                    source.level(),
+                    count,
+                    source.noise_bound().as_natural().clone(),
+                )
+                .expect("shape");
+            let input = Ciphertext::from_shape(&f.profile, shape, components);
+            let owned_words = count * f.profile.degree() * (source.level() + 1);
+            for at in 1..=count {
+                for unwind in [false, true] {
+                    scalar_reset();
+                    SCALAR_FAULT.set((at, unwind));
+                    let result =
+                        catch_unwind(AssertUnwindSafe(|| f.profile.mul_public_scalar(&input, 3)));
+                    if unwind {
+                        assert!(result.is_err());
+                    } else {
+                        assert_eq!(result.expect("no unwind").err(), Some(BgvError::Allocation));
+                    }
+                    assert_eq!(
+                        super::super::poly::tests::cleared_words() - SCALAR_CLEARED_AT.get(),
+                        owned_words
+                    );
+                    assert_eq!(input.components()[0], source.components()[0]);
+                }
+            }
+            scalar_reset();
+            let before = super::super::poly::tests::cleared_words();
+            let result = f
+                .profile
+                .mul_public_scalar(&input, 0)
+                .expect("zero still executes every component");
+            assert_eq!(SCALAR_STAGE.get(), count);
+            drop(result);
+            assert_eq!(
+                super::super::poly::tests::cleared_words() - before,
+                owned_words
+            );
+        }
+        assert_eq!(source.canonical_words(), original);
     }
 }

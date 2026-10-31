@@ -676,7 +676,7 @@ fn retained_initial_and_selected_replay_preserve_both_joined_phase_roots_rows_an
             };
         let mut calls = Vec::new();
         let (initial, cut) = plan
-            .commit_retained_replayed_v1(
+            .commit_retained_replayed_v1::<ZeroizingFieldColumnV1>(
                 &domains,
                 &[],
                 None,
@@ -695,7 +695,7 @@ fn retained_initial_and_selected_replay_preserve_both_joined_phase_roots_rows_an
         let initial_calls = calls.clone();
         calls.clear();
         let (replayed, absent_cut) = plan
-            .commit_retained_replayed_v1(
+            .commit_retained_replayed_v1::<ZeroizingFieldColumnV1>(
                 &domains,
                 &queries,
                 Some(&cut),
@@ -718,7 +718,7 @@ fn retained_initial_and_selected_replay_preserve_both_joined_phase_roots_rows_an
             cut.check_root_v1(rows, PrivacyOuterDigestV1::default())
                 .is_err()
         );
-        let changed = plan.commit_retained_replayed_v1(
+        let changed = plan.commit_retained_replayed_v1::<ZeroizingFieldColumnV1>(
             &domains,
             &queries,
             Some(&cut),
@@ -742,7 +742,7 @@ fn retained_replay_rejects_inconsistent_root_only_queries_and_source_failure_wit
         JoinedTraceCommitmentPlanV1::new_v1(parameters, &layout, JoinedTraceColumnKindV1::Base)
             .unwrap();
     let mut source_calls = 0;
-    let result = plan.commit_retained_replayed_v1(
+    let result = plan.commit_retained_replayed_v1::<ZeroizingFieldColumnV1>(
         &domains,
         &[0],
         None,
@@ -754,7 +754,7 @@ fn retained_replay_rejects_inconsistent_root_only_queries_and_source_failure_wit
     );
     assert!(result.is_err());
     assert_eq!(source_calls, 0);
-    let result = plan.commit_retained_replayed_v1(
+    let result = plan.commit_retained_replayed_v1::<ZeroizingFieldColumnV1>(
         &domains,
         &[],
         None,
@@ -766,4 +766,42 @@ fn retained_replay_rejects_inconsistent_root_only_queries_and_source_failure_wit
     );
     assert!(result.is_err());
     assert_eq!(source_calls, 1);
+}
+
+#[test]
+fn initial_coalescing_rejects_first_batch_late_noncanonical_output_before_second_source() {
+    let (parameters, domains, layout) = fixture();
+    let plan =
+        JoinedTraceCommitmentPlanV1::new_v1(parameters, &layout, JoinedTraceColumnKindV1::Base)
+            .unwrap();
+    let source_calls = std::cell::Cell::new(0usize);
+    let evaluation_calls = std::cell::Cell::new(0usize);
+    let result = plan.commit_retained_replayed_v1::<ZeroizingFieldColumnV1>(
+        &domains,
+        &[],
+        None,
+        |_, _| {
+            source_calls.set(source_calls.get() + 1);
+            Ok(vec![F::ONE; 4])
+        },
+        |columns, _, common, selected| {
+            assert!(selected.is_none());
+            evaluation_calls.set(evaluation_calls.get() + 1);
+            let rows = 1usize << common;
+            let mut output = columns
+                .iter()
+                .map(|_| ZeroizingFieldColumnV1(vec![F::ONE; rows]))
+                .collect::<Vec<_>>();
+            let last = output.len() - 1;
+            output[last].0[rows - 1] =
+                F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1);
+            Ok(output)
+        },
+    );
+    assert_eq!(
+        result.err().unwrap(),
+        AggregateStarkErrorV1::NonCanonicalField
+    );
+    assert_eq!(source_calls.get(), 8);
+    assert_eq!(evaluation_calls.get(), 1);
 }

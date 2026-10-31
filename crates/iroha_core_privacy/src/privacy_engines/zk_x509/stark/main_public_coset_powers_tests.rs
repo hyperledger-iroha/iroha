@@ -100,6 +100,7 @@ fn public_power_reuse_preserves_serial_products_padding_and_one_owner_across_cal
             evaluation_rows: 64,
             device_columns: 2,
             receipt: MainTransformReceiptV1::default(),
+            selected_scratch: selected_coset::SelectedScratchV1::default(),
             coset_powers: Some(table),
         };
         let address = evaluator.coset_powers.as_ref().unwrap().values.as_ptr();
@@ -139,6 +140,7 @@ fn public_power_reuse_preserves_serial_products_padding_and_one_owner_across_cal
             evaluation_rows: 64,
             device_columns: 1,
             receipt: MainTransformReceiptV1::default(),
+            selected_scratch: selected_coset::SelectedScratchV1::default(),
             coset_powers: table,
         };
         assert!(

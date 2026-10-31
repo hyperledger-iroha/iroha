@@ -15,7 +15,7 @@ use crate::vega::{
 };
 
 #[path = "global_lookup_statement_v1/vector_arithmetic_plane_openings_v1.rs"]
-mod vector_arithmetic_plane_openings_v1;
+pub(in crate::vega::zk_ams::mkhe) mod vector_arithmetic_plane_openings_v1;
 #[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use vector_arithmetic_plane_openings_v1::SealedQMaskSFileV1;
 #[cfg(test)]

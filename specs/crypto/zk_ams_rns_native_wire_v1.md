@@ -177,6 +177,28 @@ or post-read allocation failure consumes the phase. The terminal owner retains
 both original mask sets and the immutable S file for later separately funded
 P~/H~/qPCS consumers. No generic reset or raw-secret extraction exists.
 
+The private `cfg(test)` relation-polynomial adapter now computes an ordinary
+product `T=K*R` through `iroha_fhe::ntt::cyclic_product_in_place_with` and
+`FixedModulus` at length `2N`. It checks every coefficient of
+`T_low+p_l*E+M-C=T_high` before returning clearing owners for
+`H~=T_high+S` and `P~=H~ || H~`; `S[N-1]=0` is mandatory. The canonical
+shared helper implements cyclic multiplication without allocating or copying
+an NTT, and uses the existing fixed-order transform schedule. This adapter
+remains test-only: caller slices carry no source or transcript authority.
+TODO: connect the actual original aggregate inputs and retained S replay;
+coefficient construction alone does not establish source correspondence.
+
+One row reserves five N-word new secret buffers (5,242,880 bytes), conservatively
+charges the six borrowed N-word inputs for that call (6,291,456 bytes), and
+adds the named owner metadata before allocation. The original ledger is never
+reset; only destroyed scratch is released. The named field arithmetic and
+coefficient-check bound is 30,409,602..30,409,614 per native row, or
+6,081,921,410 across all 200 rows. These are component bounds, not a common
+whole-proof work model or RSS qualification. The unchanged qPCS initial-tree
+work refusal still applies. Secret arithmetic uses the scalar `FixedModulus`
+path; a future SIMD/NEON, Metal or CUDA path requires constant-time review and
+identical-output tests before use.
+
 These producers do not establish complete authenticated native40 source,
 packing/governed parameters, same-opening relations or whole-proof admission.
 The existing 38-limb source cannot be relabelled native40. Whole 6,400-ticket
@@ -204,6 +226,33 @@ cap or qualification flag changes. See the source-coupled
 The two additional signed-source compact passes contribute 33,849,600
 authenticated read bytes to that same pending accounting; see the
 [signed preparation contract](../../crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_phase23_radix_range_v2/prepared_small_signed_plane_v1.md).
+
+The production Core source storage constructor is now
+`CoreZkAmsMkheRnsNativeSourceWriterV1::begin(directory, layout, resources)`.
+It consumes one opaque `ZkAmsMkheRnsNativeSourceResourcesV1` session containing
+those same canonical workspace and storage ledger implementations. Before
+creating either encrypted file it reserves 316,239,888 file bytes and
+632,479,776 bytes for writes and seal authentication, plus concrete named
+owner/construction payloads. Each secret chunk carries its original workspace
+reservation through zeroization and may outlive its snapshot; foreign-session
+chunks reject before I/O debit. Read workspace is reserved before I/O debit.
+Every write operational failure or unwind destroys both sibling files, as do
+read authentication/operational failures. Pure range/context/capacity preflights
+preserve snapshots. Repeated reads consume the same cumulative I/O ledger.
+
+Starting this resource session establishes only resource identity. It does not
+account for earlier allocations, mint original-source/key/Phase23 authority,
+or implement the missing native40 source correspondence. No
+`RnsNativeOriginalBudgetedSourceV1` implementation is introduced. The previous unused
+non-consuming provider factory is removed. TODO: eventual source/qPCS
+orchestration must carry its existing ledger pair through this storage owner;
+starting another session mid-proof cannot discharge whole-proof limits. Named
+payload accounting excludes allocator/control/dependency scratch and RSS;
+AEAD/hash operations have no invented conversion to proof field-work units.
+Read conformance fixtures remain reduced, with conservatively precharged
+canonical resources; a separate ignored test exercises the actual complete
+316,239,888-byte begin/write/seal/repeated-read path. Neither fixture coverage
+nor this construction boundary changes production proof refusal or readiness.
 
 The actual ordered storage owner now requires one caller-retained spool/I/O
 issuer. Before either leaf is created, it reserves the complete 5,026,665,600-byte

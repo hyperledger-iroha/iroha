@@ -35,8 +35,8 @@ the current owner paths; historical table preimages retain their original
 source paths and hashes.
 
 Default features are `zk-stark` and `simd`. `zk-stark` supplies the ZK-ACE STARK
-backend and its compiled profile. `simd` enables SHA-3's assembly backend without
-changing outputs. Node and SDK consumers declare their required verifier
+backend and its compiled profile. SHA-3 selects supported CPU acceleration at
+runtime and preserves outputs across backends. Node and SDK consumers declare their required verifier
 features explicitly. `privacy-release-evidence` adds the native evidence
 constructors and exact-twelve conformance model; `test-utils` exposes fixture
 material without node storage. Neither evidence nor fixture features belong
@@ -95,13 +95,35 @@ before returning the original root and frontier; upper tree reductions use
 bounded parallel tiles. The larger private cuts remain in every phase's budget.
 For native-log15/16/18/19 query batches of eight columns, an interleaved CPU
 transform shares public traversal and twiddle powers across the columns and
-evaluates only that smaller set. Its full scratch still occupies eight field
-columns and clears on every exit. Singleton batches retain device admission;
+evaluates only that smaller set. One initialized eight-column scratch is reused
+across successful query batches; public prefix bounds prevent stale suffix reads.
+Every field clears on failure, unwind, fallback or phase completion. Its payload
+remains within the existing replay allowance. Singleton batches retain device admission;
 backend selection depends only on the measured public geometry.
 Composition mixes scalar residues into Fp4 with exact widened accumulators and
-bounded carry correction. SHA base replay projects only the requested cells;
-P-256 writer replay projects public inactive rows without building full rows.
-Both source paths retain their validation and terminal checks.
+bounded carry correction. Initial public fixed polynomials use bounded inverse
+transform batches; registration-local spare cache capacity retains fixed
+coefficients to avoid repeated inverse transforms between quotient stripes.
+The bound P-256 arithmetic provider transforms 43 public basis columns and
+reconstructs all 134 fixed columns by their exact affine relationships. The
+original output allocations remain owned throughout, and one fixed-cache column
+funds the additional descriptors without reducing private replay-cache capacity.
+SHA base replay projects requested cells from losslessly packed, validated
+native rows. The 128 MiB cache moves through challenge binding within the
+existing source allowance. Its composition fold reuses one public challenge-power
+table and erases each row's widened accumulators. P-256 arithmetic and value
+base replay fill disjoint bounded row tiles directly into the final column
+owners. Writer replay projects public inactive rows, and log16 auxiliary replay
+streams up to eight columns together. All source paths retain their validation
+and terminal checks.
+Composition borrows one fully validated, immutable post-base challenge owner
+and binds each registration before evaluating its rows. The shared AIR body
+retains all row-dependent checks; verifier entry points still validate raw
+challenge families.
+Terminal-link composition checks every original source, mask and endpoint before
+combining native values by public point. It divides the weighted polynomial once
+per point, reusing the existing mask-quotient allocation and preserving every
+individual endpoint check.
 The memory plan derives its peak from complete MAIN/CA phase lifetimes,
 including retained Merkle cuts, and explicitly reserves two bounded coefficient
 replay batches for caching. Admission and cache capacity therefore do not rely
@@ -111,6 +133,41 @@ global admission. Metal's exact-root forecast charges its sole unpublished
 staging allocation and no-copy view, the complete pool and twiddle caches, and
 the existing dispatch and process reserves. Paired global FFT stages reduce
 device memory passes while preserving resource barriers and publish-after-wait.
+Completion callbacks wake bounded waits; the actual command status, shared
+deadline and uncertain-completion quarantine still govern publication. Completed
+initial outputs stay in their clearing shared pages and expose immutable column
+views. Conversion validates the entire output, drops the Metal view and releases
+the GPU lane before sharing those pages. Native coefficients, including every
+masking coefficient, are scaled directly into zeroed staging pages without a
+padded host input matrix. Subpage domains use the original CPU field owners.
+Rejected output is erased by its owner, and successful readers retain the
+backing until the last column handle is released.
+Native interpolation and quotient forwards borrow the existing field allocations
+as input and publish a completed, fully validated Metal transaction directly into them.
+The complete shared staging, token and borrowed-view metadata remain charged.
+Admitted quotient forwards combine up to sixteen final columns while source
+replay, native inverse transforms and CPU fallback retain eight-column batches.
+Fixed-polynomial stripe transitions use the same prepared transactions and
+publish only complete validated cosets. Common-domain transforms admit up to
+eight Metal columns using the complete phase memory forecast.
+Sensitive Metal pool entries retain their fully erased initialized pages, avoiding
+redundant initialization on reuse; public entries are zeroed before host reuse.
+Successful commitment batches can erase their independent columns in parallel;
+error and unwind paths retain each column's original clearing destructor.
+Explicit successful cleanup also clears large, exclusively owned completed
+Metal backings in parallel tiles, including page padding. Device retention,
+callbacks, refusal and unwind keep the original sequential destructor.
+
+Initial row commitments combine two eight-column transform results for each
+sixteen-column hash pass, preserving source and masking order. They retain two
+SHA3-384 states per wiping owner. The original
+framing and finalization remain authoritative; only the synchronized permutations
+use the existing SIMD feature and a deterministic scalar fallback. Selected query
+streams retain their original scalar owners. Exact state capacity, construction
+scratch and all possible paired packing tasks are charged within the same memory
+ceiling, and every refusal or unwind retains complete clearing ownership. Initial
+paired-finalizer scratch is charged separately from scalar query replay; the
+selected owner still charges its larger enum header in phase admission.
 
 The ignored release tests `common22_prefix_fft_reports_full_output_parity_and_timings`
 and `value_auxiliary_compact_projection_cost_diagnostic` compare these kernels
@@ -121,6 +178,10 @@ Measure complete proving separately with
 `maximum_structural_credential_proof_with_retained_public_receipt`; its retained
 phase tree distinguishes source replay, transforms, composition and verification,
 and its unchanged 300-second assertion remains a qualification requirement.
+Metal diagnostics separately record GPU execution, driver scheduling and the
+interval before GPU execution. These intervals overlap and must not be added
+together. Shared-host wall time remains the end-to-end result; subtracting wait
+time or extrapolating component gains does not establish the proving target.
 
 Focused validation reuses the ordinary warm target and native jobserver. Use a
 stable `--target-slot` only when another build runs concurrently:

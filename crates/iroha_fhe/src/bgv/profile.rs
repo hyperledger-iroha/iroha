@@ -8,7 +8,7 @@
 //! # Parameter rules
 //!
 //! In validation order: `log_degree` in `2..=17`; the plaintext modulus an odd
-//! prime below `2^31`; at least one main and one special prime and at most
+//! prime power below `2^31`; at least one main and one special prime and at most
 //! [`MAX_BASIS_PRIMES`] primes in total; one root per prime; every prime an
 //! odd prime below `2^62`, congruent to one modulo `2 * N * t`, distinct from
 //! every earlier one, with its root a primitive `2N`-th root of unity; a digit
@@ -18,7 +18,7 @@
 //!
 //! The identity is the 32-byte BLAKE3 `derive_key` output, under the context
 //! [`PROFILE_IDENTITY_CONTEXT`], of this byte string (integers little-endian):
-//! scheme version `1u8`; `log_degree` as `u32`; `t` as `u64`; the main prime
+//! scheme version `1u8`; `log_degree` as `u32`; base prime `p` as `u64`, master precision `E` as `u32`; the main prime
 //! count as `u32` followed by each prime and its root as `u64`; the same for
 //! the special primes; the key-switching method tag `1u8` (hybrid RNS with
 //! exact centered digit extension and congruence-preserving division) and the
@@ -33,6 +33,7 @@ use crate::{
     modular,
     natural::Natural,
     ntt_plan::{NegacyclicPlan, NttPlanError},
+    prime_power::PrimePowerContext,
     rns_chain::{CongruentScaleDown, ConversionTarget, MAX_BASIS_PRIMES, RnsBasis},
 };
 use thiserror::Error;
@@ -44,7 +45,7 @@ pub const PROFILE_IDENTITY_CONTEXT: &str = "iroha_fhe bgv v1 profile identity";
 pub const MIN_LOG_DEGREE: u32 = 2;
 /// Largest supported `log2` of the ring degree.
 pub const MAX_LOG_DEGREE: u32 = 17;
-/// Exclusive upper bound of a plaintext modulus.
+/// Exclusive upper bound of the master plaintext modulus `p^E`.
 pub const PLAINTEXT_MODULUS_BOUND: u64 = 1 << 31;
 /// Largest generator tried when a root is derived by rule.
 const ROOT_CANDIDATE_LIMIT: u64 = 1 << 16;
@@ -55,8 +56,8 @@ pub enum ParameterDefect {
     /// `log_degree` is outside `2..=17`.
     #[error("log2 of the ring degree must be in 2..=17")]
     DegreeOutOfRange,
-    /// The plaintext modulus is not an odd prime below `2^31`.
-    #[error("plaintext modulus must be an odd prime below 2^31")]
+    /// The plaintext modulus is not an odd prime power below `2^31`.
+    #[error("plaintext modulus must be an odd prime power below 2^31")]
     PlaintextModulus,
     /// There is no main prime.
     #[error("the main chain is empty")]
@@ -301,7 +302,8 @@ impl BgvCandidate {
         };
         BgvParameters {
             log_degree,
-            plaintext_modulus: 257,
+            plaintext_prime: 257,
+            plaintext_precision: 1,
             main_primes,
             main_roots,
             special_primes,
@@ -323,8 +325,10 @@ impl BgvCandidate {
 pub struct BgvParameters {
     /// `log2` of the ring degree `N`.
     pub log_degree: u32,
-    /// The plaintext modulus `t`.
-    pub plaintext_modulus: u64,
+    /// Odd base prime of the master plaintext modulus.
+    pub plaintext_prime: u64,
+    /// Exact maximum precision E, with master modulus p^E below 2^31.
+    pub plaintext_precision: u32,
     /// Main primes `q_0, ..., q_L`; level `l` uses the first `l + 1`.
     pub main_primes: Vec<u64>,
     /// One primitive `2N`-th root of unity per main prime.
@@ -372,6 +376,15 @@ fn first_primes(
 }
 
 impl BgvParameters {
+    fn checked_plaintext(prime: u64, precision: u32) -> Result<u64, ParameterDefect> {
+        let context = PrimePowerContext::new(prime, precision)
+            .map_err(|_| ParameterDefect::PlaintextModulus)?;
+        if context.modulus() >= PLAINTEXT_MODULUS_BOUND {
+            return Err(ParameterDefect::PlaintextModulus);
+        }
+        Ok(context.modulus())
+    }
+
     /// Derive a parameter set by rule.
     ///
     /// Main primes are the first `main_count` primes of exactly `main_bits`
@@ -388,7 +401,8 @@ impl BgvParameters {
     /// validated as a profile.
     pub fn derive(
         log_degree: u32,
-        plaintext_modulus: u64,
+        plaintext_prime: u64,
+        plaintext_precision: u32,
         (main_bits, main_count): (u32, usize),
         (special_bits, special_count): (u32, usize),
         digit_primes: usize,
@@ -396,9 +410,7 @@ impl BgvParameters {
         if !(MIN_LOG_DEGREE..=MAX_LOG_DEGREE).contains(&log_degree) {
             return Err(ParameterDefect::DegreeOutOfRange);
         }
-        if plaintext_modulus >= PLAINTEXT_MODULUS_BOUND {
-            return Err(ParameterDefect::PlaintextModulus);
-        }
+        let plaintext_modulus = Self::checked_plaintext(plaintext_prime, plaintext_precision)?;
         let order = 2_u64 << log_degree;
         let step = order
             .checked_mul(plaintext_modulus)
@@ -415,7 +427,8 @@ impl BgvParameters {
         };
         Ok(Self {
             log_degree,
-            plaintext_modulus,
+            plaintext_prime,
+            plaintext_precision,
             main_roots: main_primes.iter().map(root).collect::<Result<_, _>>()?,
             special_roots: special_primes.iter().map(root).collect::<Result<_, _>>()?,
             main_primes,
@@ -437,7 +450,8 @@ impl BgvParameters {
         let mut bytes = Vec::new();
         bytes.push(1_u8);
         bytes.extend_from_slice(&self.log_degree.to_le_bytes());
-        bytes.extend_from_slice(&self.plaintext_modulus.to_le_bytes());
+        bytes.extend_from_slice(&self.plaintext_prime.to_le_bytes());
+        bytes.extend_from_slice(&self.plaintext_precision.to_le_bytes());
         for (primes, roots) in [
             (&self.main_primes, &self.main_roots),
             (&self.special_primes, &self.special_roots),
@@ -511,7 +525,8 @@ impl BgvParameters {
         let mut rest = bytes;
         tag(&mut rest)?;
         let log_degree = u32::from_le_bytes(take(&mut rest)?);
-        let plaintext_modulus = u64::from_le_bytes(take(&mut rest)?);
+        let plaintext_prime = u64::from_le_bytes(take(&mut rest)?);
+        let plaintext_precision = u32::from_le_bytes(take(&mut rest)?);
         let (main_primes, main_roots) = pairs(&mut rest, MAX_BASIS_PRIMES)?;
         let (special_primes, special_roots) =
             pairs(&mut rest, MAX_BASIS_PRIMES - main_primes.len())?;
@@ -528,7 +543,8 @@ impl BgvParameters {
         }
         Ok(Self {
             log_degree,
-            plaintext_modulus,
+            plaintext_prime,
+            plaintext_precision,
             main_primes,
             main_roots,
             special_primes,
@@ -552,10 +568,7 @@ impl BgvParameters {
         if !(MIN_LOG_DEGREE..=MAX_LOG_DEGREE).contains(&self.log_degree) {
             return Err(ParameterDefect::DegreeOutOfRange);
         }
-        let plaintext = self.plaintext_modulus;
-        if !(3..PLAINTEXT_MODULUS_BOUND).contains(&plaintext) || !modular::is_prime_u64(plaintext) {
-            return Err(ParameterDefect::PlaintextModulus);
-        }
+        let plaintext = Self::checked_plaintext(self.plaintext_prime, self.plaintext_precision)?;
         if self.main_primes.is_empty() {
             return Err(ParameterDefect::NoMainPrime);
         }
@@ -644,6 +657,62 @@ pub(super) struct LevelContext {
     pub(super) key_switch_noise: Natural,
 }
 
+/// An exact effective plaintext precision bound to one validated master profile.
+///
+/// Only a profile constructs this public arithmetic context. It grants no scalar
+/// membership, imported-noise validity or exact-division authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlaintextPrecision {
+    identity: [u8; 32],
+    prime: u64,
+    exponent: u32,
+    fixed: FixedModulus,
+}
+
+impl PlaintextPrecision {
+    /// Master profile identity, including its base prime and maximum precision.
+    #[must_use]
+    pub const fn profile_identity(&self) -> &[u8; 32] {
+        &self.identity
+    }
+    /// Base prime p.
+    #[must_use]
+    pub const fn prime(self) -> u64 {
+        self.prime
+    }
+    /// Effective exponent `k`, in `1..=E`.
+    #[must_use]
+    pub const fn exponent(self) -> u32 {
+        self.exponent
+    }
+    /// Exact effective modulus p^k.
+    #[must_use]
+    pub const fn modulus(self) -> u64 {
+        self.fixed.modulus
+    }
+    pub(super) const fn fixed(self) -> FixedModulus {
+        self.fixed
+    }
+    pub(super) fn check_profile(self, profile: &BgvProfile) -> Result<(), BgvError> {
+        if &self.identity != profile.identity() {
+            return Err(BgvError::ProfileMismatch);
+        }
+        if profile.plaintext_precision(self.exponent)? != self {
+            return Err(BgvError::InvalidPlaintextPrecision);
+        }
+        Ok(())
+    }
+    pub(super) fn check_same(self, other: Self) -> Result<(), BgvError> {
+        if self.identity != other.identity {
+            Err(BgvError::ProfileMismatch)
+        } else if self != other {
+            Err(BgvError::PlaintextPrecisionMismatch)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 /// A validated parameter set with its pinned evaluation context.
 #[derive(Clone, Debug)]
 pub struct BgvProfile {
@@ -651,7 +720,7 @@ pub struct BgvProfile {
     identity: [u8; 32],
     /// Transforms of the main primes followed by those of the special primes.
     plans: Vec<NegacyclicPlan>,
-    plaintext: FixedModulus,
+    plaintexts: Vec<PlaintextPrecision>,
     levels: Vec<LevelContext>,
     /// `P mod q_i` for every main prime.
     special_product_mod_main: Vec<u64>,
@@ -677,9 +746,24 @@ impl BgvProfile {
     pub fn new(parameters: BgvParameters) -> Result<Self, BgvError> {
         parameters.validate()?;
         let degree = parameters.degree();
-        let plaintext_modulus = parameters.plaintext_modulus;
-        let plaintext =
-            FixedModulus::derive(plaintext_modulus).ok_or(ParameterDefect::PlaintextModulus)?;
+        let plaintext_modulus = BgvParameters::checked_plaintext(
+            parameters.plaintext_prime,
+            parameters.plaintext_precision,
+        )?;
+        let identity = parameters.identity();
+        let mut plaintexts = Vec::with_capacity(parameters.plaintext_precision as usize);
+        let mut modulus = 1_u64;
+        for exponent in 1..=parameters.plaintext_precision {
+            modulus = modulus
+                .checked_mul(parameters.plaintext_prime)
+                .ok_or(ParameterDefect::PlaintextModulus)?;
+            plaintexts.push(PlaintextPrecision {
+                identity,
+                prime: parameters.plaintext_prime,
+                exponent,
+                fixed: FixedModulus::derive(modulus).ok_or(ParameterDefect::PlaintextModulus)?,
+            });
+        }
         let mut plans = Vec::with_capacity(parameters.main_primes.len());
         for (index, (prime, root)) in parameters
             .all_primes()
@@ -758,11 +842,16 @@ impl BgvProfile {
             })
             .collect();
         Ok(Self {
-            identity: parameters.identity(),
-            fresh_noise: noise::fresh_noise(degree, plaintext_modulus, error_bound),
+            identity,
+            fresh_noise: noise::fresh_noise(
+                degree,
+                plaintext_modulus,
+                plaintext_modulus,
+                error_bound,
+            ),
             parameters,
             plans,
-            plaintext,
+            plaintexts,
             levels,
             special_product_mod_main,
         })
@@ -794,10 +883,36 @@ impl BgvProfile {
         self.parameters.degree()
     }
 
-    /// The plaintext modulus `t`.
+    /// The master plaintext modulus `t = p^E`, used by all key and error scales.
     #[must_use]
-    pub const fn plaintext_modulus(&self) -> u64 {
-        self.parameters.plaintext_modulus
+    pub fn master_plaintext_modulus(&self) -> u64 {
+        self.master_plaintext().modulus()
+    }
+
+    /// Validated master plaintext context, shared by all keys of this profile.
+    #[must_use]
+    pub fn master_plaintext(&self) -> PlaintextPrecision {
+        self.plaintexts[self.plaintexts.len() - 1]
+    }
+
+    /// Validate an exact effective plaintext precision under this master profile.
+    ///
+    /// # Errors
+    /// Refuses zero or a precision above the master precision.
+    pub fn plaintext_precision(&self, exponent: u32) -> Result<PlaintextPrecision, BgvError> {
+        let index = exponent
+            .checked_sub(1)
+            .ok_or(BgvError::InvalidPlaintextPrecision)?;
+        self.plaintexts
+            .get(index as usize)
+            .copied()
+            .ok_or(BgvError::InvalidPlaintextPrecision)
+    }
+
+    /// Retained element payload of the bounded precision table; excludes Vec headers.
+    #[must_use]
+    pub fn plaintext_precision_bytes(&self) -> usize {
+        self.plaintexts.len() * core::mem::size_of::<PlaintextPrecision>()
     }
 
     /// The top level `L`: the index of the last main prime.
@@ -849,7 +964,8 @@ impl BgvProfile {
         Ok(&self.level(level)?.capacity)
     }
 
-    /// Public bound of the noise of a fresh public-key encryption.
+    /// Public fresh-encryption bound at the master plaintext precision.
+    /// Use [`Self::plan_fresh`] for another effective precision under these keys.
     #[must_use]
     pub const fn fresh_noise(&self) -> &Natural {
         &self.fresh_noise
@@ -905,11 +1021,6 @@ impl BgvProfile {
         }
     }
 
-    /// Branch-free arithmetic modulo the plaintext modulus.
-    pub(super) const fn plaintext_fixed(&self) -> FixedModulus {
-        self.plaintext
-    }
-
     /// `P mod q_index` for a main prime.
     pub(super) fn special_product_mod_main(&self, index: usize) -> u64 {
         self.special_product_mod_main[index]
@@ -926,7 +1037,7 @@ mod tests {
     use super::*;
 
     fn toy_parameters() -> BgvParameters {
-        BgvParameters::derive(4, 257, (30, 3), (31, 2), 2).expect("toy parameters")
+        BgvParameters::derive(4, 257, 1, (30, 3), (31, 2), 2).expect("toy parameters")
     }
 
     #[test]
@@ -936,6 +1047,7 @@ mod tests {
             let derived = BgvParameters::derive(
                 pinned.log_degree,
                 257,
+                1,
                 (50, pinned.main_primes.len()),
                 (60, 2),
                 2,
@@ -969,7 +1081,7 @@ mod tests {
         changed.log_degree += 1;
         variants.push(changed);
         let mut changed = base.clone();
-        changed.plaintext_modulus = 769;
+        changed.plaintext_prime = 769;
         variants.push(changed);
         let mut changed = base.clone();
         changed.main_primes[1] += 2;
@@ -999,18 +1111,19 @@ mod tests {
         for variant in variants {
             assert_ne!(variant.identity(), identity, "{variant:?}");
         }
-        // The byte layout is pinned: version, log N, t, counts and pairs, tags.
+        // The byte layout is pinned: version, log N, base prime, master exponent, counts/pairs, tags.
         let bytes = base.canonical_bytes();
         assert_eq!(
             bytes.len(),
-            1 + 4 + 8 + 4 + 3 * 16 + 4 + 2 * 16 + 1 + 4 + 3 + 4 + 1
+            1 + 4 + 8 + 4 + 4 + 3 * 16 + 4 + 2 * 16 + 1 + 4 + 3 + 4 + 1
         );
         assert_eq!(bytes[0], 1);
         assert_eq!(&bytes[1..5], &4_u32.to_le_bytes());
         assert_eq!(&bytes[5..13], &257_u64.to_le_bytes());
-        assert_eq!(&bytes[13..17], &3_u32.to_le_bytes());
-        assert_eq!(&bytes[17..25], &base.main_primes[0].to_le_bytes());
-        assert_eq!(&bytes[25..33], &base.main_roots[0].to_le_bytes());
+        assert_eq!(&bytes[13..17], &1_u32.to_le_bytes());
+        assert_eq!(&bytes[17..21], &3_u32.to_le_bytes());
+        assert_eq!(&bytes[21..29], &base.main_primes[0].to_le_bytes());
+        assert_eq!(&bytes[29..37], &base.main_roots[0].to_le_bytes());
     }
 
     #[test]
@@ -1040,8 +1153,15 @@ mod tests {
         let mut longer = bytes.clone();
         longer.push(1);
         assert_eq!(BgvParameters::from_canonical_bytes(&longer), malformed);
+        // The first-release frame has an explicit exponent; no retired layout fallback.
+        let mut missing_precision = bytes.clone();
+        missing_precision.drain(13..17);
+        assert_eq!(
+            BgvParameters::from_canonical_bytes(&missing_precision),
+            malformed
+        );
         // The version and each of the five tags: offsets follow the documented layout.
-        let after_primes = 1 + 4 + 8 + 4 + 3 * 16 + 4 + 2 * 16;
+        let after_primes = 1 + 4 + 8 + 4 + 4 + 3 * 16 + 4 + 2 * 16;
         for offset in [
             0,
             after_primes,
@@ -1062,10 +1182,10 @@ mod tests {
         }
         // A count above the supported number of primes is refused before anything is read.
         let mut many = bytes.clone();
-        many[13..17].copy_from_slice(&65_u32.to_le_bytes());
+        many[17..21].copy_from_slice(&65_u32.to_le_bytes());
         assert_eq!(BgvParameters::from_canonical_bytes(&many), malformed);
         let mut many = bytes.clone();
-        many[13 + 4 + 3 * 16..13 + 8 + 3 * 16].copy_from_slice(&62_u32.to_le_bytes());
+        many[17 + 4 + 3 * 16..17 + 8 + 3 * 16].copy_from_slice(&62_u32.to_le_bytes());
         assert_eq!(BgvParameters::from_canonical_bytes(&many), malformed);
         // Decoding is structural: a changed field decodes and is then judged by validation.
         let mut changed = bytes.clone();
@@ -1089,15 +1209,15 @@ mod tests {
         check(&|p| p.log_degree = 1, ParameterDefect::DegreeOutOfRange);
         check(&|p| p.log_degree = 18, ParameterDefect::DegreeOutOfRange);
         check(
-            &|p| p.plaintext_modulus = 2,
+            &|p| p.plaintext_prime = 2,
             ParameterDefect::PlaintextModulus,
         );
         check(
-            &|p| p.plaintext_modulus = 255,
+            &|p| p.plaintext_prime = 255,
             ParameterDefect::PlaintextModulus,
         );
         check(
-            &|p| p.plaintext_modulus = (1 << 31) + 11,
+            &|p| p.plaintext_prime = (1 << 31) + 11,
             ParameterDefect::PlaintextModulus,
         );
         check(&|p| p.main_primes.clear(), ParameterDefect::NoMainPrime);
@@ -1183,24 +1303,24 @@ mod tests {
             candidate -= step;
         }
         // Same-size special primes skip the main primes.
-        let same = BgvParameters::derive(4, 257, (30, 2), (30, 2), 1).expect("same size");
+        let same = BgvParameters::derive(4, 257, 1, (30, 2), (30, 2), 1).expect("same size");
         assert_eq!(same.special_primes[0], parameters.main_primes[2]);
         assert_eq!(same.validate(), Ok(()));
         assert_eq!(
-            BgvParameters::derive(1, 257, (30, 1), (30, 1), 1),
+            BgvParameters::derive(1, 257, 1, (30, 1), (30, 1), 1),
             Err(ParameterDefect::DegreeOutOfRange)
         );
         assert_eq!(
-            BgvParameters::derive(4, 1 << 31, (30, 1), (30, 1), 1),
+            BgvParameters::derive(4, 1 << 31, 1, (30, 1), (30, 1), 1),
             Err(ParameterDefect::PlaintextModulus)
         );
         assert_eq!(
-            BgvParameters::derive(4, 257, (63, 1), (30, 1), 1),
+            BgvParameters::derive(4, 257, 1, (63, 1), (30, 1), 1),
             Err(ParameterDefect::NoPrimeOfRequestedSize)
         );
         // No 14-bit prime is 1 modulo 2 * 16 * 257 = 8224 (8225 = 5^2 * 7 * 47).
         assert_eq!(
-            BgvParameters::derive(4, 257, (14, 1), (30, 1), 1),
+            BgvParameters::derive(4, 257, 1, (14, 1), (30, 1), 1),
             Err(ParameterDefect::NoPrimeOfRequestedSize)
         );
         assert_eq!(
@@ -1216,13 +1336,13 @@ mod tests {
         assert_eq!(profile.parameters(), &parameters);
         assert_eq!(profile.identity(), &parameters.identity());
         assert_eq!(profile.degree(), 16);
-        assert_eq!(profile.plaintext_modulus(), 257);
+        assert_eq!(profile.master_plaintext_modulus(), 257);
         assert_eq!(profile.top_level(), 2);
         assert_eq!(profile.special_count(), 2);
         assert_eq!(profile.digit_count(), 2);
         assert_eq!(profile.error_bound(), 21);
         assert_eq!(profile.full_limbs(), 5);
-        assert_eq!(profile.plaintext_fixed().modulus, 257);
+        assert_eq!(profile.master_plaintext().modulus(), 257);
         assert_eq!(
             profile.special_modulus(),
             Natural::product_of(&parameters.special_primes)
@@ -1333,5 +1453,50 @@ mod tests {
         assert_eq!(profile.digit_count(), 3);
         assert_eq!(profile.level_modulus(5).expect("modulus").bit_len(), 295);
         assert_eq!(profile.special_modulus().bit_len(), 119);
+    }
+    #[test]
+    fn effective_precision_table_is_bounded_and_bound_to_the_master_identity() {
+        let profile =
+            BgvProfile::new(BgvParameters::derive(2, 3, 19, (50, 1), (60, 1), 1).unwrap()).unwrap();
+        assert_eq!(profile.master_plaintext_modulus(), 3_u64.pow(19));
+        assert_eq!(
+            profile.plaintext_precision_bytes(),
+            19 * core::mem::size_of::<PlaintextPrecision>()
+        );
+        for k in 1..=19 {
+            let precision = profile.plaintext_precision(k).unwrap();
+            assert_eq!(precision.profile_identity(), profile.identity());
+            assert_eq!(precision.prime(), 3);
+            assert_eq!(precision.exponent(), k);
+            assert_eq!(precision.modulus(), 3_u64.pow(k));
+            assert_eq!(precision.check_profile(&profile), Ok(()));
+        }
+        for invalid in [0, 20, u32::MAX] {
+            assert_eq!(
+                profile.plaintext_precision(invalid),
+                Err(BgvError::InvalidPlaintextPrecision)
+            );
+        }
+        for (prime, exponent) in [(257, 4), (3, 20), (3, u32::MAX), (4, 1), (5, 0)] {
+            assert_eq!(
+                BgvParameters::derive(2, prime, exponent, (50, 1), (60, 1), 1),
+                Err(ParameterDefect::PlaintextModulus)
+            );
+        }
+        let foreign =
+            BgvProfile::new(BgvParameters::derive(2, 3, 18, (50, 1), (60, 1), 1).unwrap()).unwrap();
+        let precision = profile.plaintext_precision(1).unwrap();
+        assert_eq!(
+            precision.check_same(foreign.plaintext_precision(1).unwrap()),
+            Err(BgvError::ProfileMismatch)
+        );
+        assert_eq!(
+            precision.check_same(profile.plaintext_precision(2).unwrap()),
+            Err(BgvError::PlaintextPrecisionMismatch)
+        );
+        assert_eq!(
+            foreign.plan_fresh(precision),
+            Err(BgvError::ProfileMismatch)
+        );
     }
 }

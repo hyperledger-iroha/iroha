@@ -1,4 +1,4 @@
-//! Offline dealer-assisted custody of a BGV secret key, not threshold decryption.
+//! Offline dealer-assisted custody and local consumed-subset opening of a BGV key.
 //!
 //! A trusted dealer consumes the complete key and samples independent Shamir
 //! polynomials over every main and special prime. The declared threshold and
@@ -7,16 +7,23 @@
 //! invocations. Each participant receives at most one opaque share from this
 //! in-memory dealer. All secret buffers use the existing clearing owners.
 //!
-//! There is no share codec, untrusted import, decryption contribution, public
-//! reconstruction, or network integration. Selection checks cover metadata
-//! only; they are not algebraic proofs. Test fixtures alone expose share words
+//! There is no share codec, untrusted import, exported decryption contribution,
+//! public reconstruction of a secret key, or network integration. Selection
+//! checks cover metadata only; they are not algebraic proofs. Test fixtures alone expose share words
 //! for independent interpolation. No BGV profile is qualified by this module.
 //!
 //! A canonical public selection can consume a local share into a subset-additive
 //! share, in place. This private arithmetic neither releases a contribution nor
 //! establishes a reusable, authenticated or retry-secure opening protocol.
+//! [`ThresholdSelection::open_local`] consumes the exact selected shares under
+//! one trusted, co-located owner and returns only the plaintext. It is not a
+//! distributed threshold-decryption protocol or an authorization boundary.
 // TODO(C.4): reviewed malicious-party-secure key generation, authenticated durable
 // custody, masked ciphertext-bound contributions and zero-knowledge share verification.
+mod opening;
+
+pub use opening::ThresholdOpeningError;
+
 use std::sync::Arc;
 
 use super::{
@@ -33,7 +40,7 @@ pub const THRESHOLD_CONTEXT_DOMAIN: &str = "iroha_fhe bgv v1 offline threshold c
 /// Domain separator for a canonical public subset of one offline sharing instance.
 pub const THRESHOLD_SELECTION_DOMAIN: &str = "iroha_fhe bgv v1 offline threshold selection";
 
-/// A refusal by the offline key-sharing component.
+/// A refusal by offline key sharing or local consumed-subset opening.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum ThresholdError {
     /// Threshold is zero or greater than the participant count.
@@ -68,11 +75,11 @@ pub enum ThresholdError {
     /// This in-memory dealer has already issued this participant's share.
     #[error("participant share has already been issued")]
     AlreadyIssued,
-    /// Fewer than the declared threshold were selected.
-    #[error("selection has fewer than the declared threshold")]
+    /// Fewer shares than the threshold or exact selected subset requires.
+    #[error("fewer shares than the threshold or exact selected subset requires")]
     InsufficientShares,
-    /// A selection contains more shares than participants.
-    #[error("selection exceeds the participant count")]
+    /// More shares than the roster or exact selected subset permits.
+    #[error("more shares than the roster or exact selected subset permits")]
     TooManyShares,
     /// The same participant occurs twice in a selection.
     #[error("selection repeats a participant")]
@@ -83,7 +90,10 @@ pub enum ThresholdError {
     /// A selected share was issued by another dealer invocation.
     #[error("share belongs to another sharing instance")]
     InstanceMismatch,
-    /// Sampling failed; no fallback entropy is used.
+    /// A share was weighted for another selected subset.
+    #[error("share belongs to another selected threshold subset")]
+    SelectionMismatch,
+    /// A BGV operation failed; no fallback arithmetic or entropy is used.
     #[error(transparent)]
     Bgv(#[from] BgvError),
 }
@@ -409,7 +419,9 @@ impl std::error::Error for ThresholdShareConversionError {
 /// One local additive share for an exact public subset, with clearing ownership.
 ///
 /// These full-field words are not a ternary [`SecretKey`]. No production export,
-/// import, reconstruction, decryption or Clone interface is provided.
+/// import, reconstruction or Clone interface is provided. The local
+/// [`ThresholdSelection::open_local`] operation consumes all selected shares;
+/// it never exports a per-participant decryption contribution.
 ///
 /// ```compile_fail
 /// use iroha_fhe::bgv::threshold::SubsetSecretKeyShare;
@@ -801,7 +813,7 @@ mod tests {
     };
 
     fn profile() -> BgvProfile {
-        BgvProfile::new(BgvParameters::derive(4, 257, (40, 2), (41, 1), 1).expect("parameters"))
+        BgvProfile::new(BgvParameters::derive(4, 257, 1, (40, 2), (41, 1), 1).expect("parameters"))
             .expect("profile")
     }
 

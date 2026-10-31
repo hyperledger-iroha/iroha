@@ -53,6 +53,33 @@ fn widened_composition_matches_scalar_reduction_at_carry_and_block_boundaries() 
 }
 
 #[test]
+fn indexed_widened_mix_preserves_order_carries_and_empty_input() {
+    let p = crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
+    for length in [0, 1, 2, 7, 8, 9, 1023, 1024, 1025, 2048, 4097] {
+        let residues = (0..length)
+            .map(|index| F(p - 1 - (index % 31) as u64))
+            .collect::<Vec<_>>();
+        let alphas = (0..length)
+            .map(|index| {
+                E::from_coefficients(core::array::from_fn(|lane| {
+                    F(p - 1 - ((index + lane) % 17) as u64)
+                }))
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut visited = 0;
+        let actual = mix_indexed_residues_v1(length, |index| {
+            assert_eq!(index, visited);
+            visited += 1;
+            (residues[length - 1 - index], alphas[length - 1 - index])
+        });
+        assert_eq!(visited, length);
+        assert_eq!(actual, scalar_mix(&residues, &alphas));
+        assert_eq!(actual, mix_residues_v1(&residues, &alphas));
+    }
+}
+
+#[test]
 fn every_registration_mix_is_identical_across_worker_schedules() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let fixtures = layout

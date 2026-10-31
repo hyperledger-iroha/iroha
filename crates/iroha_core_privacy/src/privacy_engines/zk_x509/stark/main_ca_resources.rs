@@ -179,9 +179,11 @@ impl MainCaJointBufferPlanV1 {
         let common = &self.common;
         let extra = sum_v1(&[self.ca_originals, self.metadata])?;
         let transient = match phase {
-            MainCaBufferPhaseV1::OriginalCommitments => {
-                sum_v1(&[common.joined_streams, common.replay_batch, self.ca_work])?
-            }
+            MainCaBufferPhaseV1::OriginalCommitments => sum_v1(&[
+                common.joined_streams,
+                common.initial_commit_batch,
+                self.ca_work,
+            ])?,
             MainCaBufferPhaseV1::Registration => {
                 sum_v1(&[common.quotient_stage, common.replay_batch])?
             }
@@ -202,6 +204,7 @@ impl MainCaJointBufferPlanV1 {
                 MainCaPrivatePlanV1::quotient_private_bytes_v1(),
             ])?,
             MainCaBufferPhaseV1::Finalization => sum_v1(&[
+                common.retained_oracle_cuts,
                 self.main_originals,
                 self.ca_work,
                 common.selected_replay,

@@ -52,6 +52,43 @@ def tracked_summary() -> dict:
     return json.loads(SUMMARY.read_text())
 
 
+class CiphertextFrameProjectionTest(unittest.TestCase):
+    """Current packed size projection never rewrites archived measured bytes."""
+
+    def test_archived_manifest_and_source_are_required_for_recorded_word_sizes(self) -> None:
+        runs = tracked_summary()["runs"]
+        self.assertEqual(len(MODEL.ARCHIVED_WORD_FRAME_RUNS), 16)
+        for run in runs:
+            _, name, shape = MODEL.RUN_CONFIGS[run["config"]]
+            profile = MODEL.profile(name, shape)
+            expected = run["sizes"]["input_ciphertext_frame"]["value"]
+            self.assertEqual(MODEL.recorded_ciphertext_bytes(run, profile, profile.top), expected)
+            self.assertLess(profile.ciphertext_bytes(profile.top), expected)
+        run = copy.deepcopy(runs[0])
+        _, name, shape = MODEL.RUN_CONFIGS[run["config"]]
+        profile = MODEL.profile(name, shape)
+        for key in ["artifact", "source_commit", "source_dirty", "source_dirty_digest"]:
+            altered = copy.deepcopy(run)
+            altered["run"][key] = "wrong"
+            with self.assertRaisesRegex(ValueError, "provenance differs"):
+                MODEL.recorded_ciphertext_bytes(altered, profile, 0)
+        run["run"]["manifest_sha256"] = "00" * 32
+        with self.assertRaisesRegex(ValueError, "unlisted archived"):
+            MODEL.recorded_ciphertext_bytes(run, profile, 0)
+        run["run"]["artifact"] = "sha256:" + "11" * 32
+        self.assertEqual(MODEL.recorded_ciphertext_bytes(run, profile, 0), profile.ciphertext_bytes(0))
+
+    def test_current_public_widths_and_resident_key_sizes_are_distinct(self) -> None:
+        profile = MODEL.profile(AFFINE, MODEL.CANDIDATES[AFFINE])
+        for level in range(profile.top + 1):
+            for components in [2, 3]:
+                expected = 36 + 8 * profile.noise_bound_words()
+                expected += components * sum((profile.degree * q.bit_length() + 7) // 8 for q in profile.main[:level + 1])
+                self.assertEqual(profile.ciphertext_bytes(level, components), expected)
+                self.assertEqual(profile.residue_bytes(level, components), 8 * components * (level + 1) * profile.degree)
+        self.assertEqual(profile.public_key_bytes(), 32 + 8 * 2 * (profile.top + 1) * profile.degree)
+
+
 class PinnedRunTest(unittest.TestCase):
     """Cost ingestion consumes one verified snapshot and mandatory external pins."""
 
@@ -539,7 +576,7 @@ class ModelTest(unittest.TestCase):
         self.assertEqual(toy.multiplication_units(2), 3 * (4 * forward + 4 * n + 3 * inverse) + key_switch)
         self.assertEqual(toy.switch_down_units(2), 2 * n * 8)
         # Sizes of the Rust unit test `sizes_match_the_encoded_objects`.
-        self.assertEqual(toy.ciphertext_bytes(2), 36 + 16 + 8 * 2 * 3 * 16)
+        self.assertEqual(toy.ciphertext_bytes(2), 36 + 16 + 30 * 2 * 3 * 16 // 8)
         self.assertEqual(toy.switching_key_bytes(), 37 + 8 * 2 * 2 * 5 * 16)
         self.assertEqual(toy.secret_key_bytes(), 32 + 4)
         self.assertEqual(toy.residue_bytes(2), 8 * 2 * 3 * 16)

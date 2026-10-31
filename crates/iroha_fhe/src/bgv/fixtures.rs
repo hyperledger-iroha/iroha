@@ -14,6 +14,8 @@
 //!   of a ciphertext. Production code never measures noise.
 //! - **Faults.** [`arm_fault`] makes the next operation that reaches a named
 //!   point panic, so erasure on unwind can be observed.
+//!   [`cleared_residue_words`] reports retired polynomial payload after the
+//!   canonical wipe, without exposing values or inspecting freed allocation storage.
 //!
 //! # Fixture entropy
 //!
@@ -32,6 +34,18 @@ use super::{
 use zeroize::Zeroizing;
 
 pub use super::fault::{FaultPoint, arm as arm_fault, disarm as disarm_fault};
+
+/// Number of residue words retired on this thread after canonical polynomial wipes.
+///
+/// Take a difference around a completed operation or caught unwind. This shares
+/// the inline unit tests' counter and counts both public and private `RnsPoly`
+/// owners. It exposes no residue values, mutator or raw owner access. It measures
+/// retired payload after the unconditional zeroization call; it is not forensic
+/// evidence about freed or spare allocator storage, nor a whole-secret count.
+#[must_use]
+pub fn cleared_residue_words() -> usize {
+    super::poly::clearing_observer::cleared_words()
+}
 
 /// BLAKE3 `derive_key` context of the fixture entropy.
 pub const FIXTURE_ENTROPY_CONTEXT: &str = "iroha_fhe bgv v1 fixture entropy";
@@ -335,12 +349,61 @@ mod tests {
     use crate::bgv::BgvParameters;
 
     fn profile() -> BgvProfile {
-        BgvProfile::new(BgvParameters::derive(4, 257, (30, 3), (31, 2), 2).expect("parameters"))
+        BgvProfile::new(BgvParameters::derive(4, 257, 1, (30, 3), (31, 2), 2).expect("parameters"))
             .expect("profile")
     }
 
     fn master(tag: u8) -> [u8; COIN_SEED_BYTES] {
         std::array::from_fn(|index| tag ^ u8::try_from(index).unwrap_or(0))
+    }
+
+    #[test]
+    fn residue_clear_observation_is_exact_on_success_error_and_unwind() {
+        let owners = || {
+            (
+                RnsPoly::from_words(vec![17; 8], 4).unwrap(),
+                RnsPoly::from_words(vec![23; 12], 4).unwrap(),
+            )
+        };
+        let before = cleared_residue_words();
+        let live = owners();
+        assert_eq!(cleared_residue_words(), before);
+        drop(live);
+        assert_eq!(cleared_residue_words() - before, 20);
+        assert_eq!(
+            cleared_residue_words(),
+            super::super::poly::tests::cleared_words()
+        );
+
+        let before = cleared_residue_words();
+        let failure = (|| -> Result<(), BgvError> {
+            let _live = owners();
+            Err(BgvError::Kernel)
+        })();
+        assert_eq!(failure, Err(BgvError::Kernel));
+        assert_eq!(cleared_residue_words() - before, 20);
+
+        let before = cleared_residue_words();
+        let failure = std::panic::catch_unwind(|| {
+            let _live = owners();
+            panic!("fixture residue observation unwind");
+        });
+        assert!(failure.is_err());
+        assert_eq!(cleared_residue_words() - before, 20);
+        assert_eq!(
+            cleared_residue_words(),
+            super::super::poly::tests::cleared_words()
+        );
+
+        let before = cleared_residue_words();
+        std::thread::spawn(|| {
+            assert_eq!(cleared_residue_words(), 0);
+            drop(RnsPoly::from_words(vec![31; 24], 4).unwrap());
+            assert_eq!(cleared_residue_words(), 24);
+        })
+        .join()
+        .unwrap();
+        assert_eq!(cleared_residue_words(), before);
     }
 
     #[test]
@@ -389,7 +452,8 @@ mod tests {
         let build = || {
             let mut entropy = FixtureEntropy::new(master(3));
             let keys = key_set(&profile, &[5], &mut entropy).expect("keys");
-            let plaintext = Plaintext::new(&profile, (0..16).collect()).expect("plaintext");
+            let plaintext = Plaintext::new(&profile, profile.master_plaintext(), (0..16).collect())
+                .expect("plaintext");
             let ciphertext =
                 encrypt(&profile, &keys.public, &plaintext, &mut entropy).expect("ciphertext");
             (keys, plaintext, ciphertext, entropy.draws())
@@ -450,7 +514,8 @@ mod tests {
             })
         );
         // With that key, encryption with error e0 gives c0 = t*e0 + m and c1 = t*e1.
-        let plaintext = Plaintext::constant(&profile, 7).expect("plaintext");
+        let plaintext =
+            Plaintext::constant(&profile, profile.master_plaintext(), 7).expect("plaintext");
         let mut error0 = [0_i64; 16];
         error0[0] = 2;
         let mut error1 = [0_i64; 16];
@@ -490,7 +555,7 @@ mod tests {
         assert!(key_words[2 * 80..2 * 80 + 16].iter().all(|&word| word == 0));
         assert!(key_words[..16].iter().any(|&word| word != 0));
         let other = BgvProfile::new(
-            BgvParameters::derive(4, 257, (30, 2), (31, 2), 2).expect("parameters"),
+            BgvParameters::derive(4, 257, 1, (30, 2), (31, 2), 2).expect("parameters"),
         )
         .expect("profile");
         assert_eq!(

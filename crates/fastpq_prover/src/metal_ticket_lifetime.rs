@@ -15,6 +15,59 @@ pub(super) enum Completion {
     Uncertain,
 }
 
+/// Controlled wait-policy comparison; there is no shipping policy override.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TestWaitStrategy {
+    YieldThenNotify,
+    ActiveOneMillisecond,
+    ActiveTwoMilliseconds,
+    ActiveSixteenMilliseconds,
+}
+
+#[cfg(test)]
+impl TestWaitStrategy {
+    fn active_duration(self) -> Option<Duration> {
+        match self {
+            Self::YieldThenNotify => None,
+            Self::ActiveOneMillisecond => Some(Duration::from_millis(1)),
+            Self::ActiveTwoMilliseconds => Some(Duration::from_millis(2)),
+            Self::ActiveSixteenMilliseconds => Some(Duration::from_millis(16)),
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_WAIT_STRATEGY: std::cell::Cell<TestWaitStrategy> = const {
+        std::cell::Cell::new(TestWaitStrategy::YieldThenNotify)
+    };
+}
+
+/// Restore even nested diagnostic scopes during unwind, on the same thread.
+#[cfg(test)]
+pub(super) struct TestWaitStrategyScope {
+    previous: TestWaitStrategy,
+    same_thread: core::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(test)]
+impl TestWaitStrategyScope {
+    pub(super) fn enter(strategy: TestWaitStrategy) -> Self {
+        Self {
+            previous: TEST_WAIT_STRATEGY.with(|slot| slot.replace(strategy)),
+            same_thread: core::marker::PhantomData,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestWaitStrategyScope {
+    fn drop(&mut self) {
+        TEST_WAIT_STRATEGY.with(|slot| slot.set(self.previous));
+    }
+}
+
 /// A wakeup hint owned by the existing command-completion permit. Only the
 /// command's actual status authorizes publication; this flag never does.
 #[derive(Default)]
@@ -73,8 +126,20 @@ impl DrainBudget {
         quarantined: impl Fn() -> bool,
         notification: &CompletionNotification,
     ) -> Completion {
-        let deadline = *self.deadline.get_or_init(|| Instant::now() + self.timeout);
-        Self::wait_until(deadline, status, quarantined, notification)
+        self.wait_with_clock(status, quarantined, notification, Instant::now)
+    }
+
+    // Shipping entry points bind this private seam to Instant::now. Tests can
+    // advance the same deadline without depending on scheduler timing.
+    fn wait_with_clock(
+        &self,
+        status: impl FnMut() -> Completion,
+        quarantined: impl Fn() -> bool,
+        notification: &CompletionNotification,
+        mut now: impl FnMut() -> Instant,
+    ) -> Completion {
+        let deadline = *self.deadline.get_or_init(|| now() + self.timeout);
+        Self::wait_until_with_clock(deadline, status, quarantined, notification, now)
     }
 
     /// Successful ordinary waits keep their previous per-command allowance.
@@ -86,32 +151,61 @@ impl DrainBudget {
         quarantined: impl Fn() -> bool,
         notification: &CompletionNotification,
     ) -> Completion {
+        self.wait_one_with_clock(status, quarantined, notification, Instant::now)
+    }
+
+    fn wait_one_with_clock(
+        &self,
+        status: impl FnMut() -> Completion,
+        quarantined: impl Fn() -> bool,
+        notification: &CompletionNotification,
+        mut now: impl FnMut() -> Instant,
+    ) -> Completion {
         let deadline = self
             .deadline
             .get()
             .copied()
-            .unwrap_or_else(|| Instant::now() + self.timeout);
-        let result = Self::wait_until(deadline, status, quarantined, notification);
+            .unwrap_or_else(|| now() + self.timeout);
+        let result = Self::wait_until_with_clock(deadline, status, quarantined, notification, now);
         if result != Completion::Completed {
             let _ = self.deadline.set(deadline);
         }
         result
     }
 
-    fn wait_until(
+    fn wait_until_with_clock(
         deadline: Instant,
         mut status: impl FnMut() -> Completion,
         quarantined: impl Fn() -> bool,
         notification: &CompletionNotification,
+        mut now: impl FnMut() -> Instant,
     ) -> Completion {
         let mut polls = 0_usize;
+        #[cfg(test)]
+        let active_until = TEST_WAIT_STRATEGY.with(|slot| {
+            slot.get()
+                .active_duration()
+                .map(|duration| (now() + duration).min(deadline))
+        });
         loop {
             match status() {
                 Completion::Pending => {}
                 result => return result,
             }
-            if quarantined() || Instant::now() >= deadline {
+            if quarantined() || now() >= deadline {
                 return Completion::Uncertain;
+            }
+            #[cfg(test)]
+            if let Some(active_until) = active_until {
+                if now() < active_until {
+                    // Status and quarantine are checked on every iteration.
+                    // Active polling never turns a notification into success.
+                    std::hint::spin_loop();
+                    continue;
+                }
+                // Replace the original yield allowance, then use exactly its
+                // callback notification and bounded missing-callback fallback.
+                polls = 64;
             }
             polls = polls.saturating_add(1);
             if polls <= 64 {
@@ -120,7 +214,7 @@ impl DrainBudget {
                 // A completion callback wakes this wait without depending on
                 // the scheduler's sleep-timer tolerance. Keep bounded fallback
                 // polling for absent callbacks and another command's quarantine.
-                let remaining = deadline.saturating_duration_since(Instant::now());
+                let remaining = deadline.saturating_duration_since(now());
                 notification.wait_for(remaining.min(Duration::from_millis(1)));
             }
         }
@@ -316,27 +410,47 @@ mod tests {
 
     #[test]
     fn premature_and_spurious_notifications_cannot_publish_or_reset_deadline() {
+        use std::cell::Cell;
+
         let budget = DrainBudget::new(Duration::from_millis(2));
         let notification = CompletionNotification::default();
         notification.notify();
-        let mut polls = 0;
+        let start = Instant::now();
+        let now = Cell::new(start);
+        let polls = Cell::new(0_usize);
+        let consumed_notifications = Cell::new(0_usize);
         assert_eq!(
-            budget.wait_one(
+            budget.wait_one_with_clock(
                 || {
-                    polls += 1;
+                    let poll = polls.get() + 1;
+                    assert!(poll <= 70, "the original deadline must end this wait");
+                    polls.set(poll);
+                    if poll > 65 {
+                        // Polls 65 through 69 must consume the prior signal in
+                        // the notification path, rather than publishing it.
+                        assert!(!*notification.signaled.lock().unwrap());
+                        consumed_notifications.set(consumed_notifications.get() + 1);
+                    }
                     // Repeated notifications and spurious wakeups are only hints. The
                     // unchanged Pending status must still exhaust the original budget.
                     notification.notify();
                     notification.changed.notify_all();
+                    if poll == 70 {
+                        now.set(start + Duration::from_millis(2));
+                    }
                     Completion::Pending
                 },
                 || false,
-                &notification
+                &notification,
+                || now.get(),
             ),
             Completion::Uncertain
         );
-        assert!(polls > 1);
+        assert!(polls.get() > 1);
+        assert_eq!(polls.get(), 70);
+        assert_eq!(consumed_notifications.get(), 5);
         let deadline = *budget.deadline.get().unwrap();
+        assert_eq!(deadline, start + Duration::from_millis(2));
         assert_eq!(
             budget.wait(|| Completion::Pending, || false, &notification),
             Completion::Uncertain
@@ -597,5 +711,138 @@ mod tests {
             &first.deadline,
             &ticket_budget(Duration::ZERO).deadline
         ));
+    }
+
+    #[test]
+    fn test_wait_strategy_scope_is_thread_local_and_restored_on_unwind() {
+        assert_eq!(
+            TEST_WAIT_STRATEGY.with(std::cell::Cell::get),
+            TestWaitStrategy::YieldThenNotify
+        );
+        {
+            let _outer = TestWaitStrategyScope::enter(TestWaitStrategy::ActiveOneMillisecond);
+            assert!(
+                std::panic::catch_unwind(|| {
+                    let _inner =
+                        TestWaitStrategyScope::enter(TestWaitStrategy::ActiveTwoMilliseconds);
+                    panic!("diagnostic wait scope unwind");
+                })
+                .is_err()
+            );
+            assert_eq!(
+                TEST_WAIT_STRATEGY.with(std::cell::Cell::get),
+                TestWaitStrategy::ActiveOneMillisecond
+            );
+            assert_eq!(
+                thread::spawn(|| TEST_WAIT_STRATEGY.with(std::cell::Cell::get))
+                    .join()
+                    .unwrap(),
+                TestWaitStrategy::YieldThenNotify
+            );
+        }
+        assert_eq!(
+            TEST_WAIT_STRATEGY.with(std::cell::Cell::get),
+            TestWaitStrategy::YieldThenNotify
+        );
+    }
+
+    #[test]
+    fn active_wait_strategy_uses_notification_then_missing_callback_fallback() {
+        use std::cell::Cell;
+        for strategy in [
+            TestWaitStrategy::ActiveOneMillisecond,
+            TestWaitStrategy::ActiveTwoMilliseconds,
+            TestWaitStrategy::ActiveSixteenMilliseconds,
+        ] {
+            let _scope = TestWaitStrategyScope::enter(strategy);
+            let start = Instant::now();
+            let now = Cell::new(start);
+            let notification = CompletionNotification::default();
+            notification.notify();
+            let mut polls = 0;
+            let budget = DrainBudget::new(Duration::from_secs(1));
+            assert_eq!(
+                budget.wait_one_with_clock(
+                    || {
+                        polls += 1;
+                        match polls {
+                            1 => {}
+                            2 => {
+                                // The early hint stays pending throughout the
+                                // active interval and cannot authorize success.
+                                assert!(*notification.signaled.lock().unwrap());
+                                now.set(start + strategy.active_duration().unwrap());
+                            }
+                            3 => {
+                                assert!(!*notification.signaled.lock().unwrap());
+                                // No second callback: the unchanged fallback
+                                // must still return to the actual-status poll.
+                            }
+                            4 => return Completion::Completed,
+                            _ => panic!("status should finish after the missing callback"),
+                        }
+                        Completion::Pending
+                    },
+                    || false,
+                    &notification,
+                    || now.get(),
+                ),
+                Completion::Completed
+            );
+            assert_eq!(polls, 4);
+            assert!(budget.deadline.get().is_none());
+        }
+    }
+
+    #[test]
+    fn active_wait_strategy_preserves_status_first_and_shared_absolute_deadline() {
+        use std::cell::Cell;
+        for strategy in [
+            TestWaitStrategy::ActiveOneMillisecond,
+            TestWaitStrategy::ActiveTwoMilliseconds,
+            TestWaitStrategy::ActiveSixteenMilliseconds,
+        ] {
+            let _scope = TestWaitStrategyScope::enter(strategy);
+            let start = Instant::now();
+            let now = Cell::new(start);
+            let notification = CompletionNotification::default();
+            notification.notify();
+            let budget = DrainBudget::new(Duration::from_millis(1));
+            let later = budget.clone();
+            let mut polls = 0;
+            assert_eq!(
+                budget.wait_one_with_clock(
+                    || {
+                        polls += 1;
+                        now.set(start + Duration::from_micros(250 * polls));
+                        Completion::Pending
+                    },
+                    || false,
+                    &notification,
+                    || now.get(),
+                ),
+                Completion::Uncertain
+            );
+            assert_eq!(polls, 4);
+            let deadline = start + Duration::from_millis(1);
+            assert_eq!(*budget.deadline.get().unwrap(), deadline);
+            assert!(*notification.signaled.lock().unwrap());
+            assert_eq!(
+                later.wait_one_with_clock(
+                    || Completion::Pending,
+                    || false,
+                    &notification,
+                    || now.get(),
+                ),
+                Completion::Uncertain
+            );
+            for terminal in [Completion::Completed, Completion::Failed] {
+                assert_eq!(
+                    later.wait_one_with_clock(|| terminal, || true, &notification, || now.get(),),
+                    terminal
+                );
+            }
+            assert_eq!(*later.deadline.get().unwrap(), deadline);
+        }
     }
 }

@@ -267,15 +267,34 @@ mod tests;
 #[path = "main_selected_batch.rs"]
 mod batch;
 
+/// Phase-local custody of the admitted eight-column selected evaluation scratch.
+#[derive(Default)]
+pub(super) struct SelectedScratchV1 {
+    inner: batch::ScratchV1,
+}
+impl SelectedScratchV1 {
+    pub(super) fn release_v1(&mut self) {
+        self.inner.release_v1();
+    }
+
+    #[cfg(test)]
+    pub(super) fn retained_identity_v1(&self) -> Option<(usize, usize)> {
+        self.inner.retained_identity_v1()
+    }
+}
+
 /// Evaluate the measured selected batch with one interleaved scratch matrix.
 /// Every coefficient, including the complete mask tail, keeps its original value.
 pub(super) fn evaluate_batched_v1(
+    scratch: &mut SelectedScratchV1,
     coefficients: &[Column],
     native_log: u8,
     common_log: u8,
     selected: &[usize],
 ) -> Result<Vec<Column>, AggregateStarkErrorV1> {
-    batch::evaluate_batch_v1(coefficients, native_log, common_log, selected)
+    scratch
+        .inner
+        .evaluate_v1(coefficients, native_log, common_log, selected)
 }
 
 #[cfg(test)]
@@ -362,4 +381,9 @@ fn evaluate_horner_with_v1(
     }
     after_evaluate(&output);
     Ok(Column::from_vec_v1(output.into_vec()))
+}
+
+#[cfg(test)]
+pub(super) fn observed_batch_clear_count_v1() -> Option<usize> {
+    batch::observed_clear_count_v1()
 }

@@ -187,6 +187,29 @@ pub struct ZkX509CredentialMainPostBaseChallengesV1 {
     p256_arithmetic_copy: P256ArithmeticCopyChallengesV1,
     transcript_state: PrivacyOuterDigestV1,
 }
+
+/// Checked immutable challenge families borrowed by native composition only.
+/// Construction runs the original complete validation. The private reference
+/// keeps the exact post-base owner alive and prevents mutation for every row.
+#[derive(Clone, Copy)]
+pub(crate) struct ValidatedMainCompositionChallengesV1<'a> {
+    phase: &'a ZkX509CredentialMainPostBaseChallengesV1,
+}
+impl<'a> ValidatedMainCompositionChallengesV1<'a> {
+    /// Validate all original families before lending the immutable capability.
+    pub(crate) fn new_v1(
+        phase: &'a ZkX509CredentialMainPostBaseChallengesV1,
+    ) -> Result<Self, ZkX509CredentialPreAuxErrorV1> {
+        validate_main_post_base_challenges_v1(phase)?;
+        Ok(Self { phase })
+    }
+
+    /// Borrow the identical phase; callers cannot substitute or mutate families.
+    pub(crate) fn phase_v1(self) -> &'a ZkX509CredentialMainPostBaseChallengesV1 {
+        self.phase
+    }
+}
+
 impl ZkX509CredentialMainPostBaseChallengesV1 {
     /// MAIN projection copy and compaction challenges.
     pub(crate) const fn projection(self) -> ZkX509ProjectionChallengesV1 {
@@ -631,6 +654,32 @@ pub fn absorb_zk_x509_credential_pre_aux_binding_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn composition_capability_borrows_exact_owner_and_refuses_invalid_families() {
+        let phase = derive_v1(main_pre_aux_v1()).main_post_base();
+        let capability = ValidatedMainCompositionChallengesV1::new_v1(&phase).unwrap();
+        assert!(core::ptr::eq(capability.phase_v1(), &phase));
+        assert_eq!(
+            core::mem::size_of_val(&capability),
+            core::mem::size_of::<usize>()
+        );
+        assert!(core::ptr::eq(
+            capability.phase_v1().rfc5280(),
+            phase.rfc5280()
+        ));
+        for family in 0..5 {
+            let mut invalid = phase;
+            match family {
+                0 => invalid.sha.lanes[0].terms[0] = F::ZERO,
+                1 => invalid.rfc5280.tuple[0][0] = invalid.rfc5280.tuple[1][0],
+                2 => invalid.sha_word_memory.lanes[0].beta = F::ZERO,
+                3 => invalid.sha_word_base_folding[0] = F::ZERO,
+                _ => invalid.der.tuple[0][0] = F::ZERO,
+            }
+            assert!(ValidatedMainCompositionChallengesV1::new_v1(&invalid).is_err());
+        }
+        assert_eq!(capability.phase_v1(), &phase);
+    }
     fn test_digest_v1(value: u8) -> PrivacyOuterDigestV1 {
         PrivacyOuterDigestV1::from_bytes([value; 48])
     }

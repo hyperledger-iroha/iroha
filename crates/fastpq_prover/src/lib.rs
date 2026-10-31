@@ -85,6 +85,7 @@ mod gpu_memory;
 #[cfg(feature = "fastpq-gpu")]
 mod gpu_secret;
 mod keccak_batch;
+pub use keccak_batch::permute_pair_v1 as keccak_permute_pair_v1;
 #[cfg(feature = "fastpq-gpu")]
 mod keccak_gpu;
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]

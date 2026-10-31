@@ -6891,6 +6891,13 @@ impl ZkX509Rfc5280StarkBaseMaterialV1 {
         }
         Ok(())
     }
+    /// Fill the final retained base matrix from one original row stream.
+    pub(crate) fn fill_base_matrix_v1(
+        &self,
+        outputs: &mut [&mut [F]],
+    ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+        native_matrix::fill_base_v1(self, outputs)
+    }
     pub(crate) fn build_base_column(
         &self,
         column: usize,
@@ -7271,9 +7278,12 @@ mod aux_replay;
 #[path = "rfc5280_numeric_replay.rs"]
 mod numeric_replay;
 
-/// Named scratch for the bounded RFC auxiliary batch; destinations are caller-owned.
+/// Maximum scratch for bounded replay or initial final-owner RFC construction;
+/// destination allocations remain caller-owned and separately admitted.
 pub const fn zk_x509_rfc_aux_replay_scratch_bytes_v1() -> usize {
-    aux_replay::scratch_payload_bytes_v1()
+    let aux = aux_replay::scratch_payload_bytes_v1();
+    let base = native_matrix::scratch_payload_bytes_v1();
+    if aux > base { aux } else { base }
 }
 
 /// Replay one challenge-dependent auxiliary column with bounded memory.
@@ -7503,6 +7513,26 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
     ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
         self.material.fill_base_columns_v1(first, outputs)
     }
+    /// Fill the already admitted final base matrix under the original binding.
+    pub(crate) fn fill_base_matrix_v1(
+        &self,
+        outputs: &mut [&mut [F]],
+    ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+        self.material.fill_base_matrix_v1(outputs)
+    }
+    /// Populate disjoint auxiliary groups with their original complete recurrences.
+    pub(crate) fn fill_aux_matrix_v1(
+        &self,
+        outputs: &mut [&mut [F]],
+    ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+        aux_replay::fill_matrix_v1(
+            self.material,
+            &self.der_challenges,
+            &self.challenges,
+            outputs,
+            &self.sha_union,
+        )
+    }
     pub(crate) fn build_base_column_v1(
         &self,
         column: usize,
@@ -7604,6 +7634,36 @@ pub fn evaluate_zk_x509_rfc5280_local_residues_v1<A: PolynomialAirFieldV1>(
     )
 }
 
+/// Native composition uses the same complete relation with immutable checked
+/// challenge families. Shape, canonicality, terminals and every residue remain
+/// checked in the shared body.
+pub(super) fn evaluate_rfc5280_local_with_bound_context_v1(
+    current: &ZkX509Rfc5280StarkBaseRowV1,
+    next: &ZkX509Rfc5280StarkBaseRowV1,
+    current_aux: &ZkX509Rfc5280StarkAuxRowV1,
+    next_aux: &ZkX509Rfc5280StarkAuxRowV1,
+    fixed: &ZkX509Rfc5280StarkFixedRowV1,
+    capability: super::credential_pre_aux::ValidatedMainCompositionChallengesV1<'_>,
+) -> Result<Vec<F>, ZkX509Rfc5280StarkErrorV1> {
+    evaluate_rfc5280_relation_with_context_v1(
+        current,
+        next,
+        current_aux,
+        next_aux,
+        fixed,
+        RfcEvaluationChallengesV1::Bound(capability),
+        None,
+    )
+}
+
+enum RfcEvaluationChallengesV1<'a> {
+    Raw {
+        der: &'a ZkX509DerStarkChallengesV1,
+        rfc: &'a ZkX509Rfc5280StarkChallengesV1,
+    },
+    Bound(super::credential_pre_aux::ValidatedMainCompositionChallengesV1<'a>),
+}
+
 #[allow(clippy::too_many_arguments)]
 fn evaluate_rfc5280_relation_v1<A: PolynomialAirFieldV1>(
     current: &ZkX509Rfc5280StarkBaseRowV1<A>,
@@ -7615,8 +7675,42 @@ fn evaluate_rfc5280_relation_v1<A: PolynomialAirFieldV1>(
     challenges: &ZkX509Rfc5280StarkChallengesV1,
     terminal_claims: Option<ZkX509Rfc5280StarkTerminalClaimsV1>,
 ) -> Result<Vec<A>, ZkX509Rfc5280StarkErrorV1> {
-    der_challenges.validate()?;
-    challenges.validate()?;
+    evaluate_rfc5280_relation_with_context_v1(
+        current,
+        next,
+        current_aux,
+        next_aux,
+        fixed,
+        RfcEvaluationChallengesV1::Raw {
+            der: der_challenges,
+            rfc: challenges,
+        },
+        terminal_claims,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_rfc5280_relation_with_context_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509Rfc5280StarkBaseRowV1<A>,
+    next: &ZkX509Rfc5280StarkBaseRowV1<A>,
+    current_aux: &ZkX509Rfc5280StarkAuxRowV1<A>,
+    next_aux: &ZkX509Rfc5280StarkAuxRowV1<A>,
+    fixed: &ZkX509Rfc5280StarkFixedRowV1<A>,
+    challenge_context: RfcEvaluationChallengesV1<'_>,
+    terminal_claims: Option<ZkX509Rfc5280StarkTerminalClaimsV1>,
+) -> Result<Vec<A>, ZkX509Rfc5280StarkErrorV1> {
+    let bound_der;
+    let (der_challenges, challenges) = match challenge_context {
+        RfcEvaluationChallengesV1::Raw { der, rfc } => {
+            der.validate()?;
+            rfc.validate()?;
+            (der, rfc)
+        }
+        RfcEvaluationChallengesV1::Bound(capability) => {
+            bound_der = capability.phase_v1().der();
+            (&bound_der, capability.phase_v1().rfc5280())
+        }
+    };
     if let Some(claims) = terminal_claims {
         claims.validate_v1()?;
     }
@@ -12426,4 +12520,8 @@ mod tests {
     include!("rfc5280_nonkey_provenance_tests.rs");
     include!("rfc5280_sha_union_tests.rs");
     include!("rfc5280_aux_batch_tests.rs");
+    include!("rfc5280_full_matrix_source_tests.rs");
 }
+
+#[path = "rfc5280_native_matrix.rs"]
+mod native_matrix;

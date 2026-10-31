@@ -1,7 +1,8 @@
 //! Plaintexts, ciphertexts, encryption, decryption and the canonical encoding.
 //!
 //! A [`Plaintext`] is a polynomial with canonical coefficients in `[0, t)` in
-//! a clearing owner, together with a public bound of its centered norms. A
+//! a clearing owner, together with a public bound of its centered norms; here
+//! `t = p^k` is the effective modulus bound to one master profile. A
 //! [`Ciphertext`] is two (or, for an unrelinearized product, three) residue
 //! polynomials at one level with its public [`NoiseBound`].
 //!
@@ -9,15 +10,18 @@
 //!
 //! Words: the components in order, each limb-major over `q_0, ..., q_l`, every
 //! residue canonical. Bytes ([`Ciphertext::to_bytes`]): the profile identity
-//! (32), the level (`u16` little-endian), the component count (`u8`), a zero
-//! byte, the noise bound as [`BgvProfile::noise_bound_words`] little-endian
-//! words, then every residue as a little-endian `u64`. The length depends only
+//! (32), the level (`u16` little-endian), the component count (`u8`), the
+//! effective plaintext precision `k` (`u8`), and the noise bound as
+//! [`BgvProfile::noise_bound_words`] little-endian
+//! words, then packed residue blocks in component/limb order. Limb `i` uses
+//! `bit_length(q_i)` bits per residue, least-significant bit first, starting
+//! on a byte boundary; unused high bits in its last byte are zero. The length depends only
 //! on the profile, the level and the component count. Decoding rejects another
 //! identity, a level above the top, a component count other than two or three,
-//! a non-zero reserved byte, a noise bound above the level capacity, a
-//! non-canonical residue and any other length.
+//! an invalid effective plaintext precision, a noise bound above the level capacity, a
+//! non-canonical residue, nonzero padding and any other length.
 //!
-//! The frame is a fixed layout of words. The Norito wire types that carry it,
+//! The frame has one profile-derived bit layout. The Norito wire types that carry it,
 //! and their bounded admission, belong to the consumers. Key frames are in
 //! the keys module.
 // TODO(R.11, R.12, C.9): wire types, bounded framing and the proofs that make a
@@ -29,11 +33,11 @@
 //! module cannot establish that, and the proofs that do belong to the
 //! consumers.
 use super::{
-    BgvError, BgvProfile, CiphertextShape, NoiseBound, PublicKey, SecretKey,
+    BgvError, BgvProfile, CiphertextShape, NoiseBound, PlaintextPrecision, PublicKey, SecretKey,
     coins::{EntropySource, OsEntropy, small_residue},
     encryption_witness::EncryptionWitness,
     fault::{self, FaultPoint},
-    poly::{RnsPoly, extend_le_bytes, words_from_le_bytes},
+    poly::RnsPoly,
 };
 use crate::{
     constant_time::{FixedModulus, equal_bit_u64, greater_than_bit_u64, select_u64},
@@ -62,7 +66,7 @@ pub struct PlaintextBound {
 /// differ.
 #[derive(Clone)]
 pub struct Plaintext {
-    identity: [u8; 32],
+    precision: PlaintextPrecision,
     /// Canonical coefficients in `[0, t)`.
     coefficients: Zeroizing<Vec<u64>>,
     bound: PlaintextBound,
@@ -71,7 +75,7 @@ pub struct Plaintext {
 impl PartialEq for Plaintext {
     fn eq(&self, other: &Self) -> bool {
         // The profile, the declared bound and the length are public.
-        if self.identity != other.identity
+        if self.precision != other.precision
             || self.bound != other.bound
             || self.coefficients.len() != other.coefficients.len()
         {
@@ -107,8 +111,8 @@ impl Plaintext {
     /// The bound every plaintext of the profile satisfies:
     /// `linf = (t-1)/2`, `l1 = N*(t-1)/2`.
     #[must_use]
-    pub fn worst_case_bound(profile: &BgvProfile) -> PlaintextBound {
-        let half = (profile.plaintext_modulus() - 1) / 2;
+    pub fn worst_case_bound(profile: &BgvProfile, precision: PlaintextPrecision) -> PlaintextBound {
+        let half = (precision.modulus() - 1) / 2;
         PlaintextBound {
             linf: half,
             // `N <= 2^17` and `half < 2^30`.
@@ -118,8 +122,8 @@ impl Plaintext {
 
     /// The bound of a constant polynomial: `linf = l1 = (t-1)/2`, whatever the constant.
     #[must_use]
-    pub fn constant_bound(profile: &BgvProfile) -> PlaintextBound {
-        let half = (profile.plaintext_modulus() - 1) / 2;
+    pub fn constant_bound(_profile: &BgvProfile, precision: PlaintextPrecision) -> PlaintextBound {
+        let half = (precision.modulus() - 1) / 2;
         PlaintextBound {
             linf: half,
             l1: half,
@@ -128,17 +132,19 @@ impl Plaintext {
 
     fn checked(
         profile: &BgvProfile,
+        precision: PlaintextPrecision,
         coefficients: Vec<u64>,
         bound: PlaintextBound,
     ) -> Result<Self, BgvError> {
         let coefficients = Zeroizing::new(coefficients);
+        precision.check_profile(profile)?;
         if coefficients.len() != profile.degree() {
             return Err(BgvError::LengthMismatch {
                 expected: profile.degree(),
                 found: coefficients.len(),
             });
         }
-        let plaintext_modulus = profile.plaintext_modulus();
+        let plaintext_modulus = precision.modulus();
         if let Some(index) = coefficients
             .iter()
             .position(|&coefficient| coefficient >= plaintext_modulus)
@@ -146,7 +152,7 @@ impl Plaintext {
             return Err(BgvError::NonCanonical { index });
         }
         Ok(Self {
-            identity: *profile.identity(),
+            precision,
             coefficients,
             bound,
         })
@@ -156,18 +162,37 @@ impl Plaintext {
     ///
     /// # Errors
     /// [`BgvError::LengthMismatch`] or [`BgvError::NonCanonical`].
-    pub fn new(profile: &BgvProfile, coefficients: Vec<u64>) -> Result<Self, BgvError> {
-        Self::checked(profile, coefficients, Self::worst_case_bound(profile))
+    pub fn new(
+        profile: &BgvProfile,
+        precision: PlaintextPrecision,
+        coefficients: Vec<u64>,
+    ) -> Result<Self, BgvError> {
+        Self::checked(
+            profile,
+            precision,
+            coefficients,
+            Self::worst_case_bound(profile, precision),
+        )
     }
 
     /// The constant polynomial `value`, with the bound of every constant.
     ///
     /// # Errors
     /// [`BgvError::NonCanonical`] when `value >= t`.
-    pub fn constant(profile: &BgvProfile, value: u64) -> Result<Self, BgvError> {
+    pub fn constant(
+        profile: &BgvProfile,
+        precision: PlaintextPrecision,
+        value: u64,
+    ) -> Result<Self, BgvError> {
+        precision.check_profile(profile)?;
         let mut coefficients = vec![0_u64; profile.degree()];
         coefficients[0] = value;
-        Self::checked(profile, coefficients, Self::constant_bound(profile))
+        Self::checked(
+            profile,
+            precision,
+            coefficients,
+            Self::constant_bound(profile, precision),
+        )
     }
 
     /// A plaintext with a declared bound, which the coefficients must satisfy.
@@ -180,11 +205,12 @@ impl Plaintext {
     /// [`BgvError::PlaintextBoundExceeded`].
     pub fn with_public_bound(
         profile: &BgvProfile,
+        precision: PlaintextPrecision,
         coefficients: Vec<u64>,
         bound: PlaintextBound,
     ) -> Result<Self, BgvError> {
-        let plaintext = Self::checked(profile, coefficients, bound)?;
-        let plaintext_modulus = profile.plaintext_modulus();
+        let plaintext = Self::checked(profile, precision, coefficients, bound)?;
+        let plaintext_modulus = precision.modulus();
         let mut linf = 0_u64;
         let mut l1 = 0_u64;
         for &coefficient in plaintext.coefficients.iter() {
@@ -196,6 +222,12 @@ impl Plaintext {
             return Err(BgvError::PlaintextBoundExceeded);
         }
         Ok(plaintext)
+    }
+
+    /// Exact effective plaintext context, including master identity.
+    #[must_use]
+    pub const fn plaintext_precision(&self) -> PlaintextPrecision {
+        self.precision
     }
 
     /// Canonical coefficients in `[0, t)`.
@@ -213,20 +245,16 @@ impl Plaintext {
     /// The identity of the profile this plaintext belongs to.
     #[must_use]
     pub const fn profile_identity(&self) -> &[u8; 32] {
-        &self.identity
+        self.precision.profile_identity()
     }
 
     pub(super) fn check_profile(&self, profile: &BgvProfile) -> Result<(), BgvError> {
-        if &self.identity == profile.identity() {
-            Ok(())
-        } else {
-            Err(BgvError::ProfileMismatch)
-        }
+        self.precision.check_profile(profile)
     }
 
     /// Residues of the centered coefficients over the first `limbs` main primes, coefficient form.
     pub(super) fn centered_residues(&self, profile: &BgvProfile, limbs: usize) -> RnsPoly {
-        let plaintext_modulus = profile.plaintext_modulus();
+        let plaintext_modulus = self.precision.modulus();
         let half = (plaintext_modulus - 1) / 2;
         let mut poly = RnsPoly::zero(limbs, profile.degree());
         for limb in 0..limbs {
@@ -249,7 +277,7 @@ impl Plaintext {
 /// A ciphertext at one level with its public noise bound.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ciphertext {
-    identity: [u8; 32],
+    precision: PlaintextPrecision,
     level: usize,
     /// Two or three polynomials over `q_0, ..., q_level` in coefficient form.
     components: Vec<RnsPoly>,
@@ -259,6 +287,80 @@ pub struct Ciphertext {
 /// Bytes of the fixed frame header before the noise bound.
 const FRAME_HEADER_BYTES: usize = 32 + 2 + 1 + 1;
 
+/// Width fixed by a validated public odd prime, always at most 62 bits.
+fn residue_width(prime: u64) -> usize {
+    (u64::BITS - prime.leading_zeros()) as usize
+}
+
+/// Public limb bytes, with at most seven zero high padding bits.
+fn packed_limb_bytes(degree: usize, width: usize) -> Result<usize, BgvError> {
+    degree
+        .checked_mul(width)
+        .and_then(|bits| bits.checked_add(7))
+        .map(|bits| bits / 8)
+        .ok_or(BgvError::MalformedFrame)
+}
+
+/// Reserve public-sized frame storage before reading secret-dependent values.
+fn frame_reserve<T>(values: &mut Vec<T>, count: usize) -> Result<(), BgvError> {
+    #[cfg(test)]
+    tests::frame_allocation_checkpoint()?;
+    values
+        .try_reserve_exact(count)
+        .map_err(|_| BgvError::Allocation)
+}
+
+/// Pack one limb using a fixed public width and byte schedule.
+fn pack_limb(bytes: &mut [u8], words: &[u64], width: usize) {
+    let mut accumulator = Zeroizing::new(0_u128);
+    let mut bits = 0;
+    let mut offset = 0;
+    for word in words {
+        *accumulator |= u128::from(*word) << bits;
+        bits += width;
+        while bits >= 8 {
+            bytes[offset] = *accumulator as u8;
+            *accumulator >>= 8;
+            bits -= 8;
+            offset += 1;
+        }
+    }
+    if bits != 0 {
+        bytes[offset] = *accumulator as u8;
+    }
+}
+
+/// Decode directly into the final clearing owner; no duplicate flat word array.
+fn unpack_limb(
+    words: &mut [u64],
+    bytes: &[u8],
+    width: usize,
+    prime: u64,
+    first_index: usize,
+) -> Result<(), BgvError> {
+    let mask = (1_u128 << width) - 1;
+    let mut accumulator = Zeroizing::new(0_u128);
+    let mut bits = 0;
+    let mut offset = 0;
+    for (index, word) in words.iter_mut().enumerate() {
+        while bits < width {
+            *accumulator |= u128::from(bytes[offset]) << bits;
+            bits += 8;
+            offset += 1;
+        }
+        let value = Zeroizing::new((*accumulator & mask) as u64);
+        if *value >= prime {
+            return Err(BgvError::NonCanonical {
+                index: first_index + index,
+            });
+        }
+        *word = *value;
+        *accumulator >>= width;
+        bits -= width;
+    }
+    Ok(())
+}
+
 impl Ciphertext {
     /// A ciphertext of an admitted shape with its residues.
     pub(super) fn from_shape(
@@ -267,8 +369,12 @@ impl Ciphertext {
         components: Vec<RnsPoly>,
     ) -> Self {
         debug_assert_eq!(shape.components(), components.len());
+        debug_assert_eq!(
+            shape.plaintext_precision().profile_identity(),
+            profile.identity()
+        );
         Self {
-            identity: *profile.identity(),
+            precision: shape.plaintext_precision(),
             level: shape.level(),
             components,
             noise: NoiseBound::new(shape.into_bound()),
@@ -289,7 +395,7 @@ impl Ciphertext {
         level: usize,
     ) -> Result<Self, BgvError> {
         plaintext.check_profile(profile)?;
-        let shape = profile.plan_trivial(level)?;
+        let shape = profile.plan_trivial(plaintext.plaintext_precision(), level)?;
         let c0 = plaintext.centered_residues(profile, level + 1);
         let c1 = RnsPoly::zero(level + 1, profile.degree());
         Ok(Self::from_shape(profile, shape, vec![c0, c1]))
@@ -298,7 +404,13 @@ impl Ciphertext {
     /// The identity of the profile this ciphertext belongs to.
     #[must_use]
     pub const fn profile_identity(&self) -> &[u8; 32] {
-        &self.identity
+        self.precision.profile_identity()
+    }
+
+    /// Exact effective plaintext context, including master identity.
+    #[must_use]
+    pub const fn plaintext_precision(&self) -> PlaintextPrecision {
+        self.precision
     }
 
     /// The level: the index of the last main prime of the modulus.
@@ -323,12 +435,15 @@ impl Ciphertext {
         &self.components
     }
 
+    /// Move the clearing residue owners into an internal arithmetic domain.
+    /// Callers validate the profile/shape before changing representation; no
+    /// coefficient and transformed copies are retained by this transfer.
+    pub(super) fn into_components(self) -> Vec<RnsPoly> {
+        self.components
+    }
+
     pub(super) fn check_profile(&self, profile: &BgvProfile) -> Result<(), BgvError> {
-        if &self.identity == profile.identity() {
-            Ok(())
-        } else {
-            Err(BgvError::ProfileMismatch)
-        }
+        self.precision.check_profile(profile)
     }
 
     /// Canonical words: the components in order, each limb-major in coefficient form.
@@ -352,11 +467,13 @@ impl Ciphertext {
     /// [`BgvError::NoiseBudgetExceeded`].
     pub fn from_canonical_words(
         profile: &BgvProfile,
+        precision: PlaintextPrecision,
         level: usize,
         components: usize,
         words: &[u64],
         noise: &NoiseBound,
     ) -> Result<Self, BgvError> {
+        precision.check_profile(profile)?;
         profile.level(level)?;
         if !(2..=3).contains(&components) {
             return Err(BgvError::ComponentCount { found: components });
@@ -379,7 +496,8 @@ impl Ciphertext {
             .chunks_exact(component_words)
             .map(|chunk| RnsPoly::from_words(chunk.to_vec(), degree))
             .collect::<Result<Vec<_>, _>>()?;
-        let shape = profile.plan_claimed(level, components, noise.as_natural().clone())?;
+        let shape =
+            profile.plan_claimed(precision, level, components, noise.as_natural().clone())?;
         Ok(Self::from_shape(profile, shape, polys))
     }
 
@@ -396,45 +514,65 @@ impl Ciphertext {
         if !(2..=3).contains(&components) {
             return Err(BgvError::ComponentCount { found: components });
         }
-        Ok(FRAME_HEADER_BYTES
-            + 8 * profile.noise_bound_words()
-            + 8 * components * (level + 1) * profile.degree())
+        let mut component_bytes = 0_usize;
+        for prime in &profile.parameters().main_primes[..=level] {
+            component_bytes = component_bytes
+                .checked_add(packed_limb_bytes(profile.degree(), residue_width(*prime))?)
+                .ok_or(BgvError::MalformedFrame)?;
+        }
+        FRAME_HEADER_BYTES
+            .checked_add(8 * profile.noise_bound_words())
+            .and_then(|header| component_bytes.checked_mul(components)?.checked_add(header))
+            .ok_or(BgvError::MalformedFrame)
     }
 
     /// The canonical byte frame.
     ///
     /// # Errors
-    /// [`BgvError::ProfileMismatch`].
+    /// [`BgvError::ProfileMismatch`] or [`BgvError::Allocation`].
     pub fn to_bytes(&self, profile: &BgvProfile) -> Result<Vec<u8>, BgvError> {
         self.check_profile(profile)?;
-        let mut bytes = Vec::with_capacity(Self::encoded_len(
-            profile,
-            self.level,
-            self.components.len(),
-        )?);
-        bytes.extend_from_slice(&self.identity);
-        bytes.extend_from_slice(
+        let length = Self::encoded_len(profile, self.level, self.components.len())?;
+        let mut bytes = Zeroizing::new(Vec::new());
+        frame_reserve(&mut bytes, length)?;
+        bytes.resize(length, 0);
+        bytes[..32].copy_from_slice(self.precision.profile_identity());
+        bytes[32..34].copy_from_slice(
             &u16::try_from(self.level)
-                .map_err(|_| BgvError::Kernel)?
+                .map_err(|_| BgvError::MalformedFrame)?
                 .to_le_bytes(),
         );
-        bytes.push(u8::try_from(self.components.len()).map_err(|_| BgvError::Kernel)?);
-        bytes.push(0);
+        bytes[34] = u8::try_from(self.components.len()).map_err(|_| BgvError::MalformedFrame)?;
+        bytes[35] = self.precision.exponent() as u8;
         let noise_words = self.noise.as_natural().words_le();
+        let mut offset = FRAME_HEADER_BYTES;
         for index in 0..profile.noise_bound_words() {
-            bytes.extend_from_slice(&noise_words.get(index).copied().unwrap_or(0).to_le_bytes());
+            bytes[offset..offset + 8]
+                .copy_from_slice(&noise_words.get(index).copied().unwrap_or(0).to_le_bytes());
+            offset += 8;
         }
         for component in &self.components {
-            extend_le_bytes(&mut bytes, component.words());
+            for limb in 0..=self.level {
+                let width = residue_width(profile.main_plan(limb).prime());
+                let length = packed_limb_bytes(profile.degree(), width)?;
+                pack_limb(
+                    &mut bytes[offset..offset + length],
+                    component.limb(limb),
+                    width,
+                );
+                offset += length;
+            }
         }
-        Ok(bytes)
+        debug_assert_eq!(offset, length);
+        Ok(core::mem::take(&mut *bytes))
     }
 
     /// Decode a canonical byte frame.
     ///
     /// # Errors
-    /// [`BgvError::MalformedFrame`] for a short frame or a non-zero reserved
-    /// byte, [`BgvError::ProfileMismatch`], and the errors of
+    /// [`BgvError::MalformedFrame`] for a short frame,
+    /// [`BgvError::InvalidPlaintextPrecision`] for an invalid precision byte,
+    /// [`BgvError::ProfileMismatch`], [`BgvError::Allocation`], and the errors of
     /// [`Self::from_canonical_words`].
     pub fn from_bytes(profile: &BgvProfile, bytes: &[u8]) -> Result<Self, BgvError> {
         let (header, body) = bytes
@@ -445,9 +583,7 @@ impl Ciphertext {
         }
         let level = usize::from(u16::from_le_bytes([header[32], header[33]]));
         let components = usize::from(header[34]);
-        if header[35] != 0 {
-            return Err(BgvError::MalformedFrame);
-        }
+        let precision = profile.plaintext_precision(u32::from(header[35]))?;
         let expected = Self::encoded_len(profile, level, components)?;
         if bytes.len() != expected {
             return Err(BgvError::LengthMismatch {
@@ -455,15 +591,63 @@ impl Ciphertext {
                 found: bytes.len(),
             });
         }
-        let words = words_from_le_bytes(body);
-        let (noise_words, residues) = words.split_at(profile.noise_bound_words());
-        Self::from_canonical_words(
-            profile,
-            level,
-            components,
-            residues,
-            &NoiseBound::new(Natural::from_words_le(noise_words)),
-        )
+        let noise_bytes = 8 * profile.noise_bound_words();
+        let (noise_bytes, residues) = body.split_at(noise_bytes);
+        // Public metadata is bounded by the validated profile. Reject an invalid
+        // bound before allocating any private residue owner.
+        let mut noise = Vec::new();
+        frame_reserve(&mut noise, profile.noise_bound_words())?;
+        for chunk in noise_bytes.chunks_exact(8) {
+            let mut word = [0_u8; 8];
+            word.copy_from_slice(chunk);
+            noise.push(u64::from_le_bytes(word));
+        }
+        let shape =
+            profile.plan_claimed(precision, level, components, Natural::from_words_le(&noise))?;
+        // Canonical byte padding is public geometry. Check every limb before
+        // allocating residues, including small N=4 profiles with half-byte tails.
+        let degree = profile.degree();
+        let primes = &profile.parameters().main_primes[..=level];
+        let mut offset = 0;
+        for _ in 0..components {
+            for &prime in primes {
+                let width = residue_width(prime);
+                let length = packed_limb_bytes(degree, width)?;
+                let used = degree * width % 8;
+                if used != 0 && residues[offset + length - 1] >> used != 0 {
+                    return Err(BgvError::MalformedFrame);
+                }
+                offset += length;
+            }
+        }
+        let mut polys = Vec::new();
+        frame_reserve(&mut polys, components)?;
+        let component_words = (level + 1) * degree;
+        offset = 0;
+        for component in 0..components {
+            let mut words = Vec::new();
+            frame_reserve(&mut words, component_words)?;
+            words.resize(component_words, 0);
+            // The final clearing owner exists before the first decoded residue.
+            let mut polynomial = RnsPoly::from_words(words, degree)?;
+            for (limb, &prime) in primes.iter().enumerate() {
+                let width = residue_width(prime);
+                let length = packed_limb_bytes(degree, width)?;
+                unpack_limb(
+                    polynomial.limb_mut(limb),
+                    &residues[offset..offset + length],
+                    width,
+                    prime,
+                    component * component_words + limb * degree,
+                )?;
+                offset += length;
+                #[cfg(test)]
+                tests::frame_decode_checkpoint()?;
+            }
+            polys.push(polynomial);
+        }
+        debug_assert_eq!(offset, residues.len());
+        Ok(Self::from_shape(profile, shape, polys))
     }
 }
 
@@ -503,6 +687,7 @@ impl PublicKey {
     ) -> Result<Ciphertext, BgvError> {
         self.check_profile(profile)?;
         plaintext.check_profile(profile)?;
+        let shape = profile.plan_fresh(plaintext.plaintext_precision())?;
         let degree = profile.degree();
         for coins in [mask, error0, error1] {
             if coins.len() != degree {
@@ -533,7 +718,7 @@ impl PublicKey {
         c1.pointwise_mul_assign(&mask_evaluation, plan_of)?;
         c1.inverse(plan_of)?;
         let message = plaintext.centered_residues(profile, limbs);
-        let plaintext_modulus = profile.plaintext_modulus();
+        let plaintext_modulus = profile.master_plaintext_modulus();
         for limb in 0..limbs {
             let fixed: FixedModulus = plan_of(limb).fixed();
             let scale = plaintext_modulus % fixed.modulus;
@@ -551,11 +736,7 @@ impl PublicKey {
                 *slot = fixed.add_canonical(*slot, scaled);
             }
         }
-        Ok(Ciphertext::from_shape(
-            profile,
-            profile.plan_fresh()?,
-            vec![c0, c1],
-        ))
+        Ok(Ciphertext::from_shape(profile, shape, vec![c0, c1]))
     }
 }
 
@@ -578,20 +759,11 @@ impl SecretKey {
         ciphertext.check_profile(profile)?;
         let inner = self.inner_product(profile, ciphertext)?;
         fault::reached(FaultPoint::DecryptionAfterInnerProduct);
-        let degree = profile.degree();
-        let context = profile.level(ciphertext.level())?;
-        let mut coefficients = Zeroizing::new(vec![0_u64; degree]);
-        let level_basis: &RnsBasis = &context.basis;
-        level_basis.convert_centered(
-            inner.words(),
-            degree,
-            std::slice::from_ref(&context.plaintext_target),
-            &mut coefficients,
-        )?;
-        Plaintext::checked(
+        decode_inner_product(
             profile,
-            std::mem::take(&mut *coefficients),
-            Plaintext::worst_case_bound(profile),
+            ciphertext.plaintext_precision(),
+            ciphertext.level(),
+            &inner,
         )
     }
 
@@ -619,6 +791,38 @@ impl SecretKey {
     }
 }
 
+/// Centered reduction of a coefficient-form decryption inner product to plaintext.
+/// The input and output are clearing owners; conversion scratch is cleared on drop.
+pub(super) fn decode_inner_product(
+    profile: &BgvProfile,
+    precision: PlaintextPrecision,
+    level: usize,
+    inner: &RnsPoly,
+) -> Result<Plaintext, BgvError> {
+    precision.check_profile(profile)?;
+    let degree = profile.degree();
+    let context = profile.level(level)?;
+    let mut coefficients = Zeroizing::new(vec![0_u64; degree]);
+    let level_basis: &RnsBasis = &context.basis;
+    level_basis.convert_centered(
+        inner.words(),
+        degree,
+        std::slice::from_ref(&context.plaintext_target),
+        &mut coefficients,
+    )?;
+    // p^k divides the master modulus, so reduction after the sole master CRT
+    // target is exact and needs no per-level/per-precision conversion table.
+    for coefficient in &mut *coefficients {
+        *coefficient = precision.fixed().reduce_u64(*coefficient);
+    }
+    Plaintext::checked(
+        profile,
+        precision,
+        std::mem::take(&mut *coefficients),
+        Plaintext::worst_case_bound(profile, precision),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,8 +831,48 @@ mod tests {
         coins::tests::{ScriptedEntropy, seed},
     };
 
+    std::thread_local! {
+        static FRAME_ALLOCS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static FRAME_FAIL_ALLOC: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+        static FRAME_STAGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static FRAME_FAULT: std::cell::Cell<(usize, bool)> = const { std::cell::Cell::new((usize::MAX, false)) };
+        static FRAME_CLEARED_AT_FAULT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    fn frame_reset() {
+        FRAME_ALLOCS.set(0);
+        FRAME_FAIL_ALLOC.set(usize::MAX);
+        FRAME_STAGES.set(0);
+        FRAME_FAULT.set((usize::MAX, false));
+    }
+
+    pub(super) fn frame_allocation_checkpoint() -> Result<(), BgvError> {
+        let next = FRAME_ALLOCS.get() + 1;
+        FRAME_ALLOCS.set(next);
+        if FRAME_FAIL_ALLOC.get() == next {
+            Err(BgvError::Allocation)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(super) fn frame_decode_checkpoint() -> Result<(), BgvError> {
+        let stage = FRAME_STAGES.get() + 1;
+        FRAME_STAGES.set(stage);
+        let (at, unwind) = FRAME_FAULT.get();
+        if stage == at {
+            FRAME_FAULT.set((usize::MAX, false));
+            FRAME_CLEARED_AT_FAULT.set(super::super::poly::tests::cleared_words());
+            if unwind {
+                panic!("packed frame partial-owner unwind control");
+            }
+            return Err(BgvError::MalformedFrame);
+        }
+        Ok(())
+    }
+
     fn profile() -> BgvProfile {
-        BgvProfile::new(BgvParameters::derive(4, 257, (30, 3), (31, 2), 2).expect("parameters"))
+        BgvProfile::new(BgvParameters::derive(4, 257, 1, (30, 3), (31, 2), 2).expect("parameters"))
             .expect("profile")
     }
 
@@ -654,7 +898,7 @@ mod tests {
     #[test]
     fn plaintext_constructors_validate_and_bound() {
         let profile = profile();
-        let worst = Plaintext::worst_case_bound(&profile);
+        let worst = Plaintext::worst_case_bound(&profile, profile.master_plaintext());
         assert_eq!(
             worst,
             PlaintextBound {
@@ -663,10 +907,11 @@ mod tests {
             }
         );
         assert_eq!(
-            Plaintext::constant_bound(&profile),
+            Plaintext::constant_bound(&profile, profile.master_plaintext()),
             PlaintextBound { linf: 128, l1: 128 }
         );
-        let plaintext = Plaintext::new(&profile, message(&profile)).expect("plaintext");
+        let plaintext = Plaintext::new(&profile, profile.master_plaintext(), message(&profile))
+            .expect("plaintext");
         assert_eq!(plaintext.coefficients(), message(&profile));
         assert_eq!(plaintext.bound(), worst);
         assert_eq!(
@@ -674,7 +919,7 @@ mod tests {
             format!("Plaintext {{ bound: {worst:?}, .. }}")
         );
         assert_eq!(
-            Plaintext::new(&profile, vec![0; 15]).err(),
+            Plaintext::new(&profile, profile.master_plaintext(), vec![0; 15]).err(),
             Some(BgvError::LengthMismatch {
                 expected: 16,
                 found: 15
@@ -683,15 +928,19 @@ mod tests {
         let mut coefficients = vec![0_u64; 16];
         coefficients[9] = 257;
         assert_eq!(
-            Plaintext::new(&profile, coefficients).err(),
+            Plaintext::new(&profile, profile.master_plaintext(), coefficients).err(),
             Some(BgvError::NonCanonical { index: 9 })
         );
-        let constant = Plaintext::constant(&profile, 256).expect("constant");
+        let constant =
+            Plaintext::constant(&profile, profile.master_plaintext(), 256).expect("constant");
         assert_eq!(constant.coefficients()[0], 256);
         assert!(constant.coefficients()[1..].iter().all(|&c| c == 0));
-        assert_eq!(constant.bound(), Plaintext::constant_bound(&profile));
         assert_eq!(
-            Plaintext::constant(&profile, 257).err(),
+            constant.bound(),
+            Plaintext::constant_bound(&profile, profile.master_plaintext())
+        );
+        assert_eq!(
+            Plaintext::constant(&profile, profile.master_plaintext(), 257).err(),
             Some(BgvError::NonCanonical { index: 0 })
         );
         // 3 and 255 (= -2) have centered magnitudes 3 and 2.
@@ -699,15 +948,26 @@ mod tests {
         small[1] = 3;
         small[7] = 255;
         let tight = PlaintextBound { linf: 3, l1: 5 };
-        let bounded =
-            Plaintext::with_public_bound(&profile, small.clone(), tight).expect("bounded");
+        let bounded = Plaintext::with_public_bound(
+            &profile,
+            profile.master_plaintext(),
+            small.clone(),
+            tight,
+        )
+        .expect("bounded");
         assert_eq!(bounded.bound(), tight);
         for loose in [
             PlaintextBound { linf: 2, l1: 5 },
             PlaintextBound { linf: 3, l1: 4 },
         ] {
             assert_eq!(
-                Plaintext::with_public_bound(&profile, small.clone(), loose).err(),
+                Plaintext::with_public_bound(
+                    &profile,
+                    profile.master_plaintext(),
+                    small.clone(),
+                    loose
+                )
+                .err(),
                 Some(BgvError::PlaintextBoundExceeded)
             );
         }
@@ -726,46 +986,55 @@ mod tests {
     #[test]
     fn plaintext_equality_covers_profile_bound_and_every_coefficient() {
         let profile = profile();
-        let base = Plaintext::new(&profile, message(&profile)).expect("plaintext");
+        let base = Plaintext::new(&profile, profile.master_plaintext(), message(&profile))
+            .expect("plaintext");
         assert_eq!(base, base.clone());
         // A difference in the first, a middle or the last coefficient.
         for index in [0_usize, 7, 15] {
             let mut coefficients = message(&profile);
             coefficients[index] = (coefficients[index] + 1) % 257;
             assert_ne!(
-                Plaintext::new(&profile, coefficients).expect("plaintext"),
+                Plaintext::new(&profile, profile.master_plaintext(), coefficients)
+                    .expect("plaintext"),
                 base
             );
         }
         // The same coefficients under another declared bound or another profile differ.
-        let constant = Plaintext::constant(&profile, 5).expect("constant");
+        let constant =
+            Plaintext::constant(&profile, profile.master_plaintext(), 5).expect("constant");
         let mut coefficients = vec![0_u64; 16];
         coefficients[0] = 5;
         assert_ne!(
-            Plaintext::new(&profile, coefficients.clone()).expect("plaintext"),
+            Plaintext::new(&profile, profile.master_plaintext(), coefficients.clone())
+                .expect("plaintext"),
             constant
         );
         assert_eq!(
             Plaintext::with_public_bound(
                 &profile,
+                profile.master_plaintext(),
                 coefficients.clone(),
-                Plaintext::constant_bound(&profile)
+                Plaintext::constant_bound(&profile, profile.master_plaintext())
             )
             .expect("plaintext"),
             constant
         );
         let other = BgvProfile::new(
-            BgvParameters::derive(4, 257, (30, 2), (31, 2), 2).expect("parameters"),
+            BgvParameters::derive(4, 257, 1, (30, 2), (31, 2), 2).expect("parameters"),
         )
         .expect("profile");
-        assert_ne!(Plaintext::constant(&other, 5).expect("constant"), constant);
+        assert_ne!(
+            Plaintext::constant(&other, other.master_plaintext(), 5).expect("constant"),
+            constant
+        );
     }
 
     #[test]
     fn encryption_round_trips_and_carries_the_fresh_bound() {
         let profile = profile();
         let (secret, public) = keys(&profile);
-        let plaintext = Plaintext::new(&profile, message(&profile)).expect("plaintext");
+        let plaintext = Plaintext::new(&profile, profile.master_plaintext(), message(&profile))
+            .expect("plaintext");
         let ciphertext = public
             .encrypt_with(&profile, &plaintext, &mut entropy(3))
             .expect("ciphertext");
@@ -799,7 +1068,8 @@ mod tests {
     fn encryption_fails_closed_without_entropy_and_validates_coins() {
         let profile = profile();
         let (_, public) = keys(&profile);
-        let plaintext = Plaintext::new(&profile, message(&profile)).expect("plaintext");
+        let plaintext = Plaintext::new(&profile, profile.master_plaintext(), message(&profile))
+            .expect("plaintext");
         let mut failing = ScriptedEntropy {
             results: vec![None],
             calls: 0,
@@ -839,12 +1109,14 @@ mod tests {
     fn objects_of_another_profile_are_refused() {
         let profile = profile();
         let other = BgvProfile::new(
-            BgvParameters::derive(4, 257, (30, 2), (31, 2), 2).expect("parameters"),
+            BgvParameters::derive(4, 257, 1, (30, 2), (31, 2), 2).expect("parameters"),
         )
         .expect("profile");
         let (secret, public) = keys(&profile);
-        let plaintext = Plaintext::new(&profile, message(&profile)).expect("plaintext");
-        let foreign = Plaintext::new(&other, message(&other)).expect("plaintext");
+        let plaintext = Plaintext::new(&profile, profile.master_plaintext(), message(&profile))
+            .expect("plaintext");
+        let foreign =
+            Plaintext::new(&other, other.master_plaintext(), message(&other)).expect("plaintext");
         let ciphertext = public.encrypt(&profile, &plaintext).expect("ciphertext");
         let mismatch = Some(BgvError::ProfileMismatch);
         assert_eq!(public.encrypt(&other, &foreign).err(), mismatch);
@@ -864,29 +1136,60 @@ mod tests {
     fn canonical_words_round_trip_and_reject_malformed_input() {
         let profile = profile();
         let (_, public) = keys(&profile);
-        let plaintext = Plaintext::new(&profile, message(&profile)).expect("plaintext");
+        let plaintext = Plaintext::new(&profile, profile.master_plaintext(), message(&profile))
+            .expect("plaintext");
         let ciphertext = public
             .encrypt_with(&profile, &plaintext, &mut entropy(3))
             .expect("ciphertext");
         let words = ciphertext.canonical_words();
         assert_eq!(words.len(), 2 * 3 * 16);
-        let rebuilt =
-            Ciphertext::from_canonical_words(&profile, 2, 2, &words, ciphertext.noise_bound())
-                .expect("rebuilt");
+        let rebuilt = Ciphertext::from_canonical_words(
+            &profile,
+            profile.master_plaintext(),
+            2,
+            2,
+            &words,
+            ciphertext.noise_bound(),
+        )
+        .expect("rebuilt");
         assert_eq!(rebuilt, ciphertext);
         let bound = || ciphertext.noise_bound().clone();
         assert_eq!(
-            Ciphertext::from_canonical_words(&profile, 3, 2, &words, &bound()).err(),
+            Ciphertext::from_canonical_words(
+                &profile,
+                profile.master_plaintext(),
+                3,
+                2,
+                &words,
+                &bound()
+            )
+            .err(),
             Some(BgvError::LevelOutOfRange { level: 3, top: 2 })
         );
         for components in [0_usize, 1, 4] {
             assert_eq!(
-                Ciphertext::from_canonical_words(&profile, 2, components, &words, &bound()).err(),
+                Ciphertext::from_canonical_words(
+                    &profile,
+                    profile.master_plaintext(),
+                    2,
+                    components,
+                    &words,
+                    &bound()
+                )
+                .err(),
                 Some(BgvError::ComponentCount { found: components })
             );
         }
         assert_eq!(
-            Ciphertext::from_canonical_words(&profile, 2, 2, &words[1..], &bound()).err(),
+            Ciphertext::from_canonical_words(
+                &profile,
+                profile.master_plaintext(),
+                2,
+                2,
+                &words[1..],
+                &bound()
+            )
+            .err(),
             Some(BgvError::LengthMismatch {
                 expected: 96,
                 found: 95
@@ -897,7 +1200,15 @@ mod tests {
         let index = 48 + 16 + 3;
         non_canonical[index] = profile.main_plan(1).prime();
         assert_eq!(
-            Ciphertext::from_canonical_words(&profile, 2, 2, &non_canonical, &bound()).err(),
+            Ciphertext::from_canonical_words(
+                &profile,
+                profile.master_plaintext(),
+                2,
+                2,
+                &non_canonical,
+                &bound()
+            )
+            .err(),
             Some(BgvError::NonCanonical { index })
         );
         // A claimed bound above the capacity is refused; the capacity itself is accepted.
@@ -905,6 +1216,7 @@ mod tests {
         assert!(
             Ciphertext::from_canonical_words(
                 &profile,
+                profile.master_plaintext(),
                 2,
                 2,
                 &words,
@@ -915,6 +1227,7 @@ mod tests {
         assert_eq!(
             Ciphertext::from_canonical_words(
                 &profile,
+                profile.master_plaintext(),
                 2,
                 2,
                 &words,
@@ -926,8 +1239,15 @@ mod tests {
         // Three components at a lower level use the same layout.
         let smallest = profile.main_plan(0).prime();
         let reduced: Vec<u64> = words.iter().map(|&word| word % smallest).collect();
-        let three = Ciphertext::from_canonical_words(&profile, 1, 3, &reduced, &bound())
-            .expect("three components");
+        let three = Ciphertext::from_canonical_words(
+            &profile,
+            profile.master_plaintext(),
+            1,
+            3,
+            &reduced,
+            &bound(),
+        )
+        .expect("three components");
         assert_eq!(three.component_count(), 3);
         assert_eq!(three.level(), 1);
         assert_eq!(three.canonical_words(), reduced);
@@ -937,17 +1257,18 @@ mod tests {
     fn byte_frames_round_trip_and_reject_malformed_input() {
         let profile = profile();
         let (_, public) = keys(&profile);
-        let plaintext = Plaintext::new(&profile, message(&profile)).expect("plaintext");
+        let plaintext = Plaintext::new(&profile, profile.master_plaintext(), message(&profile))
+            .expect("plaintext");
         let ciphertext = public.encrypt(&profile, &plaintext).expect("ciphertext");
         let bytes = ciphertext.to_bytes(&profile).expect("bytes");
         // Three 30-bit primes: an 89-bit capacity needs two words.
         assert_eq!(profile.noise_bound_words(), 2);
-        let expected_len = 36 + 16 + 8 * 96;
+        let expected_len = 36 + 16 + 30 * 96 / 8;
         assert_eq!(bytes.len(), expected_len);
         assert_eq!(Ciphertext::encoded_len(&profile, 2, 2), Ok(expected_len));
         assert_eq!(
             Ciphertext::encoded_len(&profile, 0, 3),
-            Ok(36 + 16 + 8 * 48)
+            Ok(36 + 16 + 30 * 48 / 8)
         );
         assert_eq!(
             Ciphertext::encoded_len(&profile, 3, 2),
@@ -958,7 +1279,7 @@ mod tests {
             Err(BgvError::ComponentCount { found: 4 })
         );
         assert_eq!(&bytes[..32], profile.identity());
-        assert_eq!(&bytes[32..36], &[2, 0, 2, 0]);
+        assert_eq!(&bytes[32..36], &[2, 0, 2, 1]);
         assert_eq!(
             Ciphertext::from_bytes(&profile, &bytes),
             Ok(ciphertext.clone())
@@ -973,7 +1294,8 @@ mod tests {
             Ciphertext::from_bytes(&profile, &copy).err()
         };
         assert_eq!(mutated(0, bytes[0] ^ 1), Some(BgvError::ProfileMismatch));
-        assert_eq!(mutated(35, 1), Some(BgvError::MalformedFrame));
+        assert_eq!(mutated(35, 0), Some(BgvError::InvalidPlaintextPrecision));
+        assert_eq!(mutated(35, 2), Some(BgvError::InvalidPlaintextPrecision));
         assert_eq!(
             mutated(32, 3),
             Some(BgvError::LevelOutOfRange { level: 3, top: 2 })
@@ -983,7 +1305,7 @@ mod tests {
         assert_eq!(
             mutated(32, 1),
             Some(BgvError::LengthMismatch {
-                expected: 36 + 16 + 8 * 64,
+                expected: 36 + 16 + 30 * 64 / 8,
                 found: expected_len
             })
         );
@@ -992,9 +1314,14 @@ mod tests {
             mutated(36 + 15, 0xFF),
             Some(BgvError::NoiseBudgetExceeded { level: 2 })
         );
-        // The top byte of the first residue set: not canonical.
+        // All 30 bits of the first residue set: not canonical.
         assert_eq!(
-            mutated(36 + 16 + 7, 0xFF),
+            {
+                let mut invalid = bytes.clone();
+                invalid[52..55].fill(0xFF);
+                invalid[55] |= 0x3F;
+                Ciphertext::from_bytes(&profile, &invalid).err()
+            },
             Some(BgvError::NonCanonical { index: 0 })
         );
         let mut longer = bytes.clone();
@@ -1021,6 +1348,7 @@ mod tests {
         }
         let ciphertext = Ciphertext::from_canonical_words(
             &profile,
+            profile.master_plaintext(),
             1,
             3,
             &words,
@@ -1049,5 +1377,156 @@ mod tests {
                 .coefficients(),
             expected
         );
+    }
+    #[test]
+    fn packed_limb_helpers_match_independent_bit_positions_at_every_width() {
+        for width in 2..=62 {
+            let prime = (1_u64 << width) - 1;
+            assert_eq!(residue_width(prime), width);
+            for degree in [4, 8, 16, 32] {
+                let words: Vec<_> = (0..degree)
+                    .map(|index| match index % 4 {
+                        0 => 0,
+                        1 => 1,
+                        2 => prime - 1,
+                        _ => ((index as u64).wrapping_mul(0x1234_5678_9abc_def)) % prime,
+                    })
+                    .collect();
+                let mut expected = vec![0_u8; (degree * width).div_ceil(8)];
+                for (index, word) in words.iter().enumerate() {
+                    for bit in 0..width {
+                        let position = index * width + bit;
+                        expected[position / 8] |= (((word >> bit) & 1) as u8) << (position % 8);
+                    }
+                }
+                let mut actual = vec![0_u8; packed_limb_bytes(degree, width).unwrap()];
+                pack_limb(&mut actual, &words, width);
+                assert_eq!(actual, expected, "width {width}, degree {degree}");
+                let mut decoded = vec![0; degree];
+                unpack_limb(&mut decoded, &actual, width, prime, 0).unwrap();
+                assert_eq!(decoded, words);
+                let mut invalid = words.clone();
+                invalid[degree - 1] = prime;
+                pack_limb(&mut actual, &invalid, width);
+                assert_eq!(
+                    unpack_limb(&mut decoded, &actual, width, prime, 7),
+                    Err(BgvError::NonCanonical {
+                        index: 7 + degree - 1
+                    })
+                );
+            }
+        }
+        assert_eq!(
+            packed_limb_bytes(usize::MAX, 62),
+            Err(BgvError::MalformedFrame)
+        );
+    }
+
+    #[test]
+    fn packed_frame_preflight_and_partial_owners_clear_on_error_and_unwind() {
+        use super::super::poly;
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        frame_reset();
+        let profile = profile();
+        let (_, public) = keys(&profile);
+        let message =
+            Plaintext::new(&profile, profile.master_plaintext(), message(&profile)).unwrap();
+        let ciphertext = public.encrypt(&profile, &message).unwrap();
+        let bytes = ciphertext.to_bytes(&profile).unwrap();
+        let component_words = 3 * profile.degree();
+        // The old word-residue format is not a second accepted representation.
+        let mut retired = bytes[..52].to_vec();
+        for word in ciphertext.canonical_words() {
+            retired.extend_from_slice(&word.to_le_bytes());
+        }
+        frame_reset();
+        assert!(matches!(
+            Ciphertext::from_bytes(&profile, &retired),
+            Err(BgvError::LengthMismatch { .. })
+        ));
+        assert_eq!(FRAME_ALLOCS.get(), 0);
+        assert_eq!(FRAME_STAGES.get(), 0);
+        let mut bad_bound = bytes.clone();
+        bad_bound[51] = 0xff;
+        frame_reset();
+        assert_eq!(
+            Ciphertext::from_bytes(&profile, &bad_bound).unwrap_err(),
+            BgvError::NoiseBudgetExceeded { level: 2 }
+        );
+        assert_eq!(FRAME_ALLOCS.get(), 1, "bounded public noise metadata only");
+        assert_eq!(FRAME_STAGES.get(), 0);
+
+        for refusal in 1..=4 {
+            frame_reset();
+            FRAME_FAIL_ALLOC.set(refusal);
+            let before = poly::tests::cleared_words();
+            assert_eq!(
+                Ciphertext::from_bytes(&profile, &bytes).unwrap_err(),
+                BgvError::Allocation
+            );
+            if refusal == 4 {
+                assert_eq!(poly::tests::cleared_words() - before, component_words);
+            }
+        }
+        frame_reset();
+        FRAME_FAIL_ALLOC.set(1);
+        assert_eq!(ciphertext.to_bytes(&profile), Err(BgvError::Allocation));
+        for stage in 1..=6 {
+            for unwind in [false, true] {
+                frame_reset();
+                FRAME_FAULT.set((stage, unwind));
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    Ciphertext::from_bytes(&profile, &bytes)
+                }));
+                if unwind {
+                    assert!(result.is_err());
+                } else {
+                    assert_eq!(result.unwrap().unwrap_err(), BgvError::MalformedFrame);
+                }
+                assert!(
+                    poly::tests::cleared_words() >= FRAME_CLEARED_AT_FAULT.get() + component_words
+                );
+            }
+        }
+        // A late noncanonical limb also clears the current and completed owners.
+        frame_reset();
+        let mut invalid = bytes.clone();
+        let start = 52 + 5 * 60;
+        invalid[start..start + 3].fill(0xff);
+        invalid[start + 3] |= 0x3f;
+        let before = poly::tests::cleared_words();
+        assert_eq!(
+            Ciphertext::from_bytes(&profile, &invalid).unwrap_err(),
+            BgvError::NonCanonical { index: 80 }
+        );
+        assert_eq!(poly::tests::cleared_words() - before, 2 * component_words);
+        frame_reset();
+    }
+
+    #[test]
+    fn packed_frame_rejects_nonzero_limb_padding_before_residue_allocation() {
+        frame_reset();
+        let profile =
+            BgvProfile::new(BgvParameters::derive(2, 5, 1, (11, 2), (13, 1), 1).unwrap()).unwrap();
+        let plaintext = Plaintext::constant(&profile, profile.master_plaintext(), 1).unwrap();
+        let ciphertext = Ciphertext::trivial(&profile, &plaintext, 1).unwrap();
+        let bytes = ciphertext.to_bytes(&profile).unwrap();
+        let offset = 36 + 8 * profile.noise_bound_words();
+        assert_eq!(residue_width(profile.main_plan(0).prime()), 11);
+        assert_eq!(bytes.len(), offset + 2 * 2 * 6);
+        for limb in 0..4 {
+            let mut invalid = bytes.clone();
+            invalid[offset + limb * 6 + 5] |= 0x80;
+            frame_reset();
+            assert_eq!(
+                Ciphertext::from_bytes(&profile, &invalid).unwrap_err(),
+                BgvError::MalformedFrame
+            );
+            assert_eq!(FRAME_ALLOCS.get(), 1, "public noise metadata only");
+            assert_eq!(FRAME_STAGES.get(), 0);
+        }
+        frame_reset();
+        assert_eq!(Ciphertext::from_bytes(&profile, &bytes), Ok(ciphertext));
     }
 }

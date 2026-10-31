@@ -254,7 +254,7 @@ impl<'a> SelectedRowCommitmentV1<'a> {
             failed: false,
             context,
             node_role,
-            digest_streams,
+            digest_streams: RowStreamsV1::Scalar(digest_streams),
             opening_indices: opening_indices.to_vec(),
             opened_rows: BTreeMap::new(),
         };
@@ -311,6 +311,7 @@ impl<'a> SelectedRowCommitmentV1<'a> {
         inner.failed = true;
         let failure = inner
             .digest_streams
+            .scalar_mut_v1()?
             .par_iter_mut()
             .zip(&self.selected_rows)
             .enumerate()
@@ -386,6 +387,7 @@ impl<'a> SelectedRowCommitmentV1<'a> {
         inner.failed = true;
         let failure = inner
             .digest_streams
+            .scalar_mut_v1()?
             .par_iter_mut()
             .zip(&self.selected_rows)
             .map(|(stream, &row)| {
@@ -453,7 +455,7 @@ impl<'a> SelectedRowCommitmentV1<'a> {
             for (slot, stream) in tile
                 .0
                 .iter_mut()
-                .zip(&mut inner.digest_streams[offset..offset + CUT_ROWS_V1])
+                .zip(&mut inner.digest_streams.scalar_mut_v1()?[offset..offset + CUT_ROWS_V1])
             {
                 *slot = stream
                     .finalize_in_place_v1()

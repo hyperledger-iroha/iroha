@@ -161,6 +161,15 @@ fn fixed_matrix_clears_owned_cells_after_success_error_and_unwind() {
                 .any(|record| record.cells == 8 && record.nonzero_before != 0)
         );
         assert!(observations.iter().all(|record| record.nonzero_after == 0));
+        // The final three length-eight columns are cleared before their
+        // allocations are released; nested owner Drop then sees no cells.
+        assert_eq!(
+            observations
+                .iter()
+                .filter(|record| record.cells == 8)
+                .count(),
+            3
+        );
     }
 }
 
