@@ -5533,10 +5533,10 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             IvmStrategy::Conservative,
         );
         // Expect role registry touched and account-role binding keys written
-        assert!(set.read_keys.contains(&format!("role:{}", role_id)));
+        assert!(set.read_keys.contains(&format!("role:{role_id}")));
         assert!(
             set.write_keys
-                .contains(&format!("role.binding:{}:{}", alice, role_id))
+                .contains(&format!("role.binding:{alice}:{role_id}"))
         );
         // Expect permission keys touched for account and role
         assert!(
@@ -5570,11 +5570,11 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             None,
             IvmStrategy::Conservative,
         );
-        assert!(set.read_keys.contains(&format!("trigger:{}", trig)));
-        assert!(set.write_keys.contains(&format!("trigger:{}", trig)));
+        assert!(set.read_keys.contains(&format!("trigger:{trig}")));
+        assert!(set.write_keys.contains(&format!("trigger:{trig}")));
         assert!(
             set.write_keys
-                .contains(&format!("trigger.repetitions:{}", trig))
+                .contains(&format!("trigger.repetitions:{trig}"))
         );
     }
     #[test]

@@ -33896,10 +33896,12 @@ mod configuration_regression_tests {
                 .parse()
                 .expect("public key"),
         );
-        let mut governance = Governance::default();
-        governance.bond_escrow_account = account
-            .to_i105_for_discriminant(defaults::common::chain_discriminant())
-            .expect("default-prefix literal");
+        let governance = Governance {
+            bond_escrow_account: account
+                .to_i105_for_discriminant(defaults::common::chain_discriminant())
+                .expect("default-prefix literal"),
+            ..Governance::default()
+        };
         let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
         let result = std::panic::catch_unwind(move || governance.parse());
         assert!(

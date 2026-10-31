@@ -260,9 +260,6 @@ fn executed_history_denial_precedes_cold_body_decode_and_projection() {
 
 #[test]
 fn startup_history_retains_original_cold_kura_refusal_and_exact_retry() {
-    // Keep retired fixture State generations from reopening this original pool.
-    // Only the tested admission and synchronous owner refunds may change capacity.
-    let _epoch = crossbeam_epoch::pin();
     use crate::{
         execution_attempt::ExecutionAttemptError as Attempt,
         state::WorldReadOnly as _,
@@ -277,6 +274,9 @@ fn startup_history_retains_original_cold_kura_refusal_and_exact_retry() {
     use iroha_allocation::AllocationRefusal;
     use iroha_data_model::block::SharedSignedBlock;
     use std::task::{Context, Poll, Waker};
+    // Keep retired fixture State generations from reopening this original pool.
+    // Only the tested admission and synchronous owner refunds may change capacity.
+    let _epoch = crossbeam_epoch::pin();
 
     let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
     // The fixture adds a genuinely signed clock transaction when no user work is supplied.

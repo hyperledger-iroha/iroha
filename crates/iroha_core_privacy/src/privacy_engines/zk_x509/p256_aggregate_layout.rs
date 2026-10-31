@@ -30,6 +30,7 @@ pub const P256_SCALAR_BIT_BUS_AGGREGATE_TRACE_LOG2_V1: u8 = 8;
 /// Strict upper bound on the factor count of every P-256 permutation
 /// argument. The largest value-bus domain has `2^20` rows, with canonical
 /// identity padding, so every active multiset has strictly fewer factors.
+#[cfg(test)]
 pub const P256_PERMUTATION_FACTOR_CARDINALITY_BOUND_V1: usize = 1 << 20;
 /// Independent multiset arguments registered by one P-256 signature: value memory, external-cell
 /// chain, arithmetic-cell copy, arithmetic scalar bits, and window scalar bits.

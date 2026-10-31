@@ -1,6 +1,6 @@
 //! Account admission, strict instruction contracts and canonical archive regressions.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::engine::general_purpose::STANDARD;
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::{AccountId, NewAccount, address::AccountAddress},

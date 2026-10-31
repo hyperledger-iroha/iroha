@@ -45,8 +45,8 @@ const STARTUP: Duration = Duration::from_secs(30);
 const READ: Duration = Duration::from_secs(20);
 // Three sequential ordinary turns, each capped at 120 seconds by runtime::renewal.
 // This observation window does not change any worker deadline or enrollment interval.
-const THREE_TURNS: Duration = Duration::from_secs(3 * 120);
-const HARNESS_MAXIMUM: Duration = Duration::from_secs(13 * 60 * 60);
+const THREE_TURNS: Duration = Duration::from_mins(6);
+const HARNESS_MAXIMUM: Duration = Duration::from_hours(13);
 const READY_LOG: &str = "managed localnet readiness ";
 
 struct Harness {

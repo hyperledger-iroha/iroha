@@ -229,7 +229,7 @@ impl Observation {
             self.channels.channels.clone(),
             self.receipts.receipts.clone(),
             self.events.events.clone(),
-            self.status.clone(),
+            self.status,
             self.parent.clone(),
             self.child.clone(),
             self.balances.clone(),

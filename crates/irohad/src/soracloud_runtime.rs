@@ -381,8 +381,8 @@ const SORACLOUD_INROU_SERVICE_IDENTITY_PREFIX: &str = "iroha-inrou-";
 #[cfg(target_os = "linux")]
 const SORACLOUD_INROU_SERVICE_HOME: &str = "/nonexistent";
 #[cfg(any(target_os = "linux", test))]
-// Linux misc-device major 10, KVM minor 232 in the kernel dev_t encoding.
-const SORACLOUD_INROU_KVM_DEVICE_RDEV: u64 = (10_u64 << 8) | 232_u64;
+// Linux misc-device major 10, KVM minor 232 (0xe8) in the kernel dev_t encoding.
+const SORACLOUD_INROU_KVM_DEVICE_RDEV: u64 = (10_u64 << 8) | 0xe8_u64;
 #[cfg(target_os = "linux")]
 const SORACLOUD_INROU_QEMU_SANDBOX_POLICY: &str =
     "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny";
@@ -1921,7 +1921,7 @@ struct SoracloudPreparedRuntimeCounters {
 }
 impl SoracloudPreparedRuntimeCounters {
     fn increment(counter: &AtomicU64) {
-        let _ = counter.fetch_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |value| {
+        let _ = counter.try_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |value| {
             Some(value.saturating_add(1))
         });
     }
@@ -9191,9 +9191,7 @@ fn insert_public_input(
     Ok(())
 }
 fn pointer_tlv_payload(tlv_bytes: &[u8]) -> &[u8] {
-    ivm::pointer_abi::validate_tlv_bytes(tlv_bytes)
-        .map(|tlv| tlv.payload)
-        .unwrap_or(tlv_bytes)
+    ivm::pointer_abi::validate_tlv_bytes(tlv_bytes).map_or(tlv_bytes, |tlv| tlv.payload)
 }
 fn json_value_from_tlv(tlv_bytes: &[u8]) -> Result<norito::json::Value, VMError> {
     let tlv = ivm::pointer_abi::validate_tlv_bytes(tlv_bytes).map_err(|_| VMError::DecodeError)?;
@@ -9916,8 +9914,9 @@ fn local_read_receipt(
 fn soracloud_runtime_observed_at_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(1)
+        .map_or(1, |duration| {
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+        })
         .max(1)
 }
 fn desired_inrou_host_heartbeat_expiry_ms(
@@ -11530,7 +11529,7 @@ struct SoracloudEgressDnsReservation;
 impl SoracloudEgressDnsReservation {
     fn acquire() -> Option<Self> {
         SORACLOUD_EGRESS_DNS_IN_FLIGHT_V1
-            .fetch_update(AtomicOrdering::AcqRel, AtomicOrdering::Acquire, |current| {
+            .try_update(AtomicOrdering::AcqRel, AtomicOrdering::Acquire, |current| {
                 (current < SORACLOUD_EGRESS_DNS_MAX_IN_FLIGHT_V1).then(|| current.saturating_add(1))
             })
             .ok()?;
@@ -17863,7 +17862,7 @@ fn finish_inrou_stdout_drain_bounded(
 }
 #[cfg(all(test, not(windows)))]
 fn run_host_command(program: &Path, args: &[&str]) -> eyre::Result<()> {
-    run_host_command_with_timeout(program, args, Duration::from_secs(10 * 60))
+    run_host_command_with_timeout(program, args, Duration::from_mins(10))
 }
 #[cfg(all(test, not(windows)))]
 fn run_host_command_with_timeout(

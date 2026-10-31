@@ -1173,19 +1173,17 @@ async fn peer_message_mints_actor_global_delivery_ordinals_across_connection_ten
     );
     network.next_reply_delivery_ordinal = 40;
     let local_target = network.self_id.clone();
-    network
-        .peer_message(PeerMessage::new_for_connection(
-            source.clone(),
-            RelayMessage::new_signed(
-                &source_key_pair,
-                RelayTarget::Direct(local_target.clone()),
-                DEFAULT_RELAY_TTL,
-                SafetyMsg(1),
-            ),
-            1,
-            retired_connection,
-        ))
-        .await;
+    network.peer_message(PeerMessage::new_for_connection(
+        source.clone(),
+        RelayMessage::new_signed(
+            &source_key_pair,
+            RelayTarget::Direct(local_target.clone()),
+            DEFAULT_RELAY_TTL,
+            SafetyMsg(1),
+        ),
+        1,
+        retired_connection,
+    ));
     let retired_delivery = subscriber_rx
         .try_recv()
         .expect("draining authenticated tenure reaches its subscriber");
@@ -1193,19 +1191,17 @@ async fn peer_message_mints_actor_global_delivery_ordinals_across_connection_ten
         .reply_route()
         .expect("draining authenticated tenure receives a reply capability")
         .clone();
-    network
-        .peer_message(PeerMessage::new_for_connection(
-            source.clone(),
-            RelayMessage::new_signed(
-                &source_key_pair,
-                RelayTarget::Direct(local_target),
-                DEFAULT_RELAY_TTL,
-                SafetyMsg(2),
-            ),
-            1,
-            current_connection,
-        ))
-        .await;
+    network.peer_message(PeerMessage::new_for_connection(
+        source.clone(),
+        RelayMessage::new_signed(
+            &source_key_pair,
+            RelayTarget::Direct(local_target),
+            DEFAULT_RELAY_TTL,
+            SafetyMsg(2),
+        ),
+        1,
+        current_connection,
+    ));
     let current_delivery = subscriber_rx
         .try_recv()
         .expect("current authenticated tenure reaches its subscriber");
@@ -4820,26 +4816,22 @@ async fn superseded_connection_cannot_deliver_an_already_queued_message() {
             DummyMsg,
         )
     };
-    network
-        .peer_message(PeerMessage::new_for_connection(
-            peer.clone(),
-            relay(),
-            1,
-            stale_conn_id,
-        ))
-        .await;
+    network.peer_message(PeerMessage::new_for_connection(
+        peer.clone(),
+        relay(),
+        1,
+        stale_conn_id,
+    ));
     assert!(
         !network.last_active.contains_key(peer.id()),
         "a queued predecessor message must be dropped before it mutates peer state"
     );
-    network
-        .peer_message(PeerMessage::new_for_connection(
-            peer.clone(),
-            relay(),
-            1,
-            current_conn_id,
-        ))
-        .await;
+    network.peer_message(PeerMessage::new_for_connection(
+        peer.clone(),
+        relay(),
+        1,
+        current_conn_id,
+    ));
     assert!(
         network.last_active.contains_key(peer.id()),
         "the exact current authenticated tenure must remain serviceable"
@@ -4862,14 +4854,12 @@ async fn accepted_draining_connection_delivers_reliable_progress_after_replaceme
         DEFAULT_RELAY_TTL,
         DeferredProgressMsg::Lane(9),
     );
-    network
-        .peer_message(PeerMessage::new_for_connection(
-            peer.clone(),
-            relay,
-            1,
-            draining_conn_id,
-        ))
-        .await;
+    network.peer_message(PeerMessage::new_for_connection(
+        peer.clone(),
+        relay,
+        1,
+        draining_conn_id,
+    ));
     assert!(
         network.last_active.contains_key(peer.id()),
         "authenticated progress queued before replacement must survive the connection change"
@@ -9821,18 +9811,16 @@ async fn peer_message_hub_forwards_direct_frame_with_decremented_ttl() {
         106,
         target_handle,
     );
-    network
-        .peer_message(PeerMessage::new(
-            incoming_peer.clone(),
-            RelayMessage::new_signed(
-                &incoming_key_pair,
-                RelayTarget::Direct(target_id.clone()),
-                u8::MAX,
-                DummyMsg,
-            ),
-            1,
-        ))
-        .await;
+    network.peer_message(PeerMessage::new(
+        incoming_peer.clone(),
+        RelayMessage::new_signed(
+            &incoming_key_pair,
+            RelayTarget::Direct(target_id.clone()),
+            u8::MAX,
+            DummyMsg,
+        ),
+        1,
+    ));
     let forwarded = target_receivers
         .try_recv_other()
         .expect("hub should forward direct relay frame to target");
@@ -9868,18 +9856,16 @@ async fn peer_message_hub_drops_expired_direct_frame_for_remote_target() {
         107,
         target_handle,
     );
-    network
-        .peer_message(PeerMessage::new(
-            incoming_peer.clone(),
-            RelayMessage::new_signed(
-                &incoming_key_pair,
-                RelayTarget::Direct(target_id),
-                0,
-                DummyMsg,
-            ),
-            1,
-        ))
-        .await;
+    network.peer_message(PeerMessage::new(
+        incoming_peer.clone(),
+        RelayMessage::new_signed(
+            &incoming_key_pair,
+            RelayTarget::Direct(target_id),
+            0,
+            DummyMsg,
+        ),
+        1,
+    ));
     assert!(matches!(
         target_receivers.try_recv_other(),
         Err(TryRecvError::Empty)
@@ -9905,13 +9891,11 @@ async fn peer_message_hub_broadcast_forwards_and_delivers_locally() {
     );
     let (subscriber_tx, mut subscriber_rx) = mpsc::channel(1);
     network.subscribe_to_peers_messages(Subscriber::new(subscriber_tx, SubscriberFilter::All, 1));
-    network
-        .peer_message(PeerMessage::new(
-            incoming_peer.clone(),
-            RelayMessage::new_signed(&incoming_key_pair, RelayTarget::Broadcast, 2, DummyMsg),
-            1,
-        ))
-        .await;
+    network.peer_message(PeerMessage::new(
+        incoming_peer.clone(),
+        RelayMessage::new_signed(&incoming_key_pair, RelayTarget::Broadcast, 2, DummyMsg),
+        1,
+    ));
     let forwarded = other_receivers
         .try_recv_other()
         .expect("hub should forward broadcast relay frame");
@@ -10297,7 +10281,7 @@ async fn peer_gossip_not_counted_as_trust_skip() {
         "peer gossip should not bump trust-gossip skip counters"
     );
 }
-async fn assert_trust_gossip_receive_skipped(
+fn assert_trust_gossip_receive_skipped(
     peer_addr: SocketAddr,
     disable_local: bool,
     reason: &'static str,
@@ -10311,7 +10295,7 @@ async fn assert_trust_gossip_receive_skipped(
     let payload = direct_frame!(peer.id().clone(), network.self_id, TrustGossipMsg,);
     let msg = PeerMessage::new(peer, payload, 1);
     let before = trust_skip_count("recv", reason);
-    network.peer_message(msg).await;
+    network.peer_message(msg);
     let after = trust_skip_count("recv", reason);
     assert_eq!(after, before + 1, "{diagnostic}");
 }
@@ -10323,8 +10307,7 @@ async fn trust_gossip_recv_skips_when_local_capability_disabled() {
         true,
         "local_capability_off",
         "local trust-gossip disablement should drop inbound frames",
-    )
-    .await;
+    );
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn trust_gossip_recv_skips_when_peer_lacks_capability() {
@@ -10334,8 +10317,7 @@ async fn trust_gossip_recv_skips_when_peer_lacks_capability() {
         false,
         "peer_capability_off",
         "trust gossip from peers without negotiated support should be rejected",
-    )
-    .await;
+    );
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn peer_message_drops_mismatched_origin_without_hub() {
@@ -10355,7 +10337,7 @@ async fn peer_message_drops_mismatched_origin_without_hub() {
     let origin = random_peer_id();
     let payload = direct_frame!(origin, network.self_id, DummyMsg,);
     let msg = PeerMessage::new(incoming_peer.clone(), payload, 1);
-    network.peer_message(msg).await;
+    network.peer_message(msg);
     assert!(
         matches!(rx.try_recv(), Err(TryRecvError::Empty)),
         "mismatched origin should be dropped when not relaying from the hub"
@@ -10389,14 +10371,12 @@ async fn peer_message_quarantines_exact_tenure_on_mismatched_origin() {
         ),
     );
     let payload = direct_frame!(random_peer_id(), network.self_id, DummyMsg,);
-    network
-        .peer_message(PeerMessage::new_for_connection(
-            incoming_peer.clone(),
-            payload,
-            1,
-            connection_id,
-        ))
-        .await;
+    network.peer_message(PeerMessage::new_for_connection(
+        incoming_peer.clone(),
+        payload,
+        1,
+        connection_id,
+    ));
     assert!(receivers.termination_requested());
     assert!(!network.peers.contains_key(incoming_peer.id()));
     assert!(
@@ -10427,7 +10407,7 @@ async fn peer_message_accepts_origin_signed_multi_hop_frame_from_selected_hub() 
     )
     .forwarded_with_ttl(DEFAULT_RELAY_TTL - 1);
     let msg = PeerMessage::new(hub_peer, payload, 1);
-    network.peer_message(msg).await;
+    network.peer_message(msg);
     let received = rx.try_recv().expect("expected relay message");
     assert_eq!(
         received.peer.id(),
@@ -10454,9 +10434,7 @@ async fn peer_message_rejects_hub_rewritten_semantic_origin() {
         DummyMsg,
     );
     forged.origin = random_peer_id();
-    network
-        .peer_message(PeerMessage::new(hub_peer, forged, 1))
-        .await;
+    network.peer_message(PeerMessage::new(hub_peer, forged, 1));
     assert!(
         matches!(rx.try_recv(), Err(TryRecvError::Empty)),
         "a selected hub must not acquire semantic-origin signing authority"
@@ -10499,14 +10477,12 @@ async fn invalid_origin_signature_quarantines_and_disconnects_exact_tenure() {
         SafetyMsg(7),
     );
     forged.payload = SafetyMsg(8);
-    network
-        .peer_message(PeerMessage::new_for_connection(
-            peer.clone(),
-            forged,
-            1,
-            connection_id,
-        ))
-        .await;
+    network.peer_message(PeerMessage::new_for_connection(
+        peer.clone(),
+        forged,
+        1,
+        connection_id,
+    ));
 
     assert!(receivers.termination_requested());
     assert!(!network.peers.contains_key(peer.id()));
@@ -10524,14 +10500,12 @@ async fn invalid_origin_signature_quarantines_and_disconnects_exact_tenure() {
         DEFAULT_RELAY_TTL,
         SafetyMsg(9),
     );
-    network
-        .peer_message(PeerMessage::new_for_connection(
-            peer,
-            valid,
-            1,
-            connection_id,
-        ))
-        .await;
+    network.peer_message(PeerMessage::new_for_connection(
+        peer,
+        valid,
+        1,
+        connection_id,
+    ));
     assert!(
         matches!(rx.try_recv(), Err(TryRecvError::Empty)),
         "queued frames from the rejected tenure must bypass validation and delivery"
@@ -10577,14 +10551,12 @@ async fn invalid_signature_from_replaced_tenure_does_not_disconnect_replacement(
         SafetyMsg(7),
     );
     forged.payload = SafetyMsg(8);
-    network
-        .peer_message(PeerMessage::new_for_connection(
-            peer.clone(),
-            forged,
-            1,
-            old_connection_id,
-        ))
-        .await;
+    network.peer_message(PeerMessage::new_for_connection(
+        peer.clone(),
+        forged,
+        1,
+        old_connection_id,
+    ));
 
     assert!(
         network

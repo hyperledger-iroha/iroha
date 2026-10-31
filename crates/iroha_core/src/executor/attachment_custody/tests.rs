@@ -133,13 +133,8 @@ fn consume_action(
     index: u32,
 ) -> Result<(), CustodyError> {
     let action = source.attachments().unwrap().action(index).unwrap();
-    for (slot, reference) in action.attachments.iter().enumerate() {
-        let handle = frame.open(
-            request(source, index),
-            slot as u32,
-            reference.kind,
-            reference.role,
-        )?;
+    for (slot, reference) in (0_u32..).zip(&action.attachments) {
+        let handle = frame.open(request(source, index), slot, reference.kind, reference.role)?;
         let bytes = frame.consume(
             request(source, index),
             handle,
@@ -692,14 +687,14 @@ fn custody_does_not_remove_the_existing_no_native_consumer_refusal() {
 #[test]
 fn later_action_failure_discards_prior_completed_action_bookkeeping() {
     let tx = signed(
-        (0..2)
+        (0_u8..2)
             .map(|index| {
                 native(
                     ActionInvocationBindingV1::Direct {
-                        instruction_index: index,
+                        instruction_index: u32::from(index),
                     },
                     ActionAuthorityBindingV1::TransactionAuthority,
-                    3 + index as u8,
+                    3 + index,
                 )
             })
             .collect(),

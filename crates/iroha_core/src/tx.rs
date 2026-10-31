@@ -1979,9 +1979,9 @@ impl<'tx> AcceptedTransaction<'tx> {
     /// Preserve local implementation absence before constructing a completed signature verdict.
     pub(crate) fn signature_admission_failure(
         tx: &SignedTransaction,
-        err: TransactionSignatureError,
+        err: &TransactionSignatureError,
     ) -> AcceptTransactionFail {
-        match Self::signature_rejection_code(&err) {
+        match Self::signature_rejection_code(err) {
             Ok(code) => AcceptTransactionFail::SignatureVerification(
                 SignatureVerificationFail::new(tx.signature().clone(), code, err.to_string()),
             ),

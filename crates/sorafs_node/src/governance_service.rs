@@ -8372,17 +8372,19 @@ sorafs_governance_dag_mirror_drift {}\n",
     );
     response
 }
+/// Status and message of a refused mirror read; each handler renders it with [`json_error`].
+type MirrorRefusal = (StatusCode, &'static str);
 async fn authenticated_mirror_snapshot(
     state: &ServiceApiState,
-) -> Result<GovernanceDagMirrorSnapshotV1, Response> {
+) -> Result<GovernanceDagMirrorSnapshotV1, MirrorRefusal> {
     let reader = state.mirror_reader.clone();
     match tokio::task::spawn_blocking(move || reader.read()).await {
         Ok(Ok(Some(snapshot))) => Ok(snapshot),
-        Ok(Ok(None)) | Ok(Err(_)) => Err(json_error(
+        Ok(Ok(None)) | Ok(Err(_)) => Err((
             StatusCode::SERVICE_UNAVAILABLE,
             "authenticated Governance DAG mirror is not ready",
         )),
-        Err(_) => Err(json_error(
+        Err(_) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             "authenticated Governance DAG mirror read failed",
         )),
@@ -8391,7 +8393,7 @@ async fn authenticated_mirror_snapshot(
 async fn dashboard_handler(State(state): State<ServiceApiState>, headers: HeaderMap) -> Response {
     let snapshot = match authenticated_mirror_snapshot(&state).await {
         Ok(snapshot) => snapshot,
-        Err(response) => return response,
+        Err((status, message)) => return json_error(status, message),
     };
     let mirror = snapshot.mirror();
     let blocks = mirror
@@ -8436,7 +8438,7 @@ async fn dashboard_handler(State(state): State<ServiceApiState>, headers: Header
 async fn head_handler(State(state): State<ServiceApiState>, headers: HeaderMap) -> Response {
     let snapshot = match authenticated_mirror_snapshot(&state).await {
         Ok(snapshot) => snapshot,
-        Err(response) => return response,
+        Err((status, message)) => return json_error(status, message),
     };
     let Some(head) = snapshot.mirror().get("head").cloned() else {
         return json_error(StatusCode::SERVICE_UNAVAILABLE, "mirror is not ready");
@@ -8478,7 +8480,7 @@ async fn lookup_handler(
     }
     let snapshot = match authenticated_mirror_snapshot(&state).await {
         Ok(snapshot) => snapshot,
-        Err(response) => return response,
+        Err((status, message)) => return json_error(status, message),
     };
     let block = snapshot
         .mirror()
@@ -8517,7 +8519,7 @@ async fn digest_handler(
     }
     let snapshot = match authenticated_mirror_snapshot(&state).await {
         Ok(snapshot) => snapshot,
-        Err(response) => return response,
+        Err((status, message)) => return json_error(status, message),
     };
     let blocks = snapshot
         .mirror()
@@ -8549,7 +8551,7 @@ async fn digest_handler(
 async fn checkpoint_handler(State(state): State<ServiceApiState>, headers: HeaderMap) -> Response {
     let snapshot = match authenticated_mirror_snapshot(&state).await {
         Ok(snapshot) => snapshot,
-        Err(response) => return response,
+        Err((status, message)) => return json_error(status, message),
     };
     let checkpoint = snapshot.checkpoint();
     let mut value = JsonMap::new();

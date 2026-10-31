@@ -78,11 +78,11 @@ const SOAK_STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(20);
 const SOAK_TARGET_BLOCKS: u64 = 2_000;
 const SOAK_SUBMIT_BATCH: u64 = 200;
 const SOAK_QUEUE_SOFT_LIMIT: u64 = 2_000;
-const SOAK_QUEUE_PROGRESS_TIMEOUT: Duration = Duration::from_secs(3 * 60);
+const SOAK_QUEUE_PROGRESS_TIMEOUT: Duration = Duration::from_mins(3);
 const SOAK_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const SOAK_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(5);
 const SOAK_STALL_THRESHOLD: Duration = Duration::from_secs(90);
-const SOAK_CLIENT_TTL: Duration = Duration::from_secs(2 * 60 * 60);
+const SOAK_CLIENT_TTL: Duration = Duration::from_hours(2);
 const THROUGHPUT_PIPELINE_TIME: Duration = Duration::from_secs(2);
 const THROUGHPUT_BLOCK_CADENCE_MS: u64 = 1_000;
 const THROUGHPUT_COMMIT_SLO_BASE_MS: u64 = 1_000;
@@ -94,7 +94,7 @@ const THROUGHPUT_SUBMIT_PARALLELISM: u64 = 128;
 const THROUGHPUT_QUEUE_SOFT_LIMIT: u64 = 20_000;
 const THROUGHPUT_STALL_THRESHOLD: Duration = Duration::from_secs(60);
 const THROUGHPUT_COMMIT_TIME_MAX_MULTIPLIER: u64 = 2;
-const THROUGHPUT_CLIENT_TTL: Duration = Duration::from_secs(2 * 60 * 60);
+const THROUGHPUT_CLIENT_TTL: Duration = Duration::from_hours(2);
 const THROUGHPUT_WARMUP_BLOCKS: u64 = 10;
 const THROUGHPUT_STEADY_BLOCKS: u64 = 30;
 const THROUGHPUT_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
@@ -329,10 +329,10 @@ async fn submit_logs(
             .map(|idx| {
                 let submit_clients = std::sync::Arc::clone(&submit_clients);
                 async move {
-                    if let Ok(delay) = std::env::var("IROHA_THROUGHPUT_DELAY_MS") {
-                        if let Ok(ms) = delay.parse::<u64>() {
-                            tokio::time::sleep(Duration::from_millis(ms)).await;
-                        }
+                    if let Ok(delay) = std::env::var("IROHA_THROUGHPUT_DELAY_MS")
+                        && let Ok(ms) = delay.parse::<u64>()
+                    {
+                        tokio::time::sleep(Duration::from_millis(ms)).await;
                     }
                     let payload = throughput_payload(idx, payload_bytes, rng_seed);
                     let client_idx = usize::try_from(idx % client_count).unwrap_or_default();
@@ -1294,10 +1294,10 @@ impl Realistic30TpsRotatingFaultController {
         &self.fault_windows
     }
     fn drain_status_recovery_samples(&mut self) -> Vec<Realistic30TpsStatusRecoverySample> {
-        self.status_recovery_samples.drain(..).collect()
+        std::mem::take(&mut self.status_recovery_samples)
     }
     fn drain_catch_up_samples(&mut self) -> Vec<Realistic30TpsCatchUpSample> {
-        self.catch_up_samples.drain(..).collect()
+        std::mem::take(&mut self.catch_up_samples)
     }
     fn convergence_windows(&self) -> &[Realistic30TpsConvergenceWindow] {
         &self.convergence_windows
@@ -1963,19 +1963,16 @@ async fn wait_for_realistic_all_peer_convergence(
                         end_span: span,
                     });
                 }
-                match last_seen {
-                    Some(previous) => {
-                        if let Some(current) =
-                            realistic_30tps_convergence_progress_since(span, previous)
-                        {
-                            last_seen = Some(current);
-                            last_progress = Instant::now();
-                        }
-                    }
-                    None => {
-                        last_seen = Some(span);
+                if let Some(previous) = last_seen {
+                    if let Some(current) =
+                        realistic_30tps_convergence_progress_since(span, previous)
+                    {
+                        last_seen = Some(current);
                         last_progress = Instant::now();
                     }
+                } else {
+                    last_seen = Some(span);
+                    last_progress = Instant::now();
                 }
                 if last_log.elapsed() >= STATUS_LOG_INTERVAL {
                     eprintln!(
@@ -2492,7 +2489,7 @@ async fn run_realistic_30tps_localnet(
                                 "rotating validator-outage controller failed during load",
                             ));
                         }
-                    };
+                    }
                     sync_realistic_fault_artifacts(controller, &mut artifacts);
                 }
                 match collect_realistic_statuses(
@@ -2658,7 +2655,7 @@ async fn run_realistic_30tps_localnet(
                                 "rotating validator-outage controller failed during drain",
                             ));
                         }
-                    };
+                    }
                     sync_realistic_fault_artifacts(controller, &mut artifacts);
                 }
                 sleep(REALISTIC_30TPS_SAMPLE_INTERVAL).await;
@@ -3407,8 +3404,7 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
             elapsed.as_secs_f64() / target_blocks as f64
         };
         eprintln!(
-            "localnet soak summary: target_blocks={}, elapsed={:?}, secs_per_block={:.3}",
-            target_blocks, elapsed, secs_per_block
+            "localnet soak summary: target_blocks={target_blocks}, elapsed={elapsed:?}, secs_per_block={secs_per_block:.3}"
         );
         ensure!(
             secs_per_block <= soak_max_secs_per_block,
@@ -3598,7 +3594,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             queue_saturation_max: slo_queue_saturation,
         });
         let submit_clients: Vec<_> =
-            network.peers().iter().map(|peer| peer.client()).collect();
+            network.peers().iter().map(iroha_test_network::NetworkPeer::client).collect();
         ensure!(
             !submit_clients.is_empty(),
             "network must have at least one peer"
@@ -4141,7 +4137,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             queue_saturation_max: slo_queue_saturation,
         });
         let submit_clients: Vec<_> =
-            network.peers().iter().map(|peer| peer.client()).collect();
+            network.peers().iter().map(iroha_test_network::NetworkPeer::client).collect();
         ensure!(
             !submit_clients.is_empty(),
             "network must have at least one peer"

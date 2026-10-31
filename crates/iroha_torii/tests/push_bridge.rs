@@ -1,5 +1,6 @@
 //! Push bridge endpoints (FCM/APNS) – feature/config gating and happy-path smoke.
 #![cfg(all(feature = "app_api", feature = "push"))]
+use crate::fixtures;
 use axum::{
     body::to_bytes,
     http::{Request, StatusCode},
@@ -21,8 +22,6 @@ use iroha_model_base::peer::PeerId;
 use iroha_torii::{OnlinePeersProvider, Torii};
 use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
-#[path = "fixtures.rs"]
-mod fixtures;
 fn world_with_account(account_id: &AccountId) -> World {
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id).build(account_id);
@@ -107,10 +106,7 @@ fn register_device_request(
     key_pair: &iroha_crypto::KeyPair,
     token: &str,
 ) -> Request<axum::body::Body> {
-    let body = format!(
-        r#"{{"account_id":"{}","platform":"FCM","token":"{}"}}"#,
-        account_id, token
-    );
+    let body = format!(r#"{{"account_id":"{account_id}","platform":"FCM","token":"{token}"}}"#);
     let request = Request::builder()
         .method("POST")
         .uri("/v1/notify/devices")
@@ -181,5 +177,4 @@ async fn push_registration_succeeds_with_credentials() {
     runtime.shutdown().await;
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

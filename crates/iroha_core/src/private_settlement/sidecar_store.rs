@@ -3398,12 +3398,14 @@ fn reconcile_sidecar_staging_v1(
     {
         return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
     }
+    let max_record_bytes = usize::try_from(PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1)
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::ConfigurationInvalid)?;
     staging
         .reconcile_atomic_staging(
             &[SIDECAR_WRITER_LOCK_FILE_V1],
             1,
             SIDECAR_MAX_STAGED_FILES_V1,
-            PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1 as usize,
+            max_record_bytes,
         )
         .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
     root.revalidate()

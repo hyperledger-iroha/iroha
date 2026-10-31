@@ -14,12 +14,12 @@ use std::{num::NonZeroU64, path::PathBuf};
 const CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const CHAIN_DISCRIMINANT: u16 = 369;
 
-pub(crate) fn key(seed: u8, algorithm: Algorithm) -> KeyPair {
+pub fn key(seed: u8, algorithm: Algorithm) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], algorithm).expect("valid deterministic fixture seed")
 }
 
 #[derive(Clone)]
-pub(crate) struct Fixture {
+pub struct Fixture {
     pub(crate) block: SignedBlock,
     pub(crate) manifest: iroha_genesis::RawGenesisTransaction,
     pub(crate) genesis: KeyPair,
@@ -27,8 +27,7 @@ pub(crate) struct Fixture {
     pub(crate) nexus_context: Vec<u8>,
 }
 
-pub(crate) fn fixture_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy
-{
+pub fn fixture_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
     let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
     iroha_genesis::default_staking_policy(
         fees.fee_asset_id,
@@ -252,7 +251,7 @@ fn seated_citizen_instructions() -> Vec<iroha_data_model::isi::InstructionBox> {
 // populate results and determine the two signed consensus context commitments.
 type FixtureGenesisResult = std::result::Result<(SignedBlock, Hash, Hash, Vec<u8>), (Hash, Hash)>;
 
-pub(crate) fn execute_fixture_genesis(
+pub fn execute_fixture_genesis(
     manifest: &iroha_genesis::RawGenesisTransaction,
     key: &KeyPair,
     citizenship_escrow: Option<&AccountId>,
@@ -425,13 +424,13 @@ pub(crate) fn execute_fixture_genesis(
     Ok((valid.into(), nexus_hash, execution_hash, nexus_context))
 }
 
-pub(crate) fn deployment_genesis_fixture() -> (SignedBlock, KeyPair) {
+pub fn deployment_genesis_fixture() -> (SignedBlock, KeyPair) {
     let fixture = Fixture::new();
     (fixture.block, fixture.genesis)
 }
 
 /// Reuse the exact executed genesis and independently checked native manifest binding.
-pub(crate) fn deployment_validated_genesis_fixture() -> iroha_genesis::ValidatedGenesisBundle {
+pub fn deployment_validated_genesis_fixture() -> iroha_genesis::ValidatedGenesisBundle {
     let fixture = Fixture::new();
     iroha_genesis::validate_prepared_genesis_bundle(
         &fixture.block.encode_wire().unwrap(),
@@ -443,7 +442,7 @@ pub(crate) fn deployment_validated_genesis_fixture() -> iroha_genesis::Validated
 }
 
 /// Execute and sign explicit active lane bindings with authority keys distinct from peer keys.
-pub(crate) fn deployment_lane_genesis_fixture() -> (SignedBlock, KeyPair) {
+pub fn deployment_lane_genesis_fixture() -> (SignedBlock, KeyPair) {
     static FIXTURE: std::sync::OnceLock<Fixture> = std::sync::OnceLock::new();
     let fixture = FIXTURE.get_or_init(|| {
         use iroha_data_model::{

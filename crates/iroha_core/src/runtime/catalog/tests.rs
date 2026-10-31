@@ -1,6 +1,6 @@
 //! The release catalog is closed, complete and pinned.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fmt::Write as _};
 
 use iroha_data_model::runtime::definition::{
     DefinitionDescriptorV1, EntrypointV1, ImplementationCodeV1,
@@ -48,16 +48,20 @@ fn inventory(catalog: &ReleaseCatalog) -> String {
     out.push_str(
         "  \"note\": \"Baseline definitions of the live-upgrade foundation (specs/live_runtime_upgrades.md §3.1). Frozen once a running network installs them; regenerate only before that with `cargo test -p iroha_core --lib regenerate_runtime_baseline_catalog -- --ignored`.\",\n",
     );
-    out.push_str(&format!(
+    write!(
+        out,
         "  \"selection\": \"{}\",\n  \"definitions\": [\n",
         catalog.baseline_id
-    ));
+    )
+    .expect("writing to a String cannot fail");
     for (index, (_, kind, name, id)) in rows.iter().enumerate() {
         let comma = if index + 1 == rows.len() { "" } else { "," };
-        out.push_str(&format!(
+        write!(
+            out,
             "    {{\"kind\": \"{kind}\", \"name\": {}, \"id\": \"{id}\"}}{comma}\n",
             norito::json::to_json(name).expect("a name is JSON")
-        ));
+        )
+        .expect("writing to a String cannot fail");
     }
     out.push_str("  ]\n}\n");
     out

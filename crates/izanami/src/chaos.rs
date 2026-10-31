@@ -4088,9 +4088,7 @@ fn effective_prebuild_tx_workers(config: &ChaosConfig) -> usize {
     if config.prebuild_tx_workers > 0 {
         return config.prebuild_tx_workers;
     }
-    let host_parallelism = std::thread::available_parallelism()
-        .map(usize::from)
-        .unwrap_or(1);
+    let host_parallelism = std::thread::available_parallelism().map_or(1, usize::from);
     host_parallelism.min(config.submitters.max(1)).max(1)
 }
 fn effective_prebuilt_submit_batch_size(submission_tps: f64) -> usize {
@@ -7238,7 +7236,7 @@ impl Metrics {
     }
 }
 fn update_peak(peak: &AtomicU64, candidate: u64) {
-    let _ = peak.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    let _ = peak.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         (candidate > current).then_some(candidate)
     });
 }
@@ -7382,8 +7380,7 @@ mod tests {
     fn allow_net_for_tests() -> bool {
         std::env::var("IZANAMI_ALLOW_NET")
             .or_else(|_| std::env::var("IROHA_ALLOW_NET"))
-            .ok()
-            .is_some_and(|val| {
+            .is_ok_and(|val| {
                 matches!(
                     val.to_ascii_lowercase().as_str(),
                     "1" | "true" | "yes" | "on" | "y"

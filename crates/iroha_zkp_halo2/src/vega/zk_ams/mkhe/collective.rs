@@ -328,8 +328,8 @@ fn commit_cpk_membership_opening_v1(
     blindings: &[Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
     bound: ZkAmsT256MembershipBoundV1,
 ) -> Result<[Point; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1], ZkAmsMkheErrorV1> {
-    let chunks = coefficients.chunks_exact(ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1);
-    if !chunks.remainder().is_empty() || chunks.len() != blindings.len() {
+    let (chunks, remainder) = coefficients.as_chunks::<ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1>();
+    if !remainder.is_empty() || chunks.len() != blindings.len() {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     let mut commitments = Vec::new();
@@ -340,7 +340,7 @@ fn commit_cpk_membership_opening_v1(
         return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
     }
     let allocation = commitments.as_ptr();
-    for (chunk, blinding) in chunks.zip(blindings.iter()) {
+    for (chunk, blinding) in chunks.iter().zip(blindings.iter()) {
         commitments.push(
             commit_zk_ams_t256_membership_chunk_v1(bound, chunk, blinding)
                 .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,

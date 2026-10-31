@@ -1331,12 +1331,12 @@ impl ToriiMesh {
             .nodes
             .get_mut(origin)
             .ok_or_else(|| format!("node {origin} not registered"))?;
-        match node.ingest(advert, now) {
-            Ok(result) => match result.outcome {
+        {
+            let result = node.ingest(advert, now)?;
+            match result.outcome {
                 AdvertIngest::Stored { .. } | AdvertIngest::Replaced { .. } => {}
                 AdvertIngest::Duplicate { .. } => return Ok(()),
-            },
-            Err(err) => return Err(err),
+            }
         }
         let mut queue = VecDeque::new();
         queue.push_back((origin, advert.clone()));
@@ -1624,7 +1624,7 @@ struct ToriiHarness {
 // Query fixtures retain their actual original genesis or live certified chain.
 enum PinReadbackHistory {
     Prepared(PreparedTestChainConfig),
-    Running(CertifiedTestChain),
+    Running(Box<CertifiedTestChain>),
 }
 impl ToriiHarness {
     async fn shutdown(self) {
@@ -1758,7 +1758,7 @@ fn enable_storage_with_discovery_native_signers(cfg: &mut actual_cfg::Root) {
 // Deterministic fixture keys authorize one empty catalog; this is not deployment
 // qualification or a provider that claims production identity on a mock transport.
 fn discovery_gateway_compliance_fixture(
-    directory: PathBuf,
+    directory: &std::path::Path,
 ) -> (
     actual_cfg::SorafsGatewayCompliance,
     Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>,
@@ -1772,11 +1772,11 @@ fn discovery_gateway_compliance_fixture(
         GatewayComplianceSubjectKindV1, GatewayComplianceTrustPolicyV1,
         GatewayComplianceTrustedSignerV1,
     };
-    fs::create_dir_all(&directory).expect("create isolated compliance directory");
+    fs::create_dir_all(directory).expect("create isolated compliance directory");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
             .expect("owner-only compliance directory");
     }
     let directory = directory
@@ -1845,7 +1845,7 @@ fn discovery_gateway_compliance_fixture(
         total_timeout: Duration::from_secs(10),
         max_clock_skew: Duration::from_secs(300),
         max_feed_age: Duration::from_secs(3_600),
-        max_catalog_validity: Duration::from_secs(86_400),
+        max_catalog_validity: Duration::from_hours(24),
         max_history_entries: 16,
     };
     let signer =
@@ -2024,7 +2024,7 @@ fn discovery_compliance_fixture_persists_signed_promoted_catalog() {
     use iroha_torii::sorafs::gateway::GatewayComplianceCheckpointV1;
     let directory = tempdir().expect("compliance fixture temp dir");
     let (config, _transport) = discovery_gateway_compliance_fixture(
-        directory.path().canonicalize().unwrap().join("compliance"),
+        &directory.path().canonicalize().unwrap().join("compliance"),
     );
     assert!(
         config
@@ -2124,7 +2124,7 @@ fn build_torii_harness_with_history(
             "discovery fixture owns its governed compliance policy"
         );
         let (compliance, transport) = discovery_gateway_compliance_fixture(
-            cfg.torii.sorafs_storage.data_dir.join("gateway-compliance"),
+            &cfg.torii.sorafs_storage.data_dir.join("gateway-compliance"),
         );
         cfg.torii.sorafs_gateway.compliance = Some(compliance);
         transport
@@ -2827,7 +2827,7 @@ async fn sorafs_pin_register_queues_caller_signed_transaction_when_storage_off()
         Some("submitted")
     );
     assert_eq!(
-        value.as_object().map(|object| object.len()),
+        value.as_object().map(std::collections::BTreeMap::len),
         Some(3),
         "admission response must not claim a fee, custody result, or finalized pin status"
     );
@@ -3147,7 +3147,7 @@ async fn sorafs_pin_register_route_accepts_caller_signed_transaction() {
         Some("submitted")
     );
     assert_eq!(
-        value.as_object().map(|object| object.len()),
+        value.as_object().map(std::collections::BTreeMap::len),
         Some(3),
         "admission response must not claim a fee, custody result, or finalized pin status"
     );
@@ -3388,8 +3388,10 @@ fn commit_pin_readback_fixture(harness: &ToriiHarness) {
         .lock()
         .expect("native query history lock");
     let chain = match owner.take().expect("original native history") {
-        PinReadbackHistory::Prepared(original) => CertifiedTestChain::from_prepared(original)
-            .expect("actual genesis executes and publishes"),
+        PinReadbackHistory::Prepared(original) => Box::new(
+            CertifiedTestChain::from_prepared(original)
+                .expect("actual genesis executes and publishes"),
+        ),
         PinReadbackHistory::Running(mut chain) => {
             let next_time = u64::try_from(
                 chain
@@ -4356,5 +4358,4 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
 include!("sorafs_discovery/storage_path_fixture.rs");
 include!("sorafs_discovery/fixture_key_mismatch_test.rs");
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

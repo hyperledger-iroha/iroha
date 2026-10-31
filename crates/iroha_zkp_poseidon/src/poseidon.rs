@@ -291,16 +291,11 @@ pub fn bn254_poseidon_params_width6() -> Bn254PoseidonParams<6, 68> {
 }
 #[cfg(test)]
 fn pack_bytes_to_fr_with_delimiter(bytes: &[u8]) -> Vec<Fr> {
-    let mut chunks = bytes.chunks_exact(8);
+    let (chunks, remainder) = bytes.as_chunks::<8>();
     let mut words = chunks
-        .by_ref()
-        .map(|chunk| {
-            fr_from_u64(u64::from_le_bytes(
-                chunk.try_into().expect("eight-byte chunk"),
-            ))
-        })
+        .iter()
+        .map(|chunk| fr_from_u64(u64::from_le_bytes(*chunk)))
         .collect::<Vec<_>>();
-    let remainder = chunks.remainder();
     let delimiter_word = partial_u64_from_le_slice(remainder) | (1u64 << (remainder.len() * 8));
     words.push(fr_from_u64(delimiter_word));
     words

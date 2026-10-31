@@ -13,7 +13,7 @@ fn bind(
     owner: &Arc<FileNativePaymentFinality>,
     native: &NativeFinalityFixture,
 ) -> BoundNativePaymentFinality {
-    owner
+    Arc::clone(owner)
         .bind(
             WorkflowId::from_bytes([22; 32]),
             [23; 32],

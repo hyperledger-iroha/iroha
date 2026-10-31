@@ -1,8 +1,7 @@
 //! Integration (ignored) test: start a WS endpoint, subscribe, and assert Proof JSON frames.
 #![cfg(feature = "app_api")]
 #[cfg(feature = "ws_integration_tests")]
-#[path = "common/proof_events.rs"]
-mod proof_events;
+use crate::proof_events;
 #[cfg(feature = "ws_integration_tests")]
 use axum::{Router, routing::get};
 #[cfg(feature = "ws_integration_tests")]

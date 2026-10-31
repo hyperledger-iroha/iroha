@@ -6,7 +6,7 @@ use super::F;
 
 /// Initialized-cell counts at one actual final-column destruction boundary.
 #[derive(Debug)]
-pub(crate) struct Erasure {
+pub struct Erasure {
     /// Number of initialized cells owned by the original column.
     pub(crate) cells: usize,
     /// Nonzero initialized cells immediately before its canonical eraser.
@@ -45,7 +45,7 @@ pub(super) fn after_v1(before: Option<usize>, values: &[F]) {
 }
 
 /// Observe final-column drops; preserve no field values or released pointers.
-pub(crate) fn observe_v1<T>(operation: impl FnOnce() -> T) -> (T, Vec<Erasure>) {
+pub fn observe_v1<T>(operation: impl FnOnce() -> T) -> (T, Vec<Erasure>) {
     struct Scope;
     impl Drop for Scope {
         fn drop(&mut self) {

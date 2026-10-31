@@ -3603,7 +3603,7 @@ impl Kura {
                     kind,
                     "failed to create progress append-intent build"
                 );
-                storage.retain_failure(Error::IO(error, (&build_path).to_path_buf()));
+                storage.retain_failure(Error::IO(error, build_path.clone()));
                 return None;
             }
         };
@@ -3618,7 +3618,7 @@ impl Kura {
                 kind,
                 "failed to persist progress append-intent build"
             );
-            storage.retain_failure(Error::IO(error, (&build_path).to_path_buf()));
+            storage.retain_failure(Error::IO(error, build_path.clone()));
             drop(build);
             let _ = storage.retire(namespace, &build_path);
             let _ = Self::sync_bound_progress_intent_directories(namespace);
@@ -3653,7 +3653,7 @@ impl Kura {
                 kind,
                 "failed to sync progress append-intent publication"
             );
-            storage.retain_failure(Error::IO(error, (&intent_path).to_path_buf()));
+            storage.retain_failure(Error::IO(error, intent_path.clone()));
             return None;
         }
         Some(build)
@@ -6800,10 +6800,10 @@ impl Kura {
     /// A different checkpoint was already recorded.
     pub fn set_upgrade_checkpoint(
         &self,
-        checkpoint: crate::state::upgrade_checkpoint::UpgradeCheckpointV1,
+        checkpoint: &crate::state::upgrade_checkpoint::UpgradeCheckpointV1,
     ) -> Result<(), &'static str> {
         let recorded = self.upgrade_checkpoint.get_or_init(|| checkpoint.clone());
-        if *recorded == checkpoint {
+        if recorded == checkpoint {
             Ok(())
         } else {
             Err("Kura already records a different upgrade checkpoint")

@@ -508,13 +508,13 @@ fn authenticated_cas_metadata_cannot_restore_or_replace_a_malformed_checkpoint()
         identity: identity(),
         target_height: 70,
     };
-    publish(&owner, &slot, None, progress.clone(), &native).unwrap();
+    publish(&owner, &slot, None, progress, &native).unwrap();
     // Even a locally signed outer binding is not a native proof. This negative
     // fixture bypasses the internal authenticated-verifier publisher deliberately.
     let body = norito::encode_canonical(&Body {
         route: owner.route.clone(),
         slot: slot.clone(),
-        progress: progress.clone(),
+        progress,
         checkpoint: Some(vec![0, 1, 2, 3]),
     })
     .unwrap();

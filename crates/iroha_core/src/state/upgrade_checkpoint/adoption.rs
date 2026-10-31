@@ -130,11 +130,12 @@ impl PredecessorRecord {
 /// Why a predecessor World cannot be adopted.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AdoptionError {
-    /// The retired table holds a record of another runtime upgrade, which an import would drop.
+    /// The retired table holds a proposal the predecessor would activate after the checkpoint:
+    /// governance still pending, which an import would silently discard.
     #[error(
-        "the predecessor's runtime_upgrades holds record {0}, which is no adoption authorization"
+        "the predecessor's runtime_upgrades holds proposal {0}, which starts after the checkpoint; cancel it before adopting"
     )]
-    NotAnAuthorization(String),
+    Pending(String),
     /// No record authorizes this release to adopt at the checkpoint.
     #[error(
         "no governed adoption authorization names selection {selection} for checkpoint {height}"
@@ -180,24 +181,30 @@ fn authorizes(record: &PredecessorUpgradeRecord, height: u64, selection: Selecti
         && height < manifest.end_height
 }
 
+/// Whether `record` is a proposal the predecessor would still activate after checkpoint `height`:
+/// it activates a proposal only at block start of its start height.
+fn pending(record: &PredecessorUpgradeRecord, height: u64) -> bool {
+    record.status == PredecessorUpgradeStatus::Proposed && record.manifest.start_height > height
+}
+
 /// The record that authorizes this release, whose baseline is `selection`, to adopt the
 /// predecessor's World at checkpoint `height`.
 ///
-/// Every record of the retired table must be an adoption manifest, so the import drops no other
-/// governance state; earlier, cancelled or expired authorizations are dropped with the table.
+/// The predecessor never removes a record. Every record but a pending proposal is settled at
+/// `height` (cancelled, activated, or a proposal whose start height has passed), records
+/// governance that has finished and leaves with the retired table; the predecessor root the
+/// adoption anchors still commits to it. A pending proposal is governance the import would
+/// silently discard, so the predecessor's governance cancels it before the checkpoint.
 ///
 /// # Errors
-/// A record is not an adoption manifest, or not exactly one record authorizes this adoption.
+/// A proposal is pending at the checkpoint, or not exactly one record authorizes this adoption.
 pub fn authorization(
     records: &[PredecessorRecord],
     height: u64,
     selection: SelectionId,
 ) -> Result<&PredecessorRecord, AdoptionError> {
-    if let Some(other) = records
-        .iter()
-        .find(|entry| entry.record.manifest.name != ADOPTION_MANIFEST_NAME)
-    {
-        return Err(AdoptionError::NotAnAuthorization(hex::encode(other.id.0)));
+    if let Some(proposal) = records.iter().find(|entry| pending(&entry.record, height)) {
+        return Err(AdoptionError::Pending(hex::encode(proposal.id.0)));
     }
     let mut authorizing = records
         .iter()

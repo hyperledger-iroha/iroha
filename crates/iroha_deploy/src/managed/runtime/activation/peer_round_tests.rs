@@ -219,7 +219,7 @@ fn joined_carrier_reads_preserve_all_116_local_receipts_and_exact_failure_bindin
         let requests = transport.requests.lock().unwrap();
         let count = fault.map_or(29, |(carrier, _, _)| carrier + 1);
         assert_eq!(requests.len(), count * 4);
-        for (carrier, cohort) in requests.chunks_exact(4).enumerate() {
+        for (carrier, cohort) in requests.as_chunks::<4>().0.iter().enumerate() {
             let mut members = cohort
                 .iter()
                 .map(|(observed, peer, _)| {

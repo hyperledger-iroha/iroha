@@ -328,7 +328,7 @@ fn single_noop_insert_and_empty_absent_images_have_exact_physical_work() {
                     BTreeMap::from([(id("absent"), None)]),
                 );
                 world.domains_by_owner = Storage::from_snapshot_parts(
-                    Default::default(),
+                    BTreeMap::default(),
                     OwnerUndo::from([((ALICE_ID.clone(), id("live")), None)]),
                 );
                 2

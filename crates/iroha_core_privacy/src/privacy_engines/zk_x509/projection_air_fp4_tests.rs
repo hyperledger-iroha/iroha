@@ -46,7 +46,7 @@ fn evaluate<A: PolynomialAirFieldV1>(rows: &[Vec<A>; 5]) -> Vec<A> {
         rows[2].as_slice().try_into().unwrap(),
         rows[3].as_slice().try_into().unwrap(),
         rows[4].as_slice().try_into().unwrap(),
-        challenges(),
+        &challenges(),
     )
     .unwrap()
 }
@@ -160,7 +160,7 @@ fn projection_rejects_noncanonical_fields_and_changed_public_digest() {
         &aux,
         &aux,
         &fixed,
-        challenges(),
+        &challenges(),
     )
     .unwrap();
     assert!(honest.iter().all(|residue| *residue == F::ZERO));
@@ -171,7 +171,7 @@ fn projection_rejects_noncanonical_fields_and_changed_public_digest() {
         &aux,
         &aux,
         &fixed,
-        challenges(),
+        &challenges(),
     )
     .unwrap();
     assert!(changed.iter().any(|residue| *residue != F::ZERO));
@@ -183,7 +183,7 @@ fn projection_rejects_noncanonical_fields_and_changed_public_digest() {
             &aux,
             &aux,
             &fixed,
-            challenges(),
+            &challenges(),
         ),
         Err(ZkX509ProjectionAirErrorV1::NonCanonicalField)
     );

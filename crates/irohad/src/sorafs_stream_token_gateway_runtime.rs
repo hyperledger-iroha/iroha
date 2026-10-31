@@ -356,7 +356,7 @@ mod tests {
         .expect("qualified capture")
         .expect("enabled capture");
         capture
-            .validate_expected_binding(HANDLE, qualification(7), 16, Duration::from_millis(30_000))
+            .validate_expected_binding(HANDLE, qualification(7), 16, Duration::from_secs(30))
             .expect("exact binding");
     }
     #[test]

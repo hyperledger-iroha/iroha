@@ -627,7 +627,7 @@ mod tests {
     #[ignore = "requires an x86-64 AVX2 runner; run explicitly for hardware qualification"]
     fn required_avx2_execution() {
         assert!(
-            cfg!(target_arch = "x86_64"),
+            std::hint::black_box(cfg!(target_arch = "x86_64")),
             "AVX2 qualification requires native x86-64 instructions, not the lane model"
         );
         assert_eq!(

@@ -1006,7 +1006,7 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
 #[test]
 fn four_peer_publication_replication_retrieval_restart_and_native_repair() -> Result<()> {
     super::sorafs_network::run("sorafs-publication", || async {
-        let published = create_and_publish(|builder| builder).await?;
+        let published = Box::pin(create_and_publish(|builder| builder)).await?;
         qualify_storage_lifecycle(&published)
             .await
             .wrap_err("actual native publication lifecycle")?;

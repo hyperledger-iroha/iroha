@@ -777,7 +777,8 @@ mod tests {
                 )
             })
             .unwrap();
-        let first = measured.allocation_context().consumed_allocated_bytes() as usize;
+        let first =
+            usize::try_from(measured.allocation_context().consumed_allocated_bytes()).unwrap();
         measured
             .scope(|| {
                 state.read_canonical_history_block(
@@ -786,7 +787,9 @@ mod tests {
                 )
             })
             .unwrap();
-        let second = measured.allocation_context().consumed_allocated_bytes() as usize - first;
+        let second =
+            usize::try_from(measured.allocation_context().consumed_allocated_bytes()).unwrap()
+                - first;
         assert!(first > 0 && second > 0);
 
         let visibility = routing::DataspaceReadVisibility::all_for_tests();
@@ -831,10 +834,10 @@ mod tests {
             let response = request
                 .physical_scope(|| {
                     routing::handle_v1_explorer_blocks_sync(
-                        Arc::clone(&state),
-                        routing::MaybeTelemetry::disabled(),
-                        visibility.clone(),
-                        query.native.clone(),
+                        &state,
+                        &routing::MaybeTelemetry::disabled(),
+                        &visibility,
+                        &query.native,
                         (block_feed_heights(&query), &summaries),
                     )
                 })

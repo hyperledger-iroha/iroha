@@ -15,8 +15,8 @@
 //! iroha f31b64d8c5, the Taira release of 2026-10-29 (itself the successor of f24908b4b3 at
 //! checkpoint 5519). Its canonical World held the table `runtime_upgrades`, which this release
 //! retired, and lacked the tables `runtime_change_sets` and `runtime_containments`
-//! ([`ADDED_WORLD_FIELDS`]). An import admits the retired table holding only adoption
-//! authorizations, which it drops after proving them, and starts the added tables empty, so no
+//! ([`ADDED_WORLD_FIELDS`]). An import proves the retired table's records, drops them once one
+//! authorizes the adoption and none is still pending, and starts the added tables empty, so no
 //! other State is dropped.
 //!
 //! The predecessor also predates the live-upgrade foundation: it has no runtime definitions or

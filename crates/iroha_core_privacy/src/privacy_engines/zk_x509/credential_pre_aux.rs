@@ -1031,22 +1031,12 @@ mod tests {
             ZK_X509_CREDENTIAL_MAIN_POST_BASE_CHALLENGE_FIELDS_V1
         );
         let encoded = encode_pre_aux_challenges_v1(&binding).expect("canonical challenge encoding");
-        let decoded = encoded
-            .as_chunks::<{ core::mem::size_of::<u64>() }>()
-            .0
+        let (words, remainder) = encoded.as_chunks::<{ core::mem::size_of::<u64>() }>();
+        let decoded = words
             .iter()
-            .map(|bytes| {
-                F(u64::from_be_bytes(
-                    bytes.try_into().expect("one encoded Goldilocks field"),
-                ))
-            })
+            .map(|bytes| F(u64::from_be_bytes(*bytes)))
             .collect::<Vec<_>>();
-        assert!(
-            encoded
-                .chunks_exact(core::mem::size_of::<u64>())
-                .remainder()
-                .is_empty()
-        );
+        assert!(remainder.is_empty());
         assert_eq!(decoded, fields);
         let family_counts = [
             SHA_CALL_CHALLENGE_FIELDS_V1,

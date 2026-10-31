@@ -187,7 +187,7 @@ mod tests {
         }
         assert_eq!(input.len() % 4, 0);
         let mut decoded = Vec::with_capacity(input.len() / 4 * 3);
-        for chunk in input.as_bytes().chunks_exact(4) {
+        for chunk in input.as_bytes().as_chunks::<4>().0 {
             let a = value(chunk[0]);
             let b = value(chunk[1]);
             decoded.push((a << 2) | (b >> 4));

@@ -40,27 +40,27 @@ use std::{
 };
 
 #[path = "../native_amx_network/fees.rs"]
-pub(crate) mod fees;
+pub mod fees;
 #[path = "../native_amx_network/fixture.rs"]
-pub(crate) mod fixture;
+pub mod fixture;
 #[path = "../native_amx_network/proofs.rs"]
-pub(crate) mod proofs;
+pub mod proofs;
 #[path = "status_poll.rs"]
-pub(crate) mod status_poll;
-pub(crate) use fixture::*;
-pub(crate) use proofs::Observer;
+pub mod status_poll;
+pub use fixture::*;
+pub use proofs::Observer;
 
 #[path = "native_amx_harness/owned_task.rs"]
-pub(crate) mod owned_task;
+pub mod owned_task;
 
-pub(crate) fn now_ms() -> Result<u64> {
+pub fn now_ms() -> Result<u64> {
     Ok(SystemTime::now()
         .duration_since(UNIX_EPOCH)?
         .as_millis()
         .try_into()?)
 }
 
-pub(crate) fn submit(
+pub fn submit(
     root: &Root,
     signer: &KeyPair,
     instructions: Vec<InstructionBox>,
@@ -150,7 +150,7 @@ fn parent_registration_sources(
 }
 
 // Reuse the same original-source join when an existing customer H2 bootstraps rotation.
-pub(crate) fn authenticated_parent_sources(
+pub fn authenticated_parent_sources(
     global: &Root,
     runtime: &tokio::runtime::Runtime,
     successor: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
@@ -186,7 +186,7 @@ pub(crate) fn authenticated_parent_sources(
     Ok((genesis, successor))
 }
 
-pub(crate) struct ExchangeReceipt {
+pub struct ExchangeReceipt {
     pub(crate) deliveries: [Option<(
         u64,
         iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
@@ -198,7 +198,7 @@ pub(crate) struct ExchangeReceipt {
     pub(crate) fees: [Option<iroha_data_model::block::consensus::NexusFeeReceipt>; 2],
 }
 
-pub(crate) struct Exchange {
+pub struct Exchange {
     pub(crate) roots: [Root; 3],
     pub(crate) runtime: tokio::runtime::Runtime,
     pub(crate) custody: std::path::PathBuf,
@@ -370,7 +370,7 @@ impl Exchange {
                     ))
                 })
             });
-            let [first, second] = workers.map(|worker| worker.join());
+            let [first, second] = workers.map(std::thread::ScopedJoinHandle::join);
             first.map_err(|_| eyre!("first bank approval worker panicked"))??;
             second.map_err(|_| eyre!("second bank approval worker panicked"))??;
             Ok(())
@@ -456,14 +456,12 @@ impl Exchange {
                             0
                         };
                         let escrowed = [125, 250][bank];
-                        if !observers[bank].balance_observation(
+                        if observers[bank].balance_observation(
                             &proof,
                             bank,
                             [PRINCIPAL - moved, moved, 0],
                             &[[PRINCIPAL - escrowed, 0, escrowed]],
                         )? {
-                            unavailable[bank] = "authenticated pre-settlement escrow cut".into();
-                        } else {
                             heights[bank] = observers[bank].tip.as_ref().unwrap().height();
                             std::fs::write(
                                 self.custody
@@ -477,6 +475,8 @@ impl Exchange {
                                     .join(format!("bank-{bank}-finality.nrt")),
                                 norito::encode_canonical(observers[bank].proof.as_ref().unwrap())?,
                             )?;
+                        } else {
+                            unavailable[bank] = "authenticated pre-settlement escrow cut".into();
                         }
                     }
                     if heights

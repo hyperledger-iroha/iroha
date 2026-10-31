@@ -13,8 +13,8 @@ use iroha_genesis::GenesisBuilder;
 use std::{borrow::Cow, io::Write as _, path::Path, sync::LazyLock};
 use toml::{Table, Value};
 
-pub(crate) const CADENCE_MS: u64 = 1_000;
-pub(crate) const PRINCIPAL: u32 = 1_000;
+pub const CADENCE_MS: u64 = 1_000;
+pub const PRINCIPAL: u32 = 1_000;
 // Match the private-root authoring owner: the canonical SNS dataspace selector
 // supplies the stable catalog manifest_hash, independently of signed child genesis.
 // This is not an inline lane-governance or public Space Directory manifest digest.
@@ -27,7 +27,7 @@ static DATASPACE_MANIFEST_HASHES: LazyLock<[[u8; 32]; 2]> = LazyLock::new(|| {
         selector.name_hash()
     })
 });
-pub(crate) static DATASPACES: LazyLock<[DataSpaceId; 2]> =
+pub static DATASPACES: LazyLock<[DataSpaceId; 2]> =
     LazyLock::new(|| DATASPACE_MANIFEST_HASHES.map(|hash| DataSpaceId::from_hash(&hash)));
 
 fn private_root_catalog(bank: usize) -> Table {
@@ -172,34 +172,34 @@ fn private_root_catalog_is_restricted_full_replica_in_exact_signed_dataspace() {
     }
 }
 
-pub(crate) fn key(seed: u8) -> KeyPair {
+pub fn key(seed: u8) -> KeyPair {
     KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
 }
-pub(crate) fn account(key: &KeyPair) -> AccountId {
+pub fn account(key: &KeyPair) -> AccountId {
     AccountId::new(key.public_key().clone())
 }
-pub(crate) fn genesis_key(index: usize) -> KeyPair {
+pub fn genesis_key(index: usize) -> KeyPair {
     key(0x70 + index as u8)
 }
-pub(crate) fn payer(index: usize) -> KeyPair {
+pub fn payer(index: usize) -> KeyPair {
     key(0x81 + index as u8)
 }
-pub(crate) fn relay(index: usize) -> KeyPair {
+pub fn relay(index: usize) -> KeyPair {
     key(0x91 + index as u8)
 }
-pub(crate) fn fee_asset() -> AssetDefinitionId {
+pub fn fee_asset() -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(
         &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
     )
     .unwrap()
 }
-pub(crate) fn currency(index: usize) -> AssetDefinitionId {
+pub fn currency(index: usize) -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("money", BANK_ALIASES[index]).unwrap(),
         ["usd", "eur"][index].parse().unwrap(),
     )
 }
-pub(crate) fn fee_intent() -> FeePaymentIntent {
+pub fn fee_intent() -> FeePaymentIntent {
     // All three signed genesis policies select Nexus-only charging. Global
     // commits no accepted PipelineGas asset; banks include gas in Nexus.
     FeePaymentIntent::authority(
@@ -212,21 +212,21 @@ pub(crate) fn fee_intent() -> FeePaymentIntent {
     )
 }
 
-pub(crate) fn service_read_role() -> iroha_data_model::role::RoleId {
+pub fn service_read_role() -> iroha_data_model::role::RoleId {
     "native_amx_service_read".parse().expect("authored role ID")
 }
-pub(crate) fn service_admin_role() -> iroha_data_model::role::RoleId {
+pub fn service_admin_role() -> iroha_data_model::role::RoleId {
     "native_amx_service_admin"
         .parse()
         .expect("authored role ID")
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum BankFeeProfile {
+pub enum BankFeeProfile {
     Metered,
     UnfundedRelay,
 }
-pub(crate) struct Root {
+pub struct Root {
     pub network: Network,
     pub scope: SumeragiRootScope,
     pub pins: SignedGenesisPinsV1,
@@ -294,7 +294,7 @@ impl Root {
             instructions.push(
                 Mint::asset_quantity(
                     1_000_000_u32,
-                    AssetId::with_scope(fee_asset(), owner, balance_scope.clone()),
+                    AssetId::with_scope(fee_asset(), owner, balance_scope),
                 )
                 .into(),
             );
@@ -335,11 +335,7 @@ impl Root {
                 instructions.push(
                     Mint::asset_quantity(
                         1_000_000_u32,
-                        AssetId::with_scope(
-                            fee_asset(),
-                            account(&bank_payer),
-                            balance_scope.clone(),
-                        ),
+                        AssetId::with_scope(fee_asset(), account(&bank_payer), balance_scope),
                     )
                     .into(),
                 );
@@ -379,7 +375,8 @@ impl Root {
                 fee_asset_id: fee_asset(),
                 fee_sink_account_id: account(&genesis_key(index)),
                 sponsor_vault_custody_account_id: account(&genesis_key(index)),
-                successful_claim_fee_exempt_authorities: Default::default(),
+                successful_claim_fee_exempt_authorities:
+                    iroha_data_model::block::consensus::RootFeeExemptions::default(),
                 base_fee: Quantity::one(),
                 per_byte_fee: Quantity::zero(),
                 per_instruction_fee: if bank.is_some() {

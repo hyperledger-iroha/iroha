@@ -25,11 +25,19 @@ fn leader_peer<'a>(peers: impl IntoIterator<Item = &'a NetworkPeer>) -> &'a Netw
 }
 #[tokio::test]
 async fn connected_peers_with_f_2_1_2() -> Result<()> {
-    connected_peers_with_f(stringify!(connected_peers_with_f_2_1_2), 2).await
+    Box::pin(connected_peers_with_f(
+        stringify!(connected_peers_with_f_2_1_2),
+        2,
+    ))
+    .await
 }
 #[tokio::test]
 async fn connected_peers_with_f_1_0_1() -> Result<()> {
-    connected_peers_with_f(stringify!(connected_peers_with_f_1_0_1), 1).await
+    Box::pin(connected_peers_with_f(
+        stringify!(connected_peers_with_f_1_0_1),
+        1,
+    ))
+    .await
 }
 #[tokio::test]
 async fn register_new_peer() -> Result<()> {

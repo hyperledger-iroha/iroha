@@ -56,10 +56,10 @@ fn provider_error(result: Result<impl std::fmt::Debug, StateError>) -> Error {
 #[test]
 fn zero_payload_preparation_probe_observes_staged_durable_and_unavailable_records() {
     for staged in [false, true] {
-        for (offset, payload) in [Vec::new(), vec![1], vec![0; 4096]].into_iter().enumerate() {
+        for (offset, payload) in (0_u8..).zip([Vec::new(), vec![1], vec![0; 4096]]) {
             let (device, _slot, _handle, mut archive) = wallet(0x98);
             let absent = ArchiveKey::PreparationDraft([90; 32]);
-            let key = ArchiveKey::PreparationDraft([91 + offset as u8; 32]);
+            let key = ArchiveKey::PreparationDraft([91 + offset; 32]);
             assert!(archive.get(absent, 0).unwrap().is_none());
             if staged {
                 archive.open_call();

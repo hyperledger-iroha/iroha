@@ -108,8 +108,7 @@ fn fixture_preparation_refuses_missing_and_duplicate_staking_authorship() {
     let mut missing = TestChainConfig::new(World::new(), 1_000);
     missing.genesis_parameters.clear();
     let error = CertifiedTestChain::prepare(missing)
-        .err()
-        .expect("missing monetary authority must fail before signing");
+        .expect_err("missing monetary authority must fail before signing");
     assert!(
         error
             .error
@@ -121,8 +120,7 @@ fn fixture_preparation_refuses_missing_and_duplicate_staking_authorship() {
         .genesis_parameters
         .push(repeated.genesis_parameters[0].clone());
     let error = CertifiedTestChain::prepare(repeated)
-        .err()
-        .expect("equal duplicate monetary authority must fail before signing");
+        .expect_err("equal duplicate monetary authority must fail before signing");
     assert!(
         error
             .error
@@ -182,8 +180,7 @@ fn foreign_staking_manifest_mismatch_refuses_before_execution_and_restores_calle
     let original_kura = Arc::clone(&wrong.kura);
     wrong.manifest = wrong.manifest.with_chain_discriminant(753);
     let refusal = CertifiedTestChain::from_prepared(wrong)
-        .err()
-        .expect("a substituted manifest cannot select the execution context");
+        .expect_err("a substituted manifest cannot select the execution context");
     assert!(matches!(&refusal.error, TestChainError::Genesis(message)
         if message.contains("original prepared manifest")));
     assert!(Arc::ptr_eq(&refusal.state, &original_state));

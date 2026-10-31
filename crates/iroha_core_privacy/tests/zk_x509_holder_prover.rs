@@ -26,7 +26,7 @@ fn shape_witness(
         vec![vec![0x30, 0], vec![0x30, 0]],
         vec![0x30, 0],
         index,
-        [[0x42; 32]; 12],
+        &[[0x42; 32]; 12],
         [0x24; 64],
         openings,
     )
@@ -155,7 +155,7 @@ fn holder_rejects_invalid_chain_and_crl_lengths() {
         ),
     ] {
         assert_eq!(
-            ZkX509WitnessV1::from_parts_v1(chain, crl, 0, [[0; 32]; 12], [0; 64], vec![]),
+            ZkX509WitnessV1::from_parts_v1(chain, crl, 0, &[[0; 32]; 12], [0; 64], vec![]),
             Err(error)
         );
     }

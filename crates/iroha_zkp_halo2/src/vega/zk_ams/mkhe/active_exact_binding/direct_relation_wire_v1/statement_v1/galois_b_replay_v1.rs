@@ -138,12 +138,8 @@ impl DirectGaloisBStatementReplayV1 {
             if self.transaction.read_next(provider, &mut scratch)? != scratch.len() {
                 return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
             }
-            for (residue, encoded) in residues.iter_mut().zip(scratch.chunks_exact(8)) {
-                let value = u64::from_be_bytes(
-                    encoded
-                        .try_into()
-                        .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-                );
+            for (residue, encoded) in residues.iter_mut().zip(scratch.as_chunks::<8>().0) {
+                let value = u64::from_be_bytes(*encoded);
                 if value >= modulus {
                     return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
                 }

@@ -1146,7 +1146,7 @@ impl MainProverConstraintProviderV1<'_, '_> {
                     opening.aux_current,
                     opening.aux_next,
                     fixed_current,
-                    source.challenges,
+                    &source.challenges,
                 )?)
             }
             Self::Log16(source) => residues.extend_residues(source.constraint_residues_v1(
@@ -1170,7 +1170,7 @@ impl MainProverConstraintProviderV1<'_, '_> {
                 fixed_next,
                 &mut residues,
             )?,
-        };
+        }
         if residues.len() != registration.segment.constraint_count {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
@@ -1258,6 +1258,13 @@ fn main_log19_fixed_polynomial_set_v1(
     registration: RegisteredSegmentLayoutV1,
     transform_policy: main_bounded_transform::MainBoundedTransformPolicyV1,
 ) -> Result<ZeroizingMainFixedPolynomialSetV1, ZkX509StarkErrorV1> {
+    // Each producer owns its separately sized fixed row. Resource accounting
+    // reserves both current/next rows at the maximum producer width plus16 words.
+    const _: () =
+        assert!(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1 <= main_resources::MAIN_FIXED_REPLAY_ROW_WIDTH_V1);
+    const _: () = assert!(
+        P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1 <= main_resources::MAIN_FIXED_REPLAY_ROW_WIDTH_V1
+    );
     let index = source.source.registration_index_v1(registration)?;
     let transform_policy = transform_policy.for_quotient_layout_v1(
         registration.segment.base_width,
@@ -1280,13 +1287,6 @@ fn main_log19_fixed_polynomial_set_v1(
     } else {
         None
     };
-    // Each producer owns its separately sized fixed row. Resource accounting
-    // reserves both current/next rows at the maximum producer width plus16 words.
-    const _: () =
-        assert!(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1 <= main_resources::MAIN_FIXED_REPLAY_ROW_WIDTH_V1);
-    const _: () = assert!(
-        P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1 <= main_resources::MAIN_FIXED_REPLAY_ROW_WIDTH_V1
-    );
     if (2..=5).contains(&index) {
         // These final public columns were already retained together by the old
         // per-column path. Construct each complete SHA row once into that same
@@ -3440,7 +3440,7 @@ impl ProjectionMainFp4AirEvaluatorV1 {
         self,
         opening: RegisteredOpenedRowsV1<'_, E>,
         fixed: &[E],
-        challenges: ZkX509ProjectionChallengesV1,
+        challenges: &ZkX509ProjectionChallengesV1,
     ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
         let residues = projection_constraint_residues_v1(
             opening.base_current,
@@ -3726,7 +3726,7 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for ProjectionOpenedRowEvaluatorV1
             opening.aux_current,
             opening.aux_next,
             &fixed,
-            self.challenges,
+            &self.challenges,
             alphas,
         )
         .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;

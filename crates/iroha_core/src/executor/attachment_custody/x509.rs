@@ -88,10 +88,10 @@ impl X509Binding {
 
 fn original_encoding_error(original: norito::core::DecodeAttemptError) -> X509Error {
     use iroha_data_model::transaction::signed_attachments::SignedAttachmentErrorV1;
-    let original = match original.into_local_refusal() {
-        Ok(refusal) => SignedAttachmentErrorV1::LocalResource(refusal),
-        Err(_) => SignedAttachmentErrorV1::CanonicalEncodingFailed,
-    };
+    let original = original.into_local_refusal().map_or(
+        SignedAttachmentErrorV1::CanonicalEncodingFailed,
+        SignedAttachmentErrorV1::LocalResource,
+    );
     X509Error::Custody(CustodyError::Declaration(original))
 }
 

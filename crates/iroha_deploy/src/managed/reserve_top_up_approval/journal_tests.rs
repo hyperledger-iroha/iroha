@@ -151,7 +151,7 @@ fn approval_claim_journal_roundtrip_keeps_exact_request_snapshot_rationale_and_o
     let mut replacement = original.clone();
     replacement.checkpoint.push(0x6b);
     assert!(publish_intent(&directory, &replacement).is_err());
-    let request = restored.request(&terms, Instant::now() + Duration::from_secs(900));
+    let request = restored.request(&terms, Instant::now() + Duration::from_mins(15));
     assert!(request.approve);
     assert_eq!(request.movement_id, original.history.movement_id);
     assert_eq!(request.rationale, original.rationale);
@@ -233,7 +233,7 @@ fn expired_approval_claims_keep_original_utc_fees_and_lagged_partition_digest() 
         original.partition.policy_digest
     );
     original.validate().unwrap();
-    let options = terms.options(Instant::now() + Duration::from_secs(900));
+    let options = terms.options(Instant::now() + Duration::from_mins(15));
     original
         .matches_intent(&original.intent())
         .and_then(|()| terms.matches(terms.requested_deadline_unix_ms, &options))

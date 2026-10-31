@@ -324,7 +324,7 @@ fn parent_bootstrap_custody_is_separate_and_survives_local_generation_reset() {
     let selected = profile(checkpoint.chain_id(), 753, "https://torii.example/");
     let parent = BootstrapStore::open(&path).unwrap();
     parent
-        .accept(&selected, crate::bootstrap::tests::discovered(&checkpoint))
+        .accept(&selected, &crate::bootstrap::tests::discovered(&checkpoint))
         .unwrap();
     let retained = std::fs::read(path.join("accepted.nrt")).unwrap();
 

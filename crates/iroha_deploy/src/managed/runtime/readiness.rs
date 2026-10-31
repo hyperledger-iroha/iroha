@@ -853,7 +853,7 @@ mod tests {
         let mut first = Fake::default();
         let original = run(&mut first, &initial).unwrap();
         assert_eq!(first.submits, 1);
-        clock.wait(Duration::from_secs(43_200));
+        clock.wait(Duration::from_hours(12));
         let mut restarted = Fake::default();
         assert_eq!(
             run_existing(&mut restarted, &initial, original)

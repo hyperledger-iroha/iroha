@@ -2510,9 +2510,7 @@ async fn run_custody_or_activation_scenario(
             == 2,
         "4→7→4 did not complete the second authenticated signing generation"
     );
-    lifecycle
-        .complete_withdrawal(network, &second.target, &return_target)
-        .await?;
+    Box::pin(lifecycle.complete_withdrawal(network, &second.target, &return_target)).await?;
     Ok(())
 }
 
@@ -2843,7 +2841,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
     })
     .await;
     let closure = shutdown_all_cleanly(&network).await;
-    network.shutdown_and_release().await;
+    Box::pin(network.shutdown_and_release()).await;
     match (result, closure) {
         (Ok(()), closure) => closure,
         (Err(error), Ok(())) => Err(error),

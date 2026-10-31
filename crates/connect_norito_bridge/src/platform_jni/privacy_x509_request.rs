@@ -3,8 +3,7 @@
 use super::{SubmitPrivacyZkX509CertificateV1, catch_unwind_to_java};
 use iroha_data_model::{
     privacy::{
-        PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1, PrivacyProtocolLimitsV1,
-        PrivacyStatementV1,
+        PrivacyConsensusLimitsV1, PrivacyStatementV1,
         TAIRA_PRIVACY_MAX_STATEMENT_AND_ENCRYPTED_OUTPUT_BYTES_PER_TRANSACTION_V1,
     },
     transaction::signed_attachments::{
@@ -96,26 +95,6 @@ pub(super) fn inspect_request(archive: &[u8]) -> Option<Vec<Vec<u8>>> {
         context.statement_schema_digest.as_bytes().to_vec(),
         context.engine_manifest_digest.as_bytes().to_vec(),
     ])
-}
-
-/// Check a proof-free request against the already admitted current compiled/committed tuple.
-pub(super) fn request_admitted(
-    archive: &[u8],
-    profile: &PrivacyCompiledProfileSnapshotV1,
-    protocol_limits: &PrivacyProtocolLimitsV1,
-    limits: &PrivacyConsensusLimitsV1,
-    expected_network: &[u8; 32],
-) -> bool {
-    let Some(request) = decode_request(archive) else {
-        return false;
-    };
-    crate::privacy_construction::request_matches_profile(
-        &request,
-        profile,
-        protocol_limits,
-        limits,
-        expected_network,
-    )
 }
 
 fn materialize_statement(request: &[u8], action: &[u8], intent: &[u8]) -> Option<Vec<u8>> {

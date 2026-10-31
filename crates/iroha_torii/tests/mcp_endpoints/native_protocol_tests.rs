@@ -490,6 +490,7 @@ async fn mcp_native_2026_rejects_invalid_routing_headers() {
 
 #[tokio::test]
 async fn mcp_native_2026_rejects_invalid_metadata_versions_and_methods() {
+    const UNSUPPORTED_VERSION: &str = "2099-01-01";
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -532,7 +533,6 @@ async fn mcp_native_2026_rejects_invalid_metadata_versions_and_methods() {
         assert_jsonrpc_error_code(&body, -32602);
     }
 
-    const UNSUPPORTED_VERSION: &str = "2099-01-01";
     let (status, body) = post_mcp_with_exact_headers(
         &app,
         norito::json!({

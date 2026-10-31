@@ -44,7 +44,7 @@ fn role_credential_requires_exact_bounded_canonical_ed25519_line() {
             PublishMode::CreateNew,
         )
         .unwrap();
-    assert!(read_role_key(&directory, &authority).unwrap() == key);
+    assert_eq!(read_role_key(&directory, &authority).unwrap(), key);
     let text = std::str::from_utf8(&canonical[..canonical.len() - 1]).unwrap();
     // Case-only alternate text is noncanonical even when the hexadecimal digit values agree.
     let alternate = if text.to_ascii_lowercase() == text {
@@ -52,7 +52,7 @@ fn role_credential_requires_exact_bounded_canonical_ed25519_line() {
     } else {
         text.to_ascii_lowercase()
     };
-    assert!(alternate != text);
+    assert_ne!(alternate, text);
     let malformed = [
         canonical[..canonical.len() - 1].to_vec(),
         [canonical.as_slice(), b"\n"].concat(),
@@ -95,7 +95,7 @@ fn role_credential_requires_exact_bounded_canonical_ed25519_line() {
             PublishMode::Replace,
         )
         .unwrap();
-    assert!(read_role_key(&directory, &authority).unwrap() == key);
+    assert_eq!(read_role_key(&directory, &authority).unwrap(), key);
 }
 
 #[test]
@@ -162,7 +162,7 @@ fn role_credential_replacement_cannot_select_another_role_or_account() {
             PublishMode::Replace,
         )
         .unwrap();
-    assert!(read_role_key(&directory, &authority).unwrap() == operator);
+    assert_eq!(read_role_key(&directory, &authority).unwrap(), operator);
 }
 
 #[cfg(unix)]

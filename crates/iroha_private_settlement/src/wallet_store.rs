@@ -183,6 +183,10 @@ impl FilePrivateSettlementWallet {
     /// # Errors
     /// Invalid original authorization/terms/openings, overlap, completed inputs, busy custody,
     /// original capacity or publication failure. No partial reservation can be published.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the opening and authorization are secret owners: taking them ends the caller's copy, and their zeroizing Drop wipes them when staging returns"
+    )]
     pub fn stage_authorized(
         &self,
         intent: &PrivateSettlementProofIntentV1,

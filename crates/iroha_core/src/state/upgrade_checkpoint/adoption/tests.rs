@@ -120,28 +120,51 @@ fn only_the_named_selection_of_an_activated_adoption_manifest_authorizes() {
     }
 }
 
+/// A record of another runtime upgrade, with window `[start, start + 10)`.
+fn other_upgrade(seed: u8, start: u64, status: PredecessorUpgradeStatus) -> PredecessorRecord {
+    let mut manifest = manifest_naming(selection());
+    manifest.name = "abi-v1 refresh".into();
+    manifest.sbom_digests.clear();
+    manifest.start_height = start;
+    manifest.end_height = start + 10;
+    entry(seed, manifest, status)
+}
+
 #[test]
-fn every_record_of_the_retired_table_is_an_adoption_manifest_and_one_authorizes() {
+fn settled_records_leave_with_the_table_and_a_pending_proposal_refuses() {
     let height = START + 5;
-    let mut other = activated(2);
-    other.record.manifest.name = "abi-v1 refresh".into();
+    let mut records = vec![
+        other_upgrade(2, END + 10, PredecessorUpgradeStatus::Canceled),
+        other_upgrade(3, 20, PredecessorUpgradeStatus::ActivatedAt(20)),
+        other_upgrade(4, 40, PredecessorUpgradeStatus::Proposed),
+        other_upgrade(5, height, PredecessorUpgradeStatus::Proposed),
+        entry(
+            6,
+            manifest_naming(selection()),
+            PredecessorUpgradeStatus::Canceled,
+        ),
+        activated(1),
+    ];
     assert_eq!(
-        authorization(&[activated(1), other], height, selection()),
-        Err(AdoptionError::NotAnAuthorization(hex::encode([2; 32])))
+        authorization(&records, height, selection()).map(|found| found.id),
+        Ok(PredecessorUpgradeId([1; 32])),
+        "cancelled and activated records, and proposals whose start has passed, are settled"
     );
+
+    records.push(other_upgrade(
+        7,
+        height + 1,
+        PredecessorUpgradeStatus::Proposed,
+    ));
+    assert_eq!(
+        authorization(&records, height, selection()),
+        Err(AdoptionError::Pending(hex::encode([7; 32]))),
+        "the predecessor would still activate a proposal starting after the checkpoint"
+    );
+
     assert_eq!(
         authorization(&[activated(1), activated(2)], height, selection()),
         Err(AdoptionError::Ambiguous(2))
-    );
-    let stale = entry(
-        3,
-        manifest_naming(selection()),
-        PredecessorUpgradeStatus::Canceled,
-    );
-    assert_eq!(
-        authorization(&[stale, activated(1)], height, selection()).map(|found| found.id),
-        Ok(PredecessorUpgradeId([1; 32])),
-        "a cancelled earlier authorization leaves with its table"
     );
 }
 
@@ -237,15 +260,22 @@ fn the_printed_manifest_is_one_the_predecessor_admits() {
 #[test]
 fn records_roundtrip_through_their_predecessor_encoding() {
     let record = activated(5);
-    let bytes = norito::encode_canonical(&record.record).expect("encode");
-    let decoded: PredecessorUpgradeRecord = norito::decode_canonical(&bytes).expect("decode");
+    // The bare V1 layout the World value hash encodes, as the predecessor's codec derive did.
+    let bytes = Encode::encode(&record.record);
+    let decoded =
+        <PredecessorUpgradeRecord as Decode>::decode(&mut bytes.as_slice()).expect("decode");
     assert_eq!(decoded, record.record);
     let (key, value) = record.element_hashes().expect("hashes");
     assert_ne!(key, value);
+    // The predecessor derived its identity as the same 32-byte newtype; a newtype's encoding is
+    // structural, so any such newtype of the same bytes hashes alike.
     assert_eq!(
         key,
-        crate::state::world_projection::hash_value(&[5_u8; 32]).unwrap(),
-        "the identity hashes as the predecessor's 32-byte key"
+        crate::state::world_projection::hash_value(
+            &iroha_data_model::runtime::lifecycle::ChangeSetId([5; 32])
+        )
+        .unwrap(),
+        "the identity hashes as a 32-byte newtype key"
     );
 }
 
@@ -268,9 +298,18 @@ fn the_anchor_binds_the_checkpoint_roots_committee_selection_and_authorization()
     let record = anchor(&[activated(9)], inputs).expect("authorized adoption");
     assert_eq!(record.network, network);
     assert_eq!(record.height, START + 3);
-    assert_eq!(record.block_hash, [0x42; 32]);
-    assert_eq!(record.predecessor_world_root, [0x43; 32]);
-    assert_eq!(record.imported_state_root, [0x44; 32]);
+    assert_eq!(
+        record.block_hash,
+        <[u8; 32]>::from(Hash::prehashed([0x42; 32]))
+    );
+    assert_eq!(
+        record.predecessor_world_root,
+        <[u8; 32]>::from(Hash::prehashed([0x43; 32]))
+    );
+    assert_eq!(
+        record.imported_state_root,
+        <[u8; 32]>::from(Hash::prehashed([0x44; 32]))
+    );
     assert_eq!(record.selection, selection());
     assert_eq!(record.authorization, [9; 32]);
     assert_eq!(

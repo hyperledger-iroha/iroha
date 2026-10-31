@@ -168,16 +168,16 @@ impl WorldStateAccumulator {
 
     /// Add one element: lane-wise wrapping addition.
     fn add(&mut self, element: &[u8; LANE_BYTES]) {
-        for (lane, bytes) in self.lanes.iter_mut().zip(element.chunks_exact(2)) {
-            *lane = lane.wrapping_add(u16::from_le_bytes([bytes[0], bytes[1]]));
+        for (lane, bytes) in self.lanes.iter_mut().zip(element.as_chunks::<2>().0) {
+            *lane = lane.wrapping_add(u16::from_le_bytes(*bytes));
         }
         self.entries = self.entries.wrapping_add(1);
     }
 
     /// Remove one element: the exact inverse of [`Self::add`].
     fn remove(&mut self, element: &[u8; LANE_BYTES]) {
-        for (lane, bytes) in self.lanes.iter_mut().zip(element.chunks_exact(2)) {
-            *lane = lane.wrapping_sub(u16::from_le_bytes([bytes[0], bytes[1]]));
+        for (lane, bytes) in self.lanes.iter_mut().zip(element.as_chunks::<2>().0) {
+            *lane = lane.wrapping_sub(u16::from_le_bytes(*bytes));
         }
         self.entries = self.entries.wrapping_sub(1);
     }
@@ -235,8 +235,8 @@ impl WorldStateAccumulator {
             lanes: Box::new([0; LANES]),
             entries: u64::from_le_bytes(entries),
         };
-        for (lane, pair) in value.lanes.iter_mut().zip(lanes.chunks_exact(2)) {
-            *lane = u16::from_le_bytes([pair[0], pair[1]]);
+        for (lane, pair) in value.lanes.iter_mut().zip(lanes.as_chunks::<2>().0) {
+            *lane = u16::from_le_bytes(*pair);
         }
         Ok(value)
     }
@@ -1081,7 +1081,7 @@ impl WorldStateAccumulator {
 
 /// The selection every World of this release is founded on.
 #[cfg(test)]
-pub(crate) fn baseline_selection() -> RootSelectionV1 {
+pub fn baseline_selection() -> RootSelectionV1 {
     crate::runtime::release_catalog()
         .expect("release catalog")
         .baseline

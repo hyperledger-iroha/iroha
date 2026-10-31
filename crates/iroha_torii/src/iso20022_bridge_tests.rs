@@ -97,7 +97,10 @@ fn fixture_key_pair(seed: u8) -> KeyPair {
 }
 #[test]
 fn fixture_key_pair_uses_checked_seed_derivation() {
-    assert!(fixture_key_pair(0xAA).public_key() != fixture_key_pair(0xAB).public_key());
+    assert_ne!(
+        fixture_key_pair(0xAA).public_key(),
+        fixture_key_pair(0xAB).public_key()
+    );
     assert!(
         KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
         "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
@@ -538,12 +541,8 @@ fn signed_pacs008_xml_with_sgntr_signature_carrier() -> String {
     let signing_key = xml_signature_test_signing_key();
     let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
     let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
-    let public_key = BASE64_STANDARD.encode(
-        signing_key
-            .verifying_key()
-            .to_sec1_point(false)
-            .as_bytes(),
-    );
+    let public_key =
+        BASE64_STANDARD.encode(signing_key.verifying_key().to_sec1_point(false).as_bytes());
     let signature_xml = format!(
         concat!(
             r#"<ds:Signature Id="sig-001">{signed_info}"#,
@@ -662,12 +661,8 @@ fn signed_pacs008_xml_with_extra_reference_transform() -> String {
     let signing_key = xml_signature_test_signing_key();
     let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
     let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
-    let public_key = BASE64_STANDARD.encode(
-        signing_key
-            .verifying_key()
-            .to_sec1_point(false)
-            .as_bytes(),
-    );
+    let public_key =
+        BASE64_STANDARD.encode(signing_key.verifying_key().to_sec1_point(false).as_bytes());
     let signature_xml = format!(
         concat!(
             r#"<Signature xmlns="{XMLDSIG_NS}" Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
@@ -920,12 +915,8 @@ fn signed_pacs008_xml_with_signed_info_rewrite(
     let signing_key = xml_signature_test_signing_key();
     let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
     let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
-    let public_key = BASE64_STANDARD.encode(
-        signing_key
-            .verifying_key()
-            .to_sec1_point(false)
-            .as_bytes(),
-    );
+    let public_key =
+        BASE64_STANDARD.encode(signing_key.verifying_key().to_sec1_point(false).as_bytes());
     let signature_xml = format!(
         concat!(
             r#"<Signature xmlns="{XMLDSIG_NS}" Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
@@ -999,12 +990,8 @@ fn signed_pacs008_xml_with_signed_properties(
     let signing_key = xml_signature_test_signing_key();
     let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
     let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
-    let public_key = BASE64_STANDARD.encode(
-        signing_key
-            .verifying_key()
-            .to_sec1_point(false)
-            .as_bytes(),
-    );
+    let public_key =
+        BASE64_STANDARD.encode(signing_key.verifying_key().to_sec1_point(false).as_bytes());
     let signature_xml = format!(
         concat!(
             r#"<Signature xmlns="{XMLDSIG_NS}" Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
@@ -1191,12 +1178,8 @@ fn test_xades_object_xml(signed_properties_xml: &str) -> String {
     )
 }
 fn test_p256_key_info(signing_key: &P256SigningKey) -> String {
-    let public_key = BASE64_STANDARD.encode(
-        signing_key
-            .verifying_key()
-            .to_sec1_point(false)
-            .as_bytes(),
-    );
+    let public_key =
+        BASE64_STANDARD.encode(signing_key.verifying_key().to_sec1_point(false).as_bytes());
     format!(
         concat!(
             "<KeyInfo><KeyValue><ECKeyValue>",
@@ -1413,12 +1396,8 @@ fn signed_pacs008_xml_with_comments() -> String {
     let signing_key = xml_signature_test_signing_key();
     let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
     let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
-    let public_key = BASE64_STANDARD.encode(
-        signing_key
-            .verifying_key()
-            .to_sec1_point(false)
-            .as_bytes(),
-    );
+    let public_key =
+        BASE64_STANDARD.encode(signing_key.verifying_key().to_sec1_point(false).as_bytes());
     let signature_xml = format!(
         concat!(
             r#"<Signature xmlns="{XMLDSIG_NS}">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
@@ -1507,12 +1486,8 @@ fn signed_pacs008_xml_with_signed_info_xml_namespace_attribute() -> String {
     let signing_key = xml_signature_test_signing_key();
     let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
     let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
-    let public_key = BASE64_STANDARD.encode(
-        signing_key
-            .verifying_key()
-            .to_sec1_point(false)
-            .as_bytes(),
-    );
+    let public_key =
+        BASE64_STANDARD.encode(signing_key.verifying_key().to_sec1_point(false).as_bytes());
     let signature_xml = format!(
         concat!(
             r#"<Signature xmlns="{XMLDSIG_NS}">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
@@ -1569,12 +1544,8 @@ fn signed_pacs008_xml_with_signed_info_inherited_prefixed_attribute() -> String 
     let signing_key = xml_signature_test_signing_key();
     let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
     let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
-    let public_key = BASE64_STANDARD.encode(
-        signing_key
-            .verifying_key()
-            .to_sec1_point(false)
-            .as_bytes(),
-    );
+    let public_key =
+        BASE64_STANDARD.encode(signing_key.verifying_key().to_sec1_point(false).as_bytes());
     let signature_xml = format!(
         concat!(
             r#"<Signature xmlns="{XMLDSIG_NS}" xmlns:ext="urn:iso:test:ext">{signed_info}"#,
@@ -1635,12 +1606,8 @@ fn signed_pacs008_xml_with_default_signature_namespace(xmldsig_namespace: &str) 
     let signing_key = xml_signature_test_signing_key();
     let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
     let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
-    let public_key = BASE64_STANDARD.encode(
-        signing_key
-            .verifying_key()
-            .to_sec1_point(false)
-            .as_bytes(),
-    );
+    let public_key =
+        BASE64_STANDARD.encode(signing_key.verifying_key().to_sec1_point(false).as_bytes());
     let signature_xml = format!(
         concat!(
             r#"<Signature xmlns="{xmldsig_ns}" Id="sig-001">{signed_info}"#,
@@ -1725,12 +1692,8 @@ fn signed_pacs008_xml_with_prefixed_signature_namespace_options_and_namespace(
     let signing_key = xml_signature_test_signing_key();
     let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
     let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
-    let public_key = BASE64_STANDARD.encode(
-        signing_key
-            .verifying_key()
-            .to_sec1_point(false)
-            .as_bytes(),
-    );
+    let public_key =
+        BASE64_STANDARD.encode(signing_key.verifying_key().to_sec1_point(false).as_bytes());
     let signature_xml = format!(
         concat!(
             r#"<ds:Signature xmlns:ds="{xmldsig_ns}"{unused_namespace}>{signed_info}"#,
@@ -1890,12 +1853,8 @@ fn signed_pacs008_xml_from_unsigned_with_reference_options(
     let signing_key = xml_signature_test_signing_key();
     let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
     let signature_value = encode_p256_signature_value(&signature, signature_encoding);
-    let public_key = BASE64_STANDARD.encode(
-        signing_key
-            .verifying_key()
-            .to_sec1_point(false)
-            .as_bytes(),
-    );
+    let public_key =
+        BASE64_STANDARD.encode(signing_key.verifying_key().to_sec1_point(false).as_bytes());
     let signature_xml = format!(
         concat!(
             r#"<Signature xmlns="{xmldsig_ns}">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
@@ -5398,12 +5357,8 @@ fn supported_xml_required_base64_rejects_duplicate_children() {
 #[test]
 fn supported_xml_key_material_enforces_key_info_shape() {
     let signing_key = xml_signature_test_signing_key();
-    let public_key = BASE64_STANDARD.encode(
-        signing_key
-            .verifying_key()
-            .to_sec1_point(false)
-            .as_bytes(),
-    );
+    let public_key =
+        BASE64_STANDARD.encode(signing_key.verifying_key().to_sec1_point(false).as_bytes());
     let default_namespaces = default_xmlsig_namespace_bindings();
     let xml_signature_key_material = |signature_xml: &str, evaluation_time: Option<ASN1Time>| {
         xml_signature_key_material_with_namespaces(
@@ -5446,12 +5401,8 @@ fn supported_xml_key_material_enforces_key_info_shape() {
     let err = xml_signature_key_material(&malformed_public_key_xml, None)
         .expect_err("malformed P-256 public-key bytes must fail closed");
     assert!(matches!(err, MsgError::ValidationFailed));
-    let compressed_public_key = BASE64_STANDARD.encode(
-        signing_key
-            .verifying_key()
-            .to_sec1_point(true)
-            .as_bytes(),
-    );
+    let compressed_public_key =
+        BASE64_STANDARD.encode(signing_key.verifying_key().to_sec1_point(true).as_bytes());
     let compressed_public_key_xml = format!(
         r#"<Signature><KeyInfo><KeyValue><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve><PublicKey>{compressed_public_key}</PublicKey></ECKeyValue></KeyValue></KeyInfo></Signature>"#
     );

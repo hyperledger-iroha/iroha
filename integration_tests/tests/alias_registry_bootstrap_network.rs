@@ -1,4 +1,4 @@
-//! Genuine four-validator NPoS alias bootstrap and retained-Kura replay.
+//! Genuine four-validator `NPoS` alias bootstrap and retained-Kura replay.
 //!
 //! This isolated network uses the native SNS policy, signed planner and paid
 //! leases. Ordinary transaction fees are zero from genesis to isolate lease
@@ -111,7 +111,7 @@ const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(300);
 const SUBMISSION_TASK_TIMEOUT: Duration = Duration::from_secs(360);
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(360);
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
-const ADVANCE_TIMEOUT: Duration = Duration::from_secs(900);
+const ADVANCE_TIMEOUT: Duration = Duration::from_mins(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const TRANSACTION_TTL: Duration = Duration::from_secs(600);
 const MAX_RETAINED_HEIGHT: u64 = 128;

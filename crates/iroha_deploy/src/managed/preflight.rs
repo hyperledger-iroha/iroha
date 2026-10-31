@@ -52,15 +52,17 @@ pub(super) fn daemon_refusal(
         thread::sleep(POLL);
     };
     let (stdout, stderr) = (finish(stdout), finish(stderr));
-    match status {
-        Some(status) => Ok(interpret(
-            status.success(),
-            &status.to_string(),
-            &stdout,
-            &stderr,
-        )),
-        None => Err(Error::Timeout(timeout)),
-    }
+    status.map_or_else(
+        || Err(Error::Timeout(timeout)),
+        |status| {
+            Ok(interpret(
+                status.success(),
+                &status.to_string(),
+                &stdout,
+                &stderr,
+            ))
+        },
+    )
 }
 
 fn read_in_background(stream: Option<impl Read + Send + 'static>) -> JoinHandle<Vec<u8>> {

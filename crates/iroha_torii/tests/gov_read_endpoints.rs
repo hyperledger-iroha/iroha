@@ -250,7 +250,7 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
     let expected_approve = 100u128.saturating_mul(u128::from(factor));
     assert_eq!(
         vt.get("approve").and_then(norito::json::Value::as_u64),
-        Some(expected_approve as u64)
+        Some(u64::try_from(expected_approve).unwrap())
     );
     // Missing referendum/locks return found=false; an absent tally returns NotFound.
     let missing_id = "missing-rid".to_string();

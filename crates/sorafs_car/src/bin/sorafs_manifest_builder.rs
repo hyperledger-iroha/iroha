@@ -2043,12 +2043,12 @@ mod tests {
             #[cfg(not(windows))]
             let key_path = key.path();
             #[cfg(windows)]
-            let key_path = council_key_windows::write_fixture(
+            let key_path = &council_key_windows::write_fixture(
                 &temp_path,
                 &format!("size-{size}.seed"),
                 &vec![0xA5; size],
             );
-            let error = read_council_signing_key_file(key_path.as_ref())
+            let error = read_council_signing_key_file(key_path)
                 .err()
                 .expect("non-32-byte key file must fail");
             assert!(
@@ -2065,9 +2065,8 @@ mod tests {
         #[cfg(not(windows))]
         let key_path = key.path();
         #[cfg(windows)]
-        let key_path = council_key_windows::write_fixture(&temp_path, "valid.seed", &[0xA5; 32]);
-        let seed =
-            read_council_signing_key_file(key_path.as_ref()).expect("read canonical signing seed");
+        let key_path = &council_key_windows::write_fixture(&temp_path, "valid.seed", &[0xA5; 32]);
+        let seed = read_council_signing_key_file(key_path).expect("read canonical signing seed");
         assert_eq!(seed.as_bytes(), &[0xA5; 32]);
     }
     #[test]

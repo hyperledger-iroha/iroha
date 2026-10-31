@@ -221,7 +221,7 @@ fn apply_verified_effect(
     statement: &IrohaZkX509StarkP256StatementV1,
     snapshot: &PrivacyZkX509AuthoritativeStateV1,
     selected_key: PrivacyNullifierKeyV1,
-    effect: VerifiedZkX509CertificateEffectV1,
+    effect: &VerifiedZkX509CertificateEffectV1,
     statement_digest: PrivacyStatementDigestV1,
     expected_action_index: u32,
     encoded_action_bytes: u64,

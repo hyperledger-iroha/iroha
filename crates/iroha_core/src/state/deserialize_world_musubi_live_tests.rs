@@ -671,8 +671,7 @@ fn musubi_restore_keeps_local_scratch_refusal_separate_from_malformed_world() {
             .try_reserve_layouts(mv::cell::CellInitialization::<
                 crate::pipeline_gas_policy::RetainedStateParameters,
             >::allocation_layouts())
-            .err()
-            .expect("the same seven initial parameter Cell backings exceed this zero pool")
+            .expect_err("the same seven initial parameter Cell backings exceed this zero pool")
     );
     assert_eq!(budget.reserved_bytes(), 0);
     // Zero total restore capacity now refuses parameter Cell admission before

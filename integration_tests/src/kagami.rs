@@ -136,8 +136,7 @@ fn canonicalize_repo_relative(path: PathBuf) -> Result<PathBuf> {
 }
 fn skip_build_enabled() -> bool {
     env::var(IROHA_TEST_SKIP_BUILD_ENV)
-        .ok()
-        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 fn build_kagami(repo: &Path, profile: &str) -> Result<()> {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());

@@ -32257,7 +32257,7 @@ mod advert_tests {
         let evidence_digest = [0x44; 32];
         let entries = ["denylist/global", "case/42"];
         let issued_at = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        let expires_at = issued_at + Duration::from_secs(900);
+        let expires_at = issued_at + Duration::from_mins(15);
         let mut rng = FixedProofTokenRng { byte: rng_byte };
         let token = ProofToken::mint(
             &mut rng,
@@ -38822,7 +38822,7 @@ mod advert_tests {
         stale_block_hash[0] ^= 0xFF;
         let stale = api_test_route!(get_pin_manifest; State(app.clone()); Path(hex::encode(manifest_digest.as_bytes())); axum::extract::RawQuery(Some(format!( "expected_finalized_height={}&expected_finalized_block_hash_hex={}", finalized.finalized_cursor.height, hex::encode(stale_block_hash) ))); None);
         assert_eq!(stale.status(), StatusCode::CONFLICT);
-        let stale_list = api_test_route!(get_pin_registry; State(app); axum::extract::RawQuery(Some(format!( "expected_finalized_height={}&expected_finalized_block_hash_hex={}&limit=1&max_bytes={}", finalized.finalized_cursor.height, hex::encode(stale_block_hash), PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1, ))); None);
+        let stale_list = api_test_route!(get_pin_registry; State(app); axum::extract::RawQuery(Some(format!( "expected_finalized_height={}&expected_finalized_block_hash_hex={}&limit=1&max_bytes={}", finalized.finalized_cursor.height, hex::encode(stale_block_hash), PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1))); None);
         assert_eq!(stale_list.status(), StatusCode::CONFLICT);
     }
     #[tokio::test]

@@ -446,12 +446,15 @@ mod tests {
         assert_eq!(std::fs::read(&g1).unwrap(), global.genesis);
         assert_eq!(std::fs::read(&h2).unwrap(), global.successor);
         assert_eq!(std::fs::read(&manifest).unwrap(), original_manifest);
-        assert!(
+        assert_eq!(
             iroha_fs::read_private(config, 1024 * 1024)
                 .unwrap()
-                .as_slice()
-                == original_config.as_slice()
+                .as_slice(),
+            original_config.as_slice()
         );
-        assert!(iroha_fs::read_private(&key, 4096).unwrap().as_slice() == original_key.as_slice());
+        assert_eq!(
+            iroha_fs::read_private(&key, 4096).unwrap().as_slice(),
+            original_key.as_slice()
+        );
     }
 }

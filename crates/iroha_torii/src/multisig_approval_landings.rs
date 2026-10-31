@@ -36,7 +36,7 @@ const MAX_LANDINGS: usize = 200_000;
 
 /// The block an approval landed in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Landing {
+pub struct Landing {
     /// Block creation time, Unix milliseconds.
     pub(crate) at_ms: u64,
     /// Block height.
@@ -45,7 +45,7 @@ pub(crate) struct Landing {
 
 /// First landing of each (proposal, signer) pair, folded from committed blocks up to `height`.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct MultisigApprovalLandings {
+pub struct MultisigApprovalLandings {
     height: usize,
     tip: Option<HashOf<BlockHeader>>,
     first: BTreeMap<(MultisigProposalId, AccountId), Landing>,
@@ -167,7 +167,7 @@ fn publish(landings: MultisigApprovalLandings) -> Arc<MultisigApprovalLandings> 
 /// The index for a read that asked for approval times, folded up to the committed tip when only
 /// a short tail is missing. A longer gap starts one background pass and answers with what is
 /// folded so far. Emergency Fast mode reads no history, so its approvals stay untimed.
-pub(crate) async fn current(app: &crate::SharedAppState) -> Arc<MultisigApprovalLandings> {
+pub async fn current(app: &crate::SharedAppState) -> Arc<MultisigApprovalLandings> {
     let folded = snapshot();
     let tip = app.state.committed_height();
     if folded.height >= tip || app.state.emergency_fast_startup_enabled() {
@@ -546,7 +546,7 @@ mod tests {
         let approved_height = chain.height();
 
         let landings = with_empty_index(|| fold_to_tip(&app_reading(&chain), true));
-        assert_eq!(landings.height, chain.height() as usize);
+        assert_eq!(landings.height, usize::try_from(chain.height()).unwrap());
         let at = |height: u64| {
             u64::try_from(
                 chain
@@ -600,7 +600,7 @@ mod tests {
             assert_eq!(fold_to_tip(&app, false).height, REQUEST_TAIL_BLOCKS);
             assert_eq!(
                 fold_to_tip(&app, false).height,
-                chain.height() as usize,
+                usize::try_from(chain.height()).unwrap(),
                 "the next read folds the rest"
             );
         });

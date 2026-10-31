@@ -561,7 +561,7 @@ fn execute_imported_return_call(
     fixture: &ImportedReturnFixture,
     before: &ImportedReturnSnapshot,
     (label, valid): (&str, bool),
-    signed: iroha_data_model::transaction::SignedTransaction,
+    signed: &iroha_data_model::transaction::SignedTransaction,
     child_hash: Hash,
     child_ordinal: u32,
     cache: &mut crate::smartcontracts::ivm::cache::IvmCache,

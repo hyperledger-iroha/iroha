@@ -9411,11 +9411,11 @@ mod tests {
         };
         assert_closed!(state.clone(), RolloutRuntimeState, "rollout runtime state");
         let canonical = norito::json::to_value(&state).expect("serialize rollout runtime state");
-        assert!(
+        assert_eq!(
             canonical
                 .get("baseline_version")
-                .and_then(norito::json::Value::as_str)
-                == Some("1.0.0")
+                .and_then(norito::json::Value::as_str),
+            Some("1.0.0")
         );
         let mut missing = canonical.clone();
         assert!(

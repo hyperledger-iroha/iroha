@@ -6994,6 +6994,10 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
     /// Returns an error for invalid frame/queue geometry, listener binding or
     /// transport setup failures, and incompatible handshake configuration.
     #[log(skip(identity_keys, shutdown_signal))]
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "the network actor takes ownership of its handshake capabilities for its whole life"
+    )]
     pub async fn start(
         identity_keys: P2pIdentityKeys,
         config: Config,
@@ -7221,6 +7225,10 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         shutdown_signal
     ))]
     #[allow(clippy::too_many_lines, clippy::used_underscore_binding)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the launcher supplies identity, transport, network, capabilities, both initial rosters, its prebound listener and shutdown independently"
+    )]
     pub async fn start_with_crypto_and_initial_authorities(
         identity_keys: P2pIdentityKeys,
         Config {
@@ -11023,7 +11031,7 @@ mod accept_stream_tests {
                 ),
                 within_cap_wire_len,
             );
-            network.peer_message(within_cap).await;
+            network.peer_message(within_cap);
             let after_within = cap_violations();
             assert!(
                 after_within >= before_oversized,
@@ -11041,7 +11049,7 @@ mod accept_stream_tests {
             ),
             oversized_wire_len,
         );
-        network.peer_message(oversized).await;
+        network.peer_message(oversized);
         let after_oversized = cap_violations();
         assert!(after_oversized > before_oversized, "{oversized_diagnostic}");
         assert!(
@@ -11919,6 +11927,10 @@ async fn prepare_tcp_listener(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "the spawned listener task owns its consensus capabilities; it cannot borrow them from its starter"
+)]
 async fn start_tls_listener<T, E>(
     addr: std::net::SocketAddr,
     prebound_listener: Option<std::net::TcpListener>,
@@ -13119,7 +13131,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc> NetworkBase<T, E> {
             {
                 match self.peer_message_safety_receiver.try_recv() {
                     Ok(peer_message) => {
-                        self.peer_message(peer_message).await;
+                        self.peer_message(peer_message);
                         inbound_safety_drained = inbound_safety_drained.saturating_add(1);
                     }
                     Err(
@@ -13156,7 +13168,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc> NetworkBase<T, E> {
             while high_drained < INBOUND_PEER_HIGH_BUDGET && !shutdown_signal.is_sent() {
                 match self.peer_message_high_receiver.try_recv() {
                     Ok(peer_message) => {
-                        self.peer_message(peer_message).await;
+                        self.peer_message(peer_message);
                         high_drained = high_drained.saturating_add(1);
                     }
                     Err(
@@ -13188,7 +13200,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc> NetworkBase<T, E> {
                     );
                 }
                 Some(peer_message) = self.peer_message_safety_receiver.recv() => {
-                    self.peer_message(peer_message).await;
+                    self.peer_message(peer_message);
                 }
                 // A peer writer settled a reliable occurrence: retire its
                 // lease (or retry it) now rather than on the retry tick.
@@ -13373,16 +13385,16 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc> NetworkBase<T, E> {
                 }
                 // High-priority inbound peer messages (consensus/control)
                 Some(peer_message) = self.peer_message_high_receiver.recv() => {
-                    self.peer_message(peer_message).await;
+                    self.peer_message(peer_message);
                 }
                 Some(peer_message) = self.peer_message_payload_receiver.recv() => {
-                    self.peer_message(peer_message).await;
+                    self.peer_message(peer_message);
                 }
                 Some(peer_message) = self.peer_message_block_sync_receiver.recv() => {
-                    self.peer_message(peer_message).await;
+                    self.peer_message(peer_message);
                 }
                 Some(peer_message) = self.peer_message_control_receiver.recv() => {
-                    self.peer_message(peer_message).await;
+                    self.peer_message(peer_message);
                 }
 
                 // Low-priority network messages (gossip)
@@ -13405,7 +13417,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc> NetworkBase<T, E> {
                 }
                 // Low-priority inbound peer messages (gossip/sync)
                 Some(peer_message) = self.peer_message_low_receiver.recv() => {
-                    self.peer_message(peer_message).await;
+                    self.peer_message(peer_message);
                 }
                 () = shutdown_signal.receive() => {
                     iroha_logger::debug!("Shutting down due to signal");
@@ -16090,7 +16102,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc> NetworkBase<T, E> {
     fn broadcast(&mut self, broadcast: Broadcast<T>) {
         let _ = self.try_broadcast(&broadcast);
     }
-    async fn peer_message(&mut self, msg: PeerMessage<WireMessage<T>>) {
+    fn peer_message(&mut self, msg: PeerMessage<WireMessage<T>>) {
         iroha_logger::trace!(peer=%msg.peer, "Received peer message");
         if msg.connection_id().is_some_and(|connection_id| {
             self.protocol_rejected_connections.contains(&connection_id)

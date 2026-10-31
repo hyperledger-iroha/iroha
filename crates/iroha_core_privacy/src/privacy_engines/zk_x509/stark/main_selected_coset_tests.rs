@@ -545,7 +545,7 @@ fn selected_horner_validates_before_writes_and_clears_populated_output() {
 
 #[test]
 fn selected_horner_policy_is_bounded_by_measured_public_geometry() {
-    assert!(QUERY_COUNT * (1 << aggregate::retained_commitment::CUT_LEVEL_V1) <= 2176);
+    const { assert!(QUERY_COUNT * (1 << aggregate::retained_commitment::CUT_LEVEL_V1) <= 2176) };
     for native in [5, 8] {
         let maximum = (1usize << native) + MASK_DEGREE + 1;
         for coefficients in [1, maximum - 1, maximum] {
@@ -567,7 +567,7 @@ fn selected_horner_policy_is_bounded_by_measured_public_geometry() {
 
 #[test]
 fn selected_pruned_fft_policy_keeps_only_measured_eight_column_query_geometry() {
-    assert!(QUERY_COUNT * (1 << aggregate::retained_commitment::CUT_LEVEL_V1) <= 272);
+    const { assert!(QUERY_COUNT * (1 << aggregate::retained_commitment::CUT_LEVEL_V1) <= 272) };
     for native in [15, 16, 18, 19] {
         let maximum = (1usize << native) + MASK_DEGREE + 1;
         for coefficients in [1, maximum - 1, maximum] {

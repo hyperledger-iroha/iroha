@@ -1105,7 +1105,7 @@ use std::os::unix::fs::MetadataExt as _;
     let mut artifacts = args
         .issue_with_rng(&mut ctx, &mut rng, default_now)
         .expect("issue token");
-    let replay_limits = TokenStoreLimits::new(4, Duration::from_secs(1_800))
+    let replay_limits = TokenStoreLimits::new(4, Duration::from_mins(30))
         .expect("fixture replay limits");
     let replay_store: Arc<Mutex<dyn TokenStore + Send>> = Arc::new(Mutex::new(
         InMemoryTokenStore::new(replay_limits).expect("fixture replay store"),
@@ -1113,7 +1113,7 @@ use std::os::unix::fs::MetadataExt as _;
     let verifier = AdmissionTokenVerifier::try_new(
         MlDsaSuite::MlDsa44,
         keypair.public_key().to_vec(),
-        Duration::from_secs(900),
+        Duration::from_mins(15),
         Duration::from_secs(5),
         replay_store,
     )

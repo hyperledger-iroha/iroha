@@ -873,7 +873,7 @@ fn prepare_restored(
 // stores, and the serialized executor positioned at `applied`.
 fn assemble_prepared(
     inputs: PrepareInputs,
-    identity: StartupIdentity,
+    identity: &StartupIdentity,
     applied: (u64, Hash32),
     isolated_source: Option<IsolatedSource>,
 ) -> Result<Prepared, NodeError> {
@@ -890,7 +890,7 @@ fn assemble_prepared(
         tip,
         genesis_epoch,
         config_fingerprint,
-    } = identity;
+    } = *identity;
     // Storage and configured consensus identity have one original owner. Accepting either
     // independently can publish genesis into State while routing replay to a foreign store.
     #[cfg(not(all(test, sumeragi_core_mutation = "HC21")))]

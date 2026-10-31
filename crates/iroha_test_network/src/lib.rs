@@ -3549,7 +3549,7 @@ impl Network {
             // Only validators carry a PoP into the consensus roster. Observers
             // remain BLS-authenticated trusted peers but deliberately have no
             // `trusted_peers_pop` entry.
-            for peer in self.peers.iter().chain(extra.into_iter()) {
+            for peer in self.peers.iter().chain(extra) {
                 let (Some(bls_pk), Some(pop_bytes)) = (peer.bls_public_key(), peer.bls_pop())
                 else {
                     continue;
@@ -3865,7 +3865,7 @@ impl Network {
                 }
             }
         }
-        if Self::status_results_satisfy_predicate(status_results.into_iter(), &f) {
+        if Self::status_results_satisfy_predicate(status_results, &f) {
             return Ok(self);
         }
         let snapshot_on_failure = || self.startup_snapshot();
@@ -11239,7 +11239,7 @@ mod tests {
         assert!(!format!("{identity:?}").contains(token));
         assert!(peer.client_config.set(identity).is_ok());
         let readiness = peer.client();
-        let explicit = peer.client_for(&*ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+        let explicit = peer.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
         for client in [readiness, explicit] {
             assert_eq!(
                 client

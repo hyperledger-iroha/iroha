@@ -42,7 +42,7 @@ fn observer_node_catches_up() -> Result<()> {
         let pop = peer.bls_pop().expect("network peers should have BLS PoPs");
         pops_by_peer_id.insert(peer.id(), pop.to_vec());
     }
-    let trusted_peers: Vec<String> = tp.iter().map(|peer| peer.to_string()).collect();
+    let trusted_peers: Vec<String> = tp.iter().map(std::string::ToString::to_string).collect();
     let mut trusted_peers_pop = Vec::new();
     let mut seen = HashSet::new();
     for peer in network.peers() {
@@ -272,7 +272,7 @@ fn observer_node_catches_up() -> Result<()> {
         let url = format!(
             "{}/v1/accounts/{}/transactions?limit={}",
             peer.torii_url(),
-            &*ALICE_ID,
+            *ALICE_ID,
             limit
         );
         let body = rt.block_on(async {
@@ -330,7 +330,7 @@ fn observer_node_catches_up() -> Result<()> {
             let url = format!(
                 "{}/v1/accounts/{}/transactions/query",
                 peer.torii_url(),
-                &*ALICE_ID,
+                *ALICE_ID,
             );
             let mut args = vec![
                 {

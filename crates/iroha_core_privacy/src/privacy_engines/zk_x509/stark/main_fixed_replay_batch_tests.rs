@@ -9,14 +9,9 @@ use crate::privacy_engines::zk_x509::{
 };
 use fastpq_prover::goldilocks_transform::{
     GoldilocksTransformBackendV1 as Backend, GoldilocksTransformDirectionV1 as Direction,
-    GoldilocksTransformErrorV1 as TransformError,
 };
 
-fn inverse_fixture_v1(
-    words: &mut [Vec<u64>],
-    root: u64,
-    direction: Direction,
-) -> Result<Backend, TransformError> {
+fn inverse_fixture_v1(words: &mut [Vec<u64>], root: u64, direction: Direction) -> Backend {
     assert_eq!(direction, Direction::Inverse);
     for column in words {
         let mut values = column.iter().map(|&word| F(word)).collect::<Vec<_>>();
@@ -25,7 +20,7 @@ fn inverse_fixture_v1(
             *word = value.0;
         }
     }
-    Ok(Backend::Metal)
+    Backend::Metal
 }
 
 #[test]
@@ -75,7 +70,7 @@ fn initial_fixed_inverse_keeps_137_column_order_and_matches_direct_inverse_dft()
             policy,
             |words, root, direction| {
                 batches.push(words.len());
-                inverse_fixture_v1(words, root, direction)
+                Ok(inverse_fixture_v1(words, root, direction))
             },
             || false,
         )

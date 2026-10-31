@@ -1,4 +1,4 @@
-//! Shared four-validator, three-public-lane fixture using production NPoS and DA policies.
+//! Shared four-validator, three-public-lane fixture using production `NPoS` and DA policies.
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     account::{Account, AccountId},
@@ -408,7 +408,7 @@ fn multiroute_genesis_authenticates_all_configured_lane_policies() {
         else {
             continue;
         };
-        for instruction in instructions.iter() {
+        for instruction in instructions {
             let Some(parameter) = instruction.as_any().downcast_ref::<SetParameter>() else {
                 continue;
             };

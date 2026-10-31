@@ -1178,9 +1178,9 @@ impl Kura {
                 index
                     .seek(SeekFrom::Start(intent.index_write_offset))
                     .and_then(|_| index.write_all(&intent.new_index_bytes))
-                    .and_then(|_| index.set_len(intent.new_index_len))
-                    .and_then(|_| index.flush())
-                    .and_then(|_| index.sync_data()),
+                    .and_then(|()| index.set_len(intent.new_index_len))
+                    .and_then(|()| index.flush())
+                    .and_then(|()| index.sync_data()),
                 index_path,
             ) {
                 return false;
@@ -1247,8 +1247,8 @@ impl Kura {
                         .and_then(|_| {
                             index_file.write_all(&SidecarIndexLayout::base_header(intent.height))
                         })
-                        .and_then(|_| index_file.set_len(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64))
-                        .and_then(|_| index_file.sync_data()),
+                        .and_then(|()| index_file.set_len(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64))
+                        .and_then(|()| index_file.sync_data()),
                     index_path,
                 ) {
                     return false;
@@ -1611,7 +1611,7 @@ impl Kura {
                 kind,
                 "failed to sync progress recovery index"
             );
-            storage.retain_failure(Error::IO(error, (&temp_index_path).to_path_buf()));
+            storage.retain_failure(Error::IO(error, temp_index_path.clone()));
             return false;
         }
         if !Self::sync_bound_progress_mutation_directories_with_io(namespace, kind, storage) {
@@ -3317,30 +3317,29 @@ impl Kura {
             );
         }
         let mut new_index_bytes = Vec::new();
-        let (layout, index_write_offset) = match layout {
-            Some(layout) => (layout, old_index_len),
-            None => {
-                new_index_bytes
-                    .extend_from_slice(&SidecarIndexLayout::base_header(initial_base_height));
-                let layout = match SidecarIndexLayout::based(
-                    initial_base_height,
-                    INDEXED_SIDECAR_BASE_HEADER_SIZE_U64,
-                ) {
-                    Ok(layout) => layout,
-                    Err(reason) => {
-                        warn!(
-                            reason,
-                            height,
-                            ?index_path,
-                            kind,
-                            "invalid initial progress index base"
-                        );
-                        storage.retain_classification(BoundProgressRecoveryFailure::InvalidData);
-                        return false;
-                    }
-                };
-                (layout, 0)
-            }
+        let (layout, index_write_offset) = if let Some(layout) = layout {
+            (layout, old_index_len)
+        } else {
+            new_index_bytes
+                .extend_from_slice(&SidecarIndexLayout::base_header(initial_base_height));
+            let layout = match SidecarIndexLayout::based(
+                initial_base_height,
+                INDEXED_SIDECAR_BASE_HEADER_SIZE_U64,
+            ) {
+                Ok(layout) => layout,
+                Err(reason) => {
+                    warn!(
+                        reason,
+                        height,
+                        ?index_path,
+                        kind,
+                        "invalid initial progress index base"
+                    );
+                    storage.retain_classification(BoundProgressRecoveryFailure::InvalidData);
+                    return false;
+                }
+            };
+            (layout, 0)
         };
         let Some(expected_height) = layout.next_height() else {
             return false;
@@ -3480,7 +3479,7 @@ impl Kura {
             return false;
         }
         let Some(intent_file) = Self::publish_bound_progress_append_intent_with_io(
-            namespace, index_path, &intent, kind, storage,
+            namespace, index_path, intent, kind, storage,
         ) else {
             return false;
         };
@@ -3608,7 +3607,7 @@ impl Kura {
                 kind,
                 "failed to clear completed progress append intent"
             );
-            storage.retain_failure(Error::IO(error, (&intent_path).to_path_buf()));
+            storage.retain_failure(Error::IO(error, intent_path.clone()));
             return false;
         }
         if let Err(error) = Self::sync_bound_progress_intent_directories(namespace) {
@@ -3618,7 +3617,7 @@ impl Kura {
                 kind,
                 "failed to sync completed append-intent cleanup"
             );
-            storage.retain_failure(Error::IO(error, (&intent_path).to_path_buf()));
+            storage.retain_failure(Error::IO(error, intent_path.clone()));
             return false;
         }
         Self::progress_mutation_namespace_unchanged(namespace)

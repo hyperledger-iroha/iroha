@@ -376,9 +376,6 @@ fn merge_identity_index_preserves_first_admitted_work_without_rehashing_carriers
 
 #[test]
 fn funded_merge_index_refuses_one_short_retries_same_source_and_releases_after_state_reads() {
-    // Keep constructor-retired State generations outside this operation's
-    // original-pool refusal and synchronous refund observations.
-    let _state_retirement = crossbeam_epoch::pin();
     use std::{
         alloc::Layout,
         sync::atomic::{AtomicUsize, Ordering},
@@ -515,6 +512,9 @@ fn funded_merge_index_refuses_one_short_retries_same_source_and_releases_after_s
             self.stores.wait_for(lane, incarnation, height, timeout)
         }
     }
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     let mut fixture = Fixture::start();
     fixture.chain.commit(Vec::new());
     fixture.chain.commit(Vec::new());

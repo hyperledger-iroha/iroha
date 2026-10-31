@@ -582,7 +582,7 @@ mod rs16_hold {
     };
     use tokio::sync::broadcast;
 
-    pub(super) fn exact_processes(network: &Network, rt: &Runtime) -> Result<Vec<(u32, usize)>> {
+    pub fn exact_processes(network: &Network, rt: &Runtime) -> Result<Vec<(u32, usize)>> {
         let snapshots = network.startup_snapshot();
         network
             .all_peers()
@@ -616,7 +616,7 @@ mod rs16_hold {
             .collect()
     }
 
-    pub(super) fn observer_held(peer: &NetworkPeer, height: u64, deadline: Instant) -> Result<()> {
+    pub fn observer_held(peer: &NetworkPeer, height: u64, deadline: Instant) -> Result<()> {
         let status = peer
             .client()
             .with_request_deadline(deadline)?
@@ -629,7 +629,7 @@ mod rs16_hold {
         Ok(())
     }
 
-    pub(super) fn wait_applied(
+    pub fn wait_applied(
         network: &Network,
         height: u64,
         deadline: Instant,
@@ -668,7 +668,7 @@ mod rs16_hold {
         }
     }
 
-    pub(super) fn balances(
+    pub fn balances(
         network: &Network,
         ids: &[AssetId; 2],
         deadline: Instant,
@@ -705,7 +705,7 @@ mod rs16_hold {
     }
 
     /// Observe the actual fee-asset supply on every validator within the original deadline.
-    pub(super) fn supply(
+    pub fn supply(
         network: &Network,
         id: &AssetDefinitionId,
         deadline: Instant,
@@ -730,7 +730,7 @@ mod rs16_hold {
         original.ok_or_else(|| eyre!("validator fee supply observations absent"))
     }
 
-    pub(super) fn certified_at(
+    pub fn certified_at(
         network: &Network,
         peer: &NetworkPeer,
         height: u64,
@@ -840,7 +840,7 @@ mod rs16_hold {
         Ok(bytes)
     }
 
-    pub(super) fn verify_observer_rows(
+    pub fn verify_observer_rows(
         network: &Network,
         peer: &NetworkPeer,
         pid: u32,
@@ -922,7 +922,7 @@ mod rs16_hold {
         Ok(verified)
     }
 
-    pub(super) fn clean_exits(
+    pub fn clean_exits(
         network: &Network,
         rt: &Runtime,
         exits: &mut [broadcast::Receiver<PeerLifecycleEvent>],

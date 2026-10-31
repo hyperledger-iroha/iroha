@@ -3279,6 +3279,10 @@ pub mod handles {
     use iroha_primitives::addr::SocketAddr;
     /// Start Peer in `state::Connecting` state
     #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "the spawned peer task owns its consensus capability snapshot"
+    )]
     pub(crate) fn connecting<T: Pload + crate::network::message::ClassifyTopic, E: Enc>(
         peer_addr: SocketAddr,
         peer_id: iroha_model_base::peer::PeerId,
@@ -3368,6 +3372,10 @@ pub mod handles {
     }
     /// Start Peer in `state::ConnectedFrom` state
     #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "the spawned peer task owns its consensus capability snapshot"
+    )]
     pub(crate) fn connected_from<T: Pload + crate::network::message::ClassifyTopic, E: Enc>(
         our_public_address: SocketAddr,
         key_pair: Arc<KeyPair>,

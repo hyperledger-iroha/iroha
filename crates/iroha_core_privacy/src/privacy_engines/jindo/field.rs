@@ -90,10 +90,8 @@ impl JindoFieldElementV1 {
     /// Decode one canonical 32-byte little-endian residue.
     pub(crate) fn from_canonical_bytes(bytes: [u8; 32]) -> Option<Self> {
         let mut limbs = [0_u64; 4];
-        for (limb, chunk) in limbs.iter_mut().zip(bytes.chunks_exact(8)) {
-            let mut word = [0_u8; 8];
-            word.copy_from_slice(chunk);
-            *limb = u64::from_le_bytes(word);
+        for (limb, chunk) in limbs.iter_mut().zip(bytes.as_chunks::<8>().0) {
+            *limb = u64::from_le_bytes(*chunk);
         }
         if !Self::less_than(limbs, Self::MODULUS) {
             return None;

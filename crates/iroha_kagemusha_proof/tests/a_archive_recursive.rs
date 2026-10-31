@@ -187,7 +187,7 @@ impl Cells {
                 iroha_plonk_gadgets::bytes::element::LeElement::assign(
                     &mut chip.uint(),
                     region,
-                    self.value(chunk.try_into().map_err(|_| Error::Synthesis)?),
+                    self.value(*chunk),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;

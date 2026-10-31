@@ -27,7 +27,7 @@ pub(super) struct ObservationCustody {
     _lease: Mutex<Box<dyn WorkflowRunnerLease>>,
 }
 pub(super) enum PaymentProof {
-    Response(super::super::SumeragiFinalityProofResponse),
+    Response(Box<super::super::SumeragiFinalityProofResponse>),
     #[cfg(test)]
     Fixture(Box<SumeragiFinalityProof>),
 }
@@ -172,7 +172,7 @@ impl PaymentSource for OnlinePaymentSource {
                 .client()
                 .read_sumeragi_finality_proof_response_async(height, SumeragiRootScope::Global)
                 .await
-                .map(PaymentProof::Response)
+                .map(|response| PaymentProof::Response(Box::new(response)))
                 .map_err(NativePaymentObservationError::Transport)
         })
     }

@@ -8539,7 +8539,7 @@ pub fn stage_taira_inrou_canary_deployment(
         }
         #[cfg(windows)]
         let source_metadata = &source_guards;
-        let source_sizes = source_metadata.iter().map(|metadata| metadata.len());
+        let source_sizes = source_metadata.iter().map(std::fs::Metadata::len);
         taira_stage_guest_total_bytes(source_sizes.clone())?;
         let rootfs_source_bytes = logical_member_paths
             .iter()
@@ -9872,34 +9872,6 @@ fn taira_stage_owned_file_bytes(path: &Path, description: &str, max_bytes: u64) 
     Ok(bytes)
 }
 fn validate_exact_taira_stage_tree(stage_dir: &Path, member_paths: &[String]) -> Result<()> {
-    let mut expected = BTreeMap::<PathBuf, bool>::new();
-    for directory in [
-        PathBuf::from("manifests"),
-        PathBuf::from("payloads"),
-        PathBuf::from(TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1),
-        PathBuf::from(TAIRA_INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1),
-    ] {
-        expected.insert(directory, true);
-    }
-    for file in [
-        TAIRA_INROU_STAGE_RECEIPT_FILE_V1,
-        TAIRA_INROU_STAGE_CONTAINER_FILE_V1,
-        TAIRA_INROU_STAGE_SERVICE_FILE_V1,
-        TAIRA_INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1,
-        TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
-        TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1,
-        TAIRA_INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
-        TAIRA_INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1,
-    ] {
-        expected.insert(PathBuf::from(file), false);
-    }
-    for logical_path in taira_stage_logical_member_paths(member_paths)? {
-        let mut relative = PathBuf::from(TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1);
-        for (index, component) in logical_path.iter().enumerate() {
-            relative.push(component);
-            expected.insert(relative.clone(), index + 1 != logical_path.len());
-        }
-    }
     #[cfg(not(windows))]
     fn visit(
         stage_dir: &Path,
@@ -9943,6 +9915,34 @@ fn validate_exact_taira_stage_tree(stage_dir: &Path, member_paths: &[String]) ->
     ) -> Result<()> {
         let directory = iroha_fs::PrivateDirectory::open(stage_dir.join(relative_dir))?;
         taira_stage_windows::visit_private_tree(&directory, relative_dir, expected, seen)
+    }
+    let mut expected = BTreeMap::<PathBuf, bool>::new();
+    for directory in [
+        PathBuf::from("manifests"),
+        PathBuf::from("payloads"),
+        PathBuf::from(TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1),
+        PathBuf::from(TAIRA_INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1),
+    ] {
+        expected.insert(directory, true);
+    }
+    for file in [
+        TAIRA_INROU_STAGE_RECEIPT_FILE_V1,
+        TAIRA_INROU_STAGE_CONTAINER_FILE_V1,
+        TAIRA_INROU_STAGE_SERVICE_FILE_V1,
+        TAIRA_INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1,
+        TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
+        TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1,
+        TAIRA_INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
+        TAIRA_INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1,
+    ] {
+        expected.insert(PathBuf::from(file), false);
+    }
+    for logical_path in taira_stage_logical_member_paths(member_paths)? {
+        let mut relative = PathBuf::from(TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1);
+        for (index, component) in logical_path.iter().enumerate() {
+            relative.push(component);
+            expected.insert(relative.clone(), index + 1 != logical_path.len());
+        }
     }
     let mut seen = BTreeSet::new();
     visit(stage_dir, Path::new(""), &expected, &mut seen)?;

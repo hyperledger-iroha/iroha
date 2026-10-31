@@ -256,7 +256,7 @@ pub struct PreparedChaos {
     pub sorafs_provider_owners: BTreeMap<String, String>,
 }
 /// Author the complete selected recipe with explicit disposable Izanami custody.
-pub(crate) fn nexus_staking_policy(profile: &NexusProfile) -> Result<PublicLaneStakingPolicy> {
+pub fn nexus_staking_policy(profile: &NexusProfile) -> Result<PublicLaneStakingPolicy> {
     let mut policy = profile.staking_policy.clone();
     policy.validate()?;
     let custody = nexus_gas_account_id()?;
@@ -264,7 +264,7 @@ pub(crate) fn nexus_staking_policy(profile: &NexusProfile) -> Result<PublicLaneS
     policy.slash_sink_account_id = custody;
     Ok(policy)
 }
-/// Build post-topology NPoS bootstrap instructions using the complete original policy.
+/// Build post-topology `NPoS` bootstrap instructions using the complete original policy.
 /// The declared stake must already satisfy its minimum; this function never increases it.
 pub fn npos_post_topology_instructions(
     peer_count: usize,

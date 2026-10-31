@@ -307,7 +307,7 @@ fn replay_never_starts_below_the_upgrade_checkpoint() {
         let destination = genesis_destination(&chain, &seed);
         destination
             .kura()
-            .set_upgrade_checkpoint(UpgradeCheckpointV1 {
+            .set_upgrade_checkpoint(&UpgradeCheckpointV1 {
                 height: 2,
                 block_hash: chain.kura().get_block_hash(index(2)).unwrap(),
                 signer: None,

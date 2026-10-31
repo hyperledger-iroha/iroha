@@ -53,7 +53,7 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
     {
         let mut segments = assets_url
             .path_segments_mut()
-            .map_err(|_| eyre::eyre!("torii URL cannot accept path segments"))?;
+            .map_err(|()| eyre::eyre!("torii URL cannot accept path segments"))?;
         segments.pop_if_empty();
         segments.push("v1");
         segments.push("accounts");
@@ -115,7 +115,7 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
     {
         let mut segments = tx_url
             .path_segments_mut()
-            .map_err(|_| eyre::eyre!("torii URL cannot accept path segments"))?;
+            .map_err(|()| eyre::eyre!("torii URL cannot accept path segments"))?;
         segments.pop_if_empty();
         segments.push("v1");
         segments.push("accounts");

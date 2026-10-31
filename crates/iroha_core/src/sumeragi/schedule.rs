@@ -37,9 +37,9 @@ pub use iroha_data_model::sumeragi_finality::{
 pub(crate) mod continuation;
 mod epoch_graph;
 mod execution;
-pub(crate) use execution::{
-    authenticate_successor_context, compare_successor_context, require_successor_cut,
-};
+#[cfg(test)]
+pub(crate) use execution::authenticate_successor_context;
+pub(crate) use execution::{compare_successor_context, require_successor_cut};
 mod retained;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) mod test_support;

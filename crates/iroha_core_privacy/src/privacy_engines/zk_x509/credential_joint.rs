@@ -201,9 +201,9 @@ impl JointOriginalOpeningsV1 {
             .main
             .iter()
             .chain(&self.ca)
-            .zip(bytes.chunks_exact_mut(32))
+            .zip(bytes.as_chunks_mut::<32>().0.iter_mut())
         {
-            target.copy_from_slice(&value.to_be_bytes());
+            *target = value.to_be_bytes();
         }
         Ok(bytes)
     }
@@ -219,10 +219,9 @@ impl JointOriginalOpeningsV1 {
             .main
             .iter_mut()
             .chain(&mut values.ca)
-            .zip(bytes.chunks_exact(32))
+            .zip(bytes.as_chunks::<32>().0)
         {
-            *target = E::canonical_be_bytes(source.try_into().map_err(|_| Error::MalformedProof)?)
-                .ok_or(Error::MalformedProof)?;
+            *target = E::canonical_be_bytes(*source).ok_or(Error::MalformedProof)?;
         }
         Ok(values)
     }

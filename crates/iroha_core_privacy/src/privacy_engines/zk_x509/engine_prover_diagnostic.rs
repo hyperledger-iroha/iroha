@@ -964,6 +964,10 @@ fn holder_refusal_category_v1(
 
 // A fresh diagnostic directory may contain only one real encoded candidate.
 // The existing reader checks its exact digest name, file kind and byte cap.
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "only the exact lowercase names this diagnostic writes are candidates"
+)]
 fn read_single_public_candidate_v1(directory: &Path) -> io::Result<Vec<u8>> {
     let mut candidate = None;
     for entry in fs::read_dir(directory)? {

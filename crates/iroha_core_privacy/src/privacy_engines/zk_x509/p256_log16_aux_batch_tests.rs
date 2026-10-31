@@ -272,7 +272,10 @@ fn log16_auxiliary_batches_preserve_source_token_and_terminal_refusals() {
 #[test]
 #[ignore = "optimized full-shape log16 construction/replay cost diagnostic"]
 fn log16_auxiliary_batch_cost_diagnostic() {
-    assert!(!cfg!(debug_assertions), "run in release mode");
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "run in release mode"
+    );
     let mut base = p256_main_base_source_fixture_for_test_v1().unwrap();
     let bound = base.bind_v1(&super::tests::main_post_base_v1(83)).unwrap();
     for adapter in [

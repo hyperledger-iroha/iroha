@@ -623,7 +623,7 @@ fn provisioning_request_has_closed_fields_and_explicit_worker_selection() {
         "observation_credential":"/private/transport", "observation_tls_root":null,
         "worker":worker, "android": {"package_name":"org.example.wallet", "minimum_package_version":1,
             "signing_certificates_der":[(original.clone())], "roots":[{"family":"google-ca1", "spki":original}],
-            "patch_floor_yyyymm":202610}, "maximum_response_ms":5000, "challenge_lifetime_ms":120000});
+            "patch_floor_yyyymm":202_610}, "maximum_response_ms":5000, "challenge_lifetime_ms":120_000});
     let decode = |value: &Value| decode_request(&norito::json::to_vec(value).unwrap());
     assert!(decode(&value).is_ok());
     for case in 0..9 {

@@ -266,10 +266,10 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> SseReader {
                         Err(err) if is_read_timeout(&err) => continue,
                         Err(_) => break,
                         Ok(_) => {
-                            if let Some(rest) = parse_sse_data_line(&line) {
-                                if tx.send(rest.to_owned()).is_err() {
-                                    return;
-                                }
+                            if let Some(rest) = parse_sse_data_line(&line)
+                                && tx.send(rest.to_owned()).is_err()
+                            {
+                                return;
                             }
                         }
                     }
@@ -335,10 +335,7 @@ fn is_read_timeout_matches_timeout_kinds() {
         ErrorKind::WouldBlock,
         "would block"
     )));
-    assert!(!is_read_timeout(&std::io::Error::new(
-        ErrorKind::Other,
-        "other"
-    )));
+    assert!(!is_read_timeout(&std::io::Error::other("other")));
 }
 #[test]
 fn parse_sse_data_line_accepts_optional_space() {

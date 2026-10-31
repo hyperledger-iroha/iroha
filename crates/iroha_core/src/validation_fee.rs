@@ -1455,7 +1455,7 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
 pub(crate) fn enforce_opaque_deferred_instruction_views<'a>(
     groups: impl Iterator<Item = (&'a AccountId, &'a InstructionBox)> + Clone,
     group_count: usize,
-    ordered: impl Iterator<Item = (&'a AccountId, &'a InstructionBox)> + Clone,
+    ordered: &(impl Iterator<Item = (&'a AccountId, &'a InstructionBox)> + Clone),
     stx: &mut StateTransaction<'_, '_>,
     origin: Option<OpaqueDeferredRuntimeOrigin<'_>>,
 ) -> Result<OpaqueDeferredValidationOutcome, TransactionRejectionReason> {

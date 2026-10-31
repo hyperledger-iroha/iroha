@@ -231,7 +231,7 @@ const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
 const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
 const NETWORK_PERMIT_WAIT_TIMEOUT_ENV: &str = "IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT";
 const NETWORK_START_ATTEMPTS_ENV: &str = "IROHA_TEST_NETWORK_START_ATTEMPTS";
-const NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT: Duration = Duration::from_secs(5 * 60);
+const NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT: Duration = Duration::from_mins(5);
 /// Test-only switch that turns a sandbox-related network skip into a test failure.
 pub const REQUIRE_NETWORK_ENV: &str = "IROHA_TEST_REQUIRE_NETWORK";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -882,11 +882,10 @@ mod tests {
             if in_use == 0 {
                 return;
             }
-            if start.elapsed() >= timeout {
-                panic!(
-                    "{context}: timed out waiting for network permits to drain; {in_use} still in use"
-                );
-            }
+            assert!(
+                start.elapsed() < timeout,
+                "{context}: timed out waiting for network permits to drain; {in_use} still in use"
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
     }
@@ -1325,8 +1324,7 @@ mod tests {
                         drop(network);
                         if retry {
                             eprintln!(
-                                "warning: serialized_network_drop_completes_on_current_thread_runtime fresh startup attempt {attempt}/{NETWORK_START_ATTEMPTS} failed with retryable error; rebuilding in {:?}: {err}",
-                                NETWORK_START_RETRY_DELAY
+                                "warning: serialized_network_drop_completes_on_current_thread_runtime fresh startup attempt {attempt}/{NETWORK_START_ATTEMPTS} failed with retryable error; rebuilding in {NETWORK_START_RETRY_DELAY:?}: {err}"
                             );
                             tokio::time::sleep(NETWORK_START_RETRY_DELAY).await;
                             continue;

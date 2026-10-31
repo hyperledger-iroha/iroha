@@ -7,7 +7,7 @@ fn binding(
     owner: &Arc<FilePrivateSettlementFinality>,
     native: &NativeFinalityFixture,
 ) -> BoundPrivateSettlementFinality {
-    owner
+    Arc::clone(owner)
         .bind(
             WorkflowId::from_bytes([11; 32]),
             [12; 32],
@@ -111,7 +111,7 @@ fn pending_finality_custody_binds_key_workflow_request_and_independent_root() {
     let record = prefix(&native, 2);
     selected.compare_and_publish(None, &record).unwrap();
     let original = std::fs::read(path.join(selected.name())).unwrap();
-    let changed_request = owner
+    let changed_request = Arc::clone(&owner)
         .bind(
             WorkflowId::from_bytes([11; 32]),
             [20; 32],
@@ -119,7 +119,7 @@ fn pending_finality_custody_binds_key_workflow_request_and_independent_root() {
         )
         .unwrap();
     assert!(matches!(changed_request.load(), Err(Error::Binding)));
-    let changed_workflow = owner
+    let changed_workflow = Arc::clone(&owner)
         .bind(
             WorkflowId::from_bytes([21; 32]),
             [12; 32],

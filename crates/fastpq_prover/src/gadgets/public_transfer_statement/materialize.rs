@@ -234,7 +234,6 @@ impl DerivedTransferSmtWitnesses {
     /// from distinct occurrences remain distinct iterator entries.
     ///
     /// These local touched-tree roots do not authenticate source finality.
-    #[must_use]
     pub fn intermediate_roots(
         &self,
     ) -> impl ExactSizeIterator<Item = [u8; 32]> + DoubleEndedIterator + '_ {

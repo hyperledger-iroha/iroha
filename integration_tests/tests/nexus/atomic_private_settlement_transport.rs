@@ -6,7 +6,7 @@ use norito::json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub(super) struct Expected {
+pub struct Expected {
     pub process_id: u32,
     pub instance: String,
     pub height: u64,
@@ -28,18 +28,18 @@ pub(super) struct Expected {
 
 /// Exact audit bytes and their offsets in the source-bound process log prefix.
 #[derive(Debug, norito::JsonSerialize)]
-pub(super) struct AuditLine {
+pub struct AuditLine {
     pub offset: usize,
     pub line: String,
 }
 
-pub(super) struct Verified {
+pub struct Verified {
     pub admitted_rows: usize,
     pub audit_lines: Vec<AuditLine>,
 }
 
 /// A filesystem maximum run number is not the owned process's current run.
-pub(super) fn current_run_log(
+pub fn current_run_log(
     peer_dir: &Path,
     live_run: Option<usize>,
     stdout: &Path,
@@ -76,7 +76,7 @@ struct Rows {
 /// Require actual distinct authenticated row admission, then successful reconstruction,
 /// then the same process applying the independently certified decision. An author may use
 /// its own actual authored codeword. Storage restoration supplies neither observation.
-pub(super) fn verify(log: &[u8], expected: &Expected) -> Result<Verified> {
+pub fn verify(log: &[u8], expected: &Expected) -> Result<Verified> {
     ensure!(log.len() <= 64 * 1024 * 1024, "transport log exceeds bound");
     ensure!(
         expected.process_id > 0

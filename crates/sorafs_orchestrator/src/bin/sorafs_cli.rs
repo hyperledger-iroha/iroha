@@ -21383,10 +21383,10 @@ fn parse_hex_vec(input: &str) -> Result<Vec<u8>, String> {
         return Err("hex string must contain an even number of characters".into());
     }
     let mut out = Vec::with_capacity(input.len() / 2);
-    let mut iter = input.as_bytes().chunks_exact(2);
-    for pair in &mut iter {
-        let hi = hex_value(pair[0])?;
-        let lo = hex_value(pair[1])?;
+    let (pairs, _) = input.as_bytes().as_chunks::<2>();
+    for &[hi, lo] in pairs {
+        let hi = hex_value(hi)?;
+        let lo = hex_value(lo)?;
         out.push((hi << 4) | lo);
     }
     Ok(out)

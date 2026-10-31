@@ -1583,7 +1583,7 @@ fn list_receipts_for_account(
         records.retain(|cached| cached.lease_id_hex != lease_id_hex);
         records.push(record);
     }
-    records.sort_by(|left, right| right.disconnected_at_ms.cmp(&left.disconnected_at_ms));
+    records.sort_by_key(|record| std::cmp::Reverse(record.disconnected_at_ms));
     records.truncate(MAX_RECEIPTS_PER_ACCOUNT);
     Ok(records.iter().map(receipt_response_from_record).collect())
 }

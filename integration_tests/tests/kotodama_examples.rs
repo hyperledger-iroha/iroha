@@ -33,9 +33,7 @@ fn on_path(bin: &str) -> Option<PathBuf> {
 #[cfg(unix)]
 fn is_executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    fs::metadata(p)
-        .map(|m| m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+    fs::metadata(p).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
 }
 #[cfg(windows)]
 fn is_executable(p: &Path) -> bool {

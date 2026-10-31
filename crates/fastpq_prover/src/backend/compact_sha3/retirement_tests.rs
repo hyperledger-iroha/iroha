@@ -315,7 +315,8 @@ fn private_frame_storage_is_exact_guarded_and_preserves_canonical_bytes() {
             assert_eq!(&*encoded, expected);
             assert_eq!(encoded.len(), norito::canonical_frame_len(&frame).unwrap());
             let mut short = SecretPolynomial::<u8>::zeroed(encoded.len() - 1).unwrap();
-            assert!(norito::core::write_canonical_to_writer(&frame, &mut &mut short[..]).is_err());
+            let mut writer = &mut short[..];
+            assert!(norito::core::write_canonical_to_writer(&frame, &mut writer).is_err());
         }
     }
 }

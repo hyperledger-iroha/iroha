@@ -51,7 +51,7 @@ pub struct PreparedStartup {
 ///
 /// Dynamic QC/TC verification uses bounded stack pairing storage; on such a build every
 /// valid certificate would fail as a bad signature, so the node must not start.
-pub(super) fn refuse_unsupported_consensus_pairing<E: std::fmt::Display>(
+pub fn refuse_unsupported_consensus_pairing<E: std::fmt::Display>(
     check: Result<(), E>,
 ) -> ReportResult<(), StartError> {
     check.map_err(|error| Report::new(StartError::ConsensusPairing).attach(error.to_string()))
@@ -251,7 +251,7 @@ impl PreparedStartup {
                 iroha_core::state::upgrade_checkpoint::UpgradeCheckpointV1::from_config(&checkpoint)
             });
         if let Some(checkpoint) = &upgrade_checkpoint {
-            kura.set_upgrade_checkpoint(checkpoint.clone())
+            kura.set_upgrade_checkpoint(checkpoint)
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
         }
         let mut loaded_state_from_snapshot = false;

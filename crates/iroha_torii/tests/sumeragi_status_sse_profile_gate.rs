@@ -102,5 +102,4 @@ async fn status_sse_restricted_under_operator_profile() {
     runtime.shutdown().await;
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

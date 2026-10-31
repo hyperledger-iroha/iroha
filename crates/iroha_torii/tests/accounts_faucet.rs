@@ -1,5 +1,6 @@
 //! Torii account faucet tests.
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::{body::to_bytes, http::Request, response::Response};
 use http::StatusCode;
 use iroha_core::{
@@ -38,8 +39,6 @@ use std::{
     sync::Arc,
 };
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
 #[path = "accounts_faucet_policy_tests.rs"]
 mod policy_tests;
 struct FaucetTestContext {
@@ -123,15 +122,23 @@ fn build_faucet_test_context_with_enabled(
         faucet_selector,
         register_user,
         faucet_enabled,
-        false,
+        FaucetIngress::NonAuthoritative,
     )
+}
+/// Whether the fixture Torii names its local peer as the authoritative faucet ingress.
+#[derive(Clone, Copy)]
+enum FaucetIngress {
+    /// No local peer identity, so faucet writes have no authoritative route.
+    NonAuthoritative,
+    /// The fixture peer routes faucet writes authoritatively.
+    Authoritative,
 }
 fn build_faucet_test_context_with_authority(
     prefund_user: bool,
     faucet_selector: Option<&str>,
     register_user: bool,
     faucet_enabled: bool,
-    authoritative: bool,
+    ingress: FaucetIngress,
 ) -> FaucetTestContext {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let data_dir = tempfile::tempdir().expect("isolated faucet Torii persistence");
@@ -251,19 +258,19 @@ fn build_faucet_test_context_with_authority(
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
         .expect("valid default consensus parameters");
-    if let Some(selector) = faucet_selector {
-        if selector != canonical_selector {
-            let alias: AssetDefinitionAlias = selector.parse().expect("asset alias");
-            let mut block = world.block();
-            let mut tx = block.transaction_without_telemetry(
-                iroha_config::parameters::actual::LaneConfig::default(),
-                0,
-            );
-            tx.bind_asset_definition_alias(&asset_definition_id, &(alias), None, None, 10_000)
-                .expect("bind alias");
-            tx.apply();
-            block.commit();
-        }
+    if let Some(selector) = faucet_selector
+        && selector != canonical_selector
+    {
+        let alias: AssetDefinitionAlias = selector.parse().expect("asset alias");
+        let mut block = world.block();
+        let mut tx = block.transaction_without_telemetry(
+            iroha_config::parameters::actual::LaneConfig::default(),
+            0,
+        );
+        tx.bind_asset_definition_alias(&asset_definition_id, &(alias), None, None, 10_000)
+            .expect("bind alias");
+        tx.apply();
+        block.commit();
     }
     let mut seed_instructions: Vec<InstructionBox> = vec![
         Mint::asset_quantity(
@@ -290,7 +297,7 @@ fn build_faucet_test_context_with_authority(
                 peer_id: PeerId::new(key_pair.public_key().clone()),
                 stake_account: validator.clone(),
                 initial_stake: Quantity::from(1_000_u32),
-                metadata: Default::default(),
+                metadata: iroha_model_base::metadata::Metadata::default(),
                 monetary_plan: PublicLaneMonetaryPlanV1::genesis_registration(
                     AssetId::new(stake_asset_id.clone(), validator.clone()),
                     AssetId::new(stake_asset_id.clone(), escrow_id.clone()),
@@ -428,10 +435,9 @@ fn build_faucet_test_context_with_authority(
         ),
     )
     .expect("valid Torii faucet fixture");
-    let torii = if authoritative {
-        torii.with_local_peer_id(local_peer_id)
-    } else {
-        torii
+    let torii = match ingress {
+        FaucetIngress::Authoritative => torii.with_local_peer_id(local_peer_id),
+        FaucetIngress::NonAuthoritative => torii,
     };
     FaucetTestContext {
         native_chain: parking_lot::Mutex::new(native_chain),
@@ -1504,12 +1510,17 @@ async fn accounts_faucet_puzzle_ignores_uncertified_claim() {
     app.shutdown().await;
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;
 
 #[tokio::test]
 async fn authoritative_faucet_submission_executes_the_exact_prepared_transfer() {
-    let context = build_faucet_test_context_with_authority(false, None, false, true, true);
+    let context = build_faucet_test_context_with_authority(
+        false,
+        None,
+        false,
+        true,
+        FaucetIngress::Authoritative,
+    );
     let params = faucet_pow_scrypt_params(
         context.pow_scrypt_log_n,
         context.pow_scrypt_r,

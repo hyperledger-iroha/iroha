@@ -82,7 +82,7 @@ async fn request_empty(
     uri: impl AsRef<str>,
 ) -> axum::response::Response {
     torii_fixtures::request(
-        &app,
+        app,
         Request::builder()
             .uri(uri.as_ref())
             .method(method)
@@ -93,7 +93,7 @@ async fn request_empty(
     .expect("json response")
 }
 async fn get(app: &Router, uri: impl AsRef<str>) -> axum::response::Response {
-    torii_fixtures::request(&app, torii_fixtures::get_request(&(uri.as_ref())))
+    torii_fixtures::request(app, torii_fixtures::get_request((uri.as_ref())))
         .await
         .expect("get response")
 }

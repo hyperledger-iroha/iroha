@@ -693,10 +693,13 @@ history survive.
 3. **Import.** The foundation release reads the predecessor's State at `H` and checks the World
    against block `H`'s certified World root under the predecessor's root rule. It maps every
    predecessor field onto a storage definition of the baseline catalog; a field the foundation
-   retired must be empty, so nothing is dropped, except the retired `runtime_upgrades` table,
-   which may hold only adoption authorizations. Their entries enter the predecessor's root, so
-   the certified root proves them, and exactly one must authorize this selection at `H`: activated
-   at its start height `A` with `A < H < E`. The import refuses otherwise; node configuration
+   retired must be empty, so nothing is dropped, except the retired `runtime_upgrades` table.
+   Its entries enter the predecessor's root, so the certified root proves them, and exactly one
+   must authorize this selection at `H`: activated at its start height `A` with `A < H < E`. The
+   predecessor never removes a record and activates a proposal only at its start height, so its
+   other records are settled history the anchored root still commits to, except a proposal
+   starting after `H`: that is pending governance, which the predecessor cancels before `H`
+   rather than the import discarding it. The import refuses otherwise; node configuration
    (`snapshot.upgrade_checkpoint`) only locates `H` and its snapshot. State outside the World root
    (transaction membership, commit topologies, the canonical runtime; finding G1-D2) comes from
    the predecessor's signed snapshot. Its correctness rests on the authorization and on every

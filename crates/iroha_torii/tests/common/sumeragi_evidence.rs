@@ -20,7 +20,7 @@ fn keys(seed: u8) -> Vec<KeyPair> {
     keys
 }
 /// Build two original conflicting Prepare votes signed by the same native committee key.
-pub(super) fn make_phase_vote_evidence(height: u64, seed: u8) -> Evidence {
+pub fn make_phase_vote_evidence(height: u64, seed: u8) -> Evidence {
     assert!(height > 0);
     let keys = keys(seed);
     let vote = |subject: u8| {
@@ -51,7 +51,7 @@ pub(super) fn make_phase_vote_evidence(height: u64, seed: u8) -> Evidence {
     .expect("canonical native pair")
 }
 /// Matching explicit fixture attribution; only Core history verification may produce admitted records.
-pub(super) fn make_phase_vote_attribution(height: u64, seed: u8) -> EvidenceAttribution {
+pub fn make_phase_vote_attribution(height: u64, seed: u8) -> EvidenceAttribution {
     EvidenceAttribution {
         scope: iroha_data_model::block::consensus::EvidenceScope::Root,
         instance: [seed; 32],

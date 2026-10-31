@@ -1,4 +1,4 @@
-//! Four-validator regressions for SoraFS moderation proof admission, sortition and bond settlement.
+//! Four-validator regressions for `SoraFS` moderation proof admission, sortition and bond settlement.
 
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
@@ -1695,7 +1695,9 @@ fn moderation_ledger_comparison_preserves_enrollment_counters() -> Result<()> {
         finalized_block_hash: [1; 32],
         finalized_at_unix_ms: 1,
         policy: None,
-        status: Some(Default::default()),
+        status: Some(
+            iroha_data_model::sorafs::moderation_ledger::ModerationLedgerStatusV1::default(),
+        ),
         appeals: Vec::new(),
         cases: Vec::new(),
         events: Vec::new(),

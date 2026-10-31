@@ -4818,9 +4818,8 @@ impl Iroha {
                     iroha_logger::error!(?err, "Torii failed to terminate gracefully");
                     shutdown_on_failure.send();
                     std::process::exit(1);
-                } else {
-                    iroha_logger::debug!("Torii exited normally");
                 }
+                iroha_logger::debug!("Torii exited normally");
             }),
             OnShutdown::Wait(Duration::from_secs(5)),
         ));
@@ -6313,7 +6312,7 @@ fn insufficient_storage_headroom(
 }
 /// Basis points as a percentage, for operator messages.
 fn basis_points_percent(bps: u16) -> String {
-    if bps % 100 == 0 {
+    if bps.is_multiple_of(100) {
         format!("{}%", bps / 100)
     } else {
         format!("{}.{:02}%", bps / 100, bps % 100)
@@ -8345,9 +8344,7 @@ fn run_main_with_config_guard(
     // oversubscription with the IVM scheduler. Keep a slightly higher minimum
     // to prevent HTTP/p2p tasks from starving under consensus body/chunk load, and use the
     // available parallelism as the auto baseline instead of a fixed floor.
-    let auto_budget = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(4);
+    let auto_budget = std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get);
     let budget = if max > 0 {
         max
     } else if min > 0 {

@@ -90,7 +90,7 @@ pub(super) fn failed_execution(
     else {
         return Ok(None);
     };
-    verified.verify_global_scope(network.network_id(), &network.chain_id().to_string())?;
+    verified.verify_global_scope(network.network_id(), network.chain_id().as_ref())?;
     let input_index = u32::try_from(index)?;
     let entrypoint = block
         .network_entrypoint_at(index)
@@ -325,16 +325,17 @@ fn verify_bad_sigma(
     );
     let mut normalized = bad_sigma.clone();
     normalized.package.step_proof.bytes = claim.package.step_proof.bytes.clone();
-    normalized.package.receipt = claim.package.receipt.clone();
+    normalized.package.receipt = claim.package.receipt;
     ensure!(
         norito::encode_canonical(&normalized)? == claim_bytes,
         "negative fixture changed unrelated claim fields"
     );
     ensure!(
         matches!(
-            installed
-                .verifier()
-                .verify_package_proofs(&bad_sigma.package, Default::default()),
+            installed.verifier().verify_package_proofs(
+                &bad_sigma.package,
+                iroha_pasta::msm::MemoryBudget::default()
+            ),
             Err(iroha_core_zk::kagemusha_wallet_proofs_v1::Error::Proof)
         ),
         "model-valid negative must fail the actual installed proof verifier"
@@ -423,7 +424,7 @@ pub(super) fn run(
     // Genuine proof verification is mandatory even when no adversarial input is selected.
     installed
         .verifier()
-        .verify_package_proofs(&claim.package, Default::default())?;
+        .verify_package_proofs(&claim.package, iroha_pasta::msm::MemoryBudget::default())?;
     let bad_sigma_bytes = if let Some(selection) = adversarial_selection(command)? {
         let (_, bytes) = selected(
             selection,

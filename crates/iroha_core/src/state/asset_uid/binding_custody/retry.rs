@@ -253,6 +253,13 @@ impl BindingInvocation {
                 return Err(ExecutionAttemptError::Deferred(invariant()));
             }
             bank.last_read = Some(identity);
+            #[cfg_attr(
+                not(test),
+                expect(
+                    clippy::while_let_loop,
+                    reason = "test builds count each traversal before borrowing the current row"
+                )
+            )]
             loop {
                 #[cfg(test)]
                 {

@@ -63,7 +63,6 @@ fn npos_zero_field(
             zeroes[index] = matches!(raw, "0" | "-0");
         }
     }
-    drop(object);
     parser.finish_document()?;
     Ok(FIELDS
         .into_iter()

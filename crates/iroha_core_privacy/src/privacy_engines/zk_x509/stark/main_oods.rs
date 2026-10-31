@@ -366,7 +366,7 @@ fn main_deep_composition_v1(
                     return Err(ZkX509StarkErrorV1::ProfileMismatch);
                 }
                 let fixed = &prepared.rows[index];
-                evaluator.evaluate_residues_v1(opening, fixed, projection.challenges)?
+                evaluator.evaluate_residues_v1(opening, fixed, &projection.challenges)?
             }
             MainFp4AirEvaluatorV1::ByteMemory(evaluator) => {
                 if registration != io.registration {

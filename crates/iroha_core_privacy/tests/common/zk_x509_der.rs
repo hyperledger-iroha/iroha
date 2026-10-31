@@ -68,6 +68,7 @@ pub fn certificate(
     )
 }
 
+#[derive(Clone, Copy)]
 pub struct FixtureCertificateExtensionsV1<'a> {
     pub(super) subject_key_identifier: &'a [u8],
     pub(super) authority_key_identifier: &'a [u8],
@@ -299,7 +300,7 @@ pub fn sequence(values: &[Vec<u8>]) -> Vec<u8> {
 pub fn tlv(tag: u8, contents: &[u8]) -> Vec<u8> {
     let mut encoded = vec![tag];
     if contents.len() < 128 {
-        encoded.push(contents.len() as u8);
+        encoded.push(u8::try_from(contents.len()).expect("short DER length"));
     } else {
         let bytes = contents.len().to_be_bytes();
         let first = bytes
@@ -307,7 +308,7 @@ pub fn tlv(tag: u8, contents: &[u8]) -> Vec<u8> {
             .position(|byte| *byte != 0)
             .unwrap_or(bytes.len() - 1);
         let length = &bytes[first..];
-        encoded.push(0x80 | length.len() as u8);
+        encoded.push(0x80 | u8::try_from(length.len()).expect("DER length-of-length"));
         encoded.extend_from_slice(length);
     }
     encoded.extend_from_slice(contents);

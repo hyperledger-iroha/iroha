@@ -1,5 +1,6 @@
 //! Torii Nexus dataspaces account summary endpoint tests.
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::{body::Body, http::Request};
 use http::StatusCode;
 use http_body_util::BodyExt as _;
@@ -35,8 +36,6 @@ use norito::json::{self, Value};
 use std::{collections::HashSet, num::NonZeroU64, sync::Arc};
 use tokio::sync::broadcast;
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
 fn checked_nexus_dataspaces_summary_ed25519_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked Nexus dataspaces summary Ed25519 fixture keypair")
@@ -129,10 +128,10 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
         name: "xor".to_owned(),
         description: None,
         alias: None,
-        spec: Default::default(),
-        mintable: Default::default(),
+        spec: iroha_primitives::numeric::NumericSpec::default(),
+        mintable: iroha_data_model::asset::Mintable::default(),
         logo: None,
-        metadata: Default::default(),
+        metadata: iroha_model_base::metadata::Metadata::default(),
         balance_scope_policy: AssetBalancePolicy::Global,
         owning_domain: Some(domain_id.clone()),
     })
@@ -262,10 +261,10 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
         name: "rose".to_owned(),
         description: None,
         alias: None,
-        spec: Default::default(),
-        mintable: Default::default(),
+        spec: iroha_primitives::numeric::NumericSpec::default(),
+        mintable: iroha_data_model::asset::Mintable::default(),
         logo: None,
-        metadata: Default::default(),
+        metadata: iroha_model_base::metadata::Metadata::default(),
         balance_scope_policy: AssetBalancePolicy::Global,
         owning_domain: Some(domain_id.clone()),
     })
@@ -509,10 +508,10 @@ async fn nexus_dataspaces_summary_endpoint_prunes_uncataloged_state_and_preserve
         name: "lotus".to_owned(),
         description: None,
         alias: None,
-        spec: Default::default(),
-        mintable: Default::default(),
+        spec: iroha_primitives::numeric::NumericSpec::default(),
+        mintable: iroha_data_model::asset::Mintable::default(),
         logo: None,
-        metadata: Default::default(),
+        metadata: iroha_model_base::metadata::Metadata::default(),
         balance_scope_policy: AssetBalancePolicy::Global,
         owning_domain: Some(domain_id.clone()),
     })
@@ -714,10 +713,10 @@ async fn nexus_dataspaces_summary_endpoint_rebuilds_bindings_from_the_unique_uai
         name: "cedar".to_owned(),
         description: None,
         alias: None,
-        spec: Default::default(),
-        mintable: Default::default(),
+        spec: iroha_primitives::numeric::NumericSpec::default(),
+        mintable: iroha_data_model::asset::Mintable::default(),
         logo: None,
-        metadata: Default::default(),
+        metadata: iroha_model_base::metadata::Metadata::default(),
         balance_scope_policy: AssetBalancePolicy::Global,
         owning_domain: Some(domain_id.clone()),
     })

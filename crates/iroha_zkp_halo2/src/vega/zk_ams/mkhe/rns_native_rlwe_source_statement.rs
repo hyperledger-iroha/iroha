@@ -2247,13 +2247,13 @@ fn validate_canonical_plaintext_chunk_v1(
     if bytes.len() != ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_PLAINTEXT_BYTES_V1 as usize {
         return Err(RnsNativeRlweSourceStatementErrorV1::InvalidSourceEncoding);
     }
-    let mut coefficients = bytes.chunks_exact(CANONICAL_COEFFICIENT_BYTES_V1);
-    for coefficient in &mut coefficients {
-        if coefficient >= VEGA_T256_SCALAR_MODULUS_BE_V1.as_slice() {
+    let (coefficients, remainder) = bytes.as_chunks::<CANONICAL_COEFFICIENT_BYTES_V1>();
+    for coefficient in coefficients {
+        if coefficient.as_slice() >= VEGA_T256_SCALAR_MODULUS_BE_V1.as_slice() {
             return Err(RnsNativeRlweSourceStatementErrorV1::NonCanonicalPlaintext);
         }
     }
-    if !coefficients.remainder().is_empty() {
+    if !remainder.is_empty() {
         return Err(RnsNativeRlweSourceStatementErrorV1::InvalidSourceEncoding);
     }
     Ok(())
@@ -2270,13 +2270,9 @@ fn validate_signed_chunk_v1(
     {
         return Err(RnsNativeRlweSourceStatementErrorV1::InvalidSourceEncoding);
     }
-    let mut coefficients = bytes.chunks_exact(SIGNED_COEFFICIENT_BYTES_V1);
-    for encoded in &mut coefficients {
-        let value = i64::from_be_bytes(
-            encoded
-                .try_into()
-                .map_err(|_| RnsNativeRlweSourceStatementErrorV1::InvalidSourceEncoding)?,
-        );
+    let (coefficients, remainder) = bytes.as_chunks::<SIGNED_COEFFICIENT_BYTES_V1>();
+    for encoded in coefficients {
+        let value = i64::from_be_bytes(*encoded);
         match component {
             SourceComponentV1::Ephemeral => {
                 if !(-1..=1).contains(&value) {
@@ -2294,7 +2290,7 @@ fn validate_signed_chunk_v1(
             }
         }
     }
-    if !coefficients.remainder().is_empty() {
+    if !remainder.is_empty() {
         return Err(RnsNativeRlweSourceStatementErrorV1::InvalidSourceEncoding);
     }
     Ok(())

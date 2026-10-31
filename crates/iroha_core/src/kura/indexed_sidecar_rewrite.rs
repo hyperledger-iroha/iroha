@@ -82,24 +82,6 @@ impl Kura {
             kind,
         )
     }
-    #[cfg(test)]
-    #[cfg(not(windows))]
-    fn prune_indexed_sidecars_through_terminal_frontier(
-        data_path: &Path,
-        index_path: &Path,
-        terminal_height: u64,
-        retention: NonZeroUsize,
-        kind: &str,
-    ) -> bool {
-        Self::prune_indexed_sidecars_through_terminal_frontier_with_required_heights(
-            data_path,
-            index_path,
-            terminal_height,
-            retention,
-            &BTreeSet::new(),
-            kind,
-        )
-    }
     #[allow(clippy::too_many_lines)] // Rewriting covers many edge cases in one pass; keep consolidated.
     #[cfg(not(windows))]
     fn rewrite_indexed_sidecars(

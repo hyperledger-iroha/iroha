@@ -186,10 +186,8 @@ fn actual_artifact_admission_keeps_literal_refusal_after_metadata_succeeds() {
         .as_chunks::<8>()
         .0
     {
-        let (kind, offset) = ivm_abi::metadata::decode_literal_descriptor(u64::from_le_bytes(
-            raw.try_into().unwrap(),
-        ))
-        .unwrap();
+        let (kind, offset) =
+            ivm_abi::metadata::decode_literal_descriptor(u64::from_le_bytes(*raw)).unwrap();
         replacement.extend_from_slice(
             &ivm_abi::metadata::encode_literal_descriptor(kind, offset + 8)
                 .unwrap()

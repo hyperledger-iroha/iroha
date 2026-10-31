@@ -269,7 +269,7 @@ pub(super) fn run(
             &block,
             &event_path,
             network.network_id(),
-            &network.chain_id().to_string(),
+            network.chain_id().as_ref(),
             &receipt,
         )?;
         ensure!(
@@ -295,7 +295,7 @@ pub(super) fn run(
                     candidate_block,
                     candidate_path,
                     network.network_id(),
-                    &network.chain_id().to_string(),
+                    network.chain_id().as_ref(),
                     candidate_receipt,
                 )
                 .is_err(),

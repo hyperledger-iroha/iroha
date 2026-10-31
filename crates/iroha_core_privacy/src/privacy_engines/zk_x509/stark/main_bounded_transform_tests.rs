@@ -407,7 +407,7 @@ fn private_forward_adapter_matches_horner_and_preserves_separate_backend_counter
             )));
             assert!(receipt.contains("fixed_coset_metal_forward_columns=0"));
             assert!(receipt.contains("fixed_coset_cpu_forward_columns=0"));
-            assert_eq!(calls, if admitted == 0 { 0 } else { 8 / admitted });
+            assert_eq!(calls, 8_usize.checked_div(admitted).unwrap_or(0));
             assert_eq!(
                 erased.iter().map(|item| item.cells).sum::<usize>(),
                 if admitted == 0 { 0 } else { 8 * 32 }
@@ -789,7 +789,7 @@ fn inverse_only_adapter_matches_independent_dft_without_forward_or_diagonal() {
             let receipt = observation.finish_v1().public_text_v1();
             assert_eq!(values, expected);
             assert_eq!(values.iter().map(Vec::as_ptr).collect::<Vec<_>>(), pointers);
-            assert_eq!(calls, if admitted == 0 { 0 } else { 8 / admitted });
+            assert_eq!(calls, 8_usize.checked_div(admitted).unwrap_or(0));
             let metal = admitted > 0 && completed == Backend::Metal;
             assert!(receipt.contains(&format!(
                 "native_replay_cpu_inverse_columns={}",
@@ -815,7 +815,10 @@ fn native_forward_registered_cpu_and_metal_cost_keep_original_values() {
         available_goldilocks_transform_backend_v1, goldilocks_transform_completion_uncertain_v1,
     };
 
-    assert!(!cfg!(debug_assertions), "use an optimized build");
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "use an optimized build"
+    );
     assert_eq!(
         available_goldilocks_transform_backend_v1(),
         Some(Backend::Metal)
@@ -849,7 +852,7 @@ fn native_forward_registered_cpu_and_metal_cost_keep_original_values() {
                     goldilocks_transform_completion_uncertain_v1,
                 )
                 .unwrap();
-            let mut elapsed = [[0_u128; 3]; 2];
+            let mut elapsed = [Vec::with_capacity(3), Vec::with_capacity(3)];
             for round in 0..3 {
                 for device in if round % 2 == 0 {
                     [false, true]
@@ -886,7 +889,8 @@ fn native_forward_registered_cpu_and_metal_cost_keep_original_values() {
                             goldilocks_transform_completion_uncertain_v1,
                         )
                         .unwrap();
-                    elapsed[usize::from(device)][round] = started.elapsed().as_nanos();
+                    let round_elapsed = started.elapsed();
+                    elapsed[usize::from(device)].push(round_elapsed);
                     assert_eq!(metal_columns, if device { width } else { 0 });
                     assert_eq!(
                         actual_device_batch_width,
@@ -900,7 +904,7 @@ fn native_forward_registered_cpu_and_metal_cost_keep_original_values() {
                     println!(
                         "x509_native_forward_cost native_log={native} width={width} workers={} round={round} device={device} admitted_device_batch_width={admitted_device_batch_width} actual_device_batch_width={actual_device_batch_width} transform_scratch_clear_ns={} parity=exact",
                         rayon::current_num_threads(),
-                        elapsed[usize::from(device)][round],
+                        round_elapsed.as_nanos(),
                     );
                 }
             }
@@ -910,9 +914,9 @@ fn native_forward_registered_cpu_and_metal_cost_keep_original_values() {
             println!(
                 "x509_native_forward_median native_log={native} width={width} workers={} admitted_device_batch_width={admitted_device_batch_width} cpu_ns={} metal_ns={} cpu_speedup={:.3} parity=exact",
                 rayon::current_num_threads(),
-                elapsed[0][1],
-                elapsed[1][1],
-                elapsed[1][1] as f64 / elapsed[0][1] as f64,
+                elapsed[0][1].as_nanos(),
+                elapsed[1][1].as_nanos(),
+                elapsed[1][1].div_duration_f64(elapsed[0][1]),
             );
         }
     }

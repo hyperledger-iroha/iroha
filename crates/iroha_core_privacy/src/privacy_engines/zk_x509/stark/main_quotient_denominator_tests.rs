@@ -357,7 +357,7 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
                             let expected = map_main_sha_source_error_v1(
                                 crate::privacy_engines::zk_x509::sha_word_stark::ZkX509ShaWordStarkErrorV1::Topology.into(),
                             );
-                            assert!(result.unwrap().unwrap_err() == expected);
+                            assert_eq!(result.unwrap().unwrap_err(), expected);
                         }
                         assert!(erased.iter().any(|r| r.cells == 1 && r.nonzero_before == 1));
                         assert!(erased.iter().all(|r| r.nonzero_after == 0));

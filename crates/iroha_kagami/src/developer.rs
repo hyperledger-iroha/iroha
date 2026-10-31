@@ -1555,8 +1555,11 @@ mod tests {
         let tail = failure_tail(&log);
         assert_eq!(tail.len(), FAILURE_TAIL_LINES);
         assert_eq!(tail.last().unwrap(), "last line");
-        let long = "x".repeat(FAILURE_LINE_CHARS * 2);
-        assert_eq!(failure_tail(&long)[0].chars().count(), FAILURE_LINE_CHARS);
+        let long_line = "x".repeat(FAILURE_LINE_CHARS * 2);
+        assert_eq!(
+            failure_tail(&long_line)[0].chars().count(),
+            FAILURE_LINE_CHARS
+        );
         assert!(failure_tail(" \n\n").is_empty());
     }
 
@@ -2648,7 +2651,7 @@ mod tests {
                 panic!("publication recovery");
             };
             assert_eq!(args.context.as_deref(), Some("retained"));
-            assert!(args.resume.is_some() != args.recover.is_some());
+            assert_ne!(args.resume.is_some(), args.recover.is_some());
             assert!(
                 crate::Cli::try_parse_from(["kagami", "package", "publish", flag, &id, "--detach"])
                     .is_err()

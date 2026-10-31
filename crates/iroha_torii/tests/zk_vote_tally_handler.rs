@@ -32,7 +32,7 @@ const TALLY_FIXTURE_CIRCUIT_ID: &str =
 fn execute_tally_component(
     state: &mut iroha_core::state::StateTransaction<'_, '_>,
     authority: &AccountId,
-    instruction: InstructionBox,
+    instruction: &InstructionBox,
 ) -> Result<(), iroha_data_model::isi::error::InstructionExecutionError> {
     macro_rules! run {
         ($($ty:ty),+ $(,)?) => {
@@ -72,7 +72,7 @@ async fn vote_tally_handler_returns_finalized_tally() {
     execute_tally_component(
         &mut stx,
         &owner,
-        InstructionBox::from(Register::account(Account::new(owner.clone()))),
+        &InstructionBox::from(Register::account(Account::new(owner.clone()))),
     )
     .expect("register owner account");
     let fixture = native_confidential_fixture_envelope();
@@ -99,7 +99,7 @@ async fn vote_tally_handler_returns_finalized_tally() {
     execute_tally_component(
         &mut stx,
         &owner,
-        InstructionBox::from(Grant::account_permission(
+        &InstructionBox::from(Grant::account_permission(
             Permission::new(
                 "CanManageParliament".parse().expect("permission id"),
                 Json::new(()),
@@ -111,7 +111,7 @@ async fn vote_tally_handler_returns_finalized_tally() {
     execute_tally_component(
         &mut stx,
         &owner,
-        InstructionBox::from(Grant::account_permission(
+        &InstructionBox::from(Grant::account_permission(
             Permission::new(
                 "CanEnactGovernance".parse().expect("permission id"),
                 Json::new(()),
@@ -127,7 +127,7 @@ async fn vote_tally_handler_returns_finalized_tally() {
     execute_tally_component(
         &mut stx,
         &owner,
-        InstructionBox::from(Grant::account_permission(
+        &InstructionBox::from(Grant::account_permission(
             Permission::new(
                 "CanManageVerifyingKeys"
                     .parse()
@@ -141,7 +141,7 @@ async fn vote_tally_handler_returns_finalized_tally() {
     execute_tally_component(
         &mut stx,
         &owner,
-        verifying_keys::RegisterVerifyingKey {
+        &verifying_keys::RegisterVerifyingKey {
             id: vk_id.clone(),
             record: vk_record,
         }
@@ -158,7 +158,7 @@ async fn vote_tally_handler_returns_finalized_tally() {
         vk_tally: vk_id.clone(),
         domain_tag: "ballot-domain".to_string(),
     };
-    let error = execute_tally_component(&mut stx, &owner, InstructionBox::from(create))
+    let error = execute_tally_component(&mut stx, &owner, &InstructionBox::from(create))
         .expect_err("generic native proof cannot create a governance election");
     assert!(
         format!("{error:?}").contains("not qualified")
@@ -174,7 +174,7 @@ async fn vote_tally_handler_returns_finalized_tally() {
             vk_id.clone(),
         ),
     };
-    execute_tally_component(&mut stx, &owner, InstructionBox::from(finalize))
+    execute_tally_component(&mut stx, &owner, &InstructionBox::from(finalize))
         .expect_err("generic native proof cannot finalize a governance election");
     assert!(stx.world.elections().get(&eid).is_none());
     // The remaining assertions test query serialization over an explicitly synthetic

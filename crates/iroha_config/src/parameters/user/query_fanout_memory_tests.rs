@@ -24,9 +24,9 @@ fn native_finality_ceiling_uses_only_the_existing_fanout_pool() {
         )
         .unwrap();
         assert_eq!(actual, expected);
+        let aggregate = u64::try_from(aggregate).unwrap();
         assert!(
-            actual + aggregate as u64 / defaults::torii::QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1
-                <= aggregate as u64
+            actual + aggregate / defaults::torii::QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1 <= aggregate
         );
     }
     let mut table = base_table();

@@ -62,8 +62,11 @@ impl PhaseDiagnosticScope {
         Self
     }
 
+    /// Take the recorded diagnostic and end this scope.
     fn finish(self) -> PhaseDiagnostic {
-        PHASE_DIAGNOSTIC.with(|slot| slot.borrow_mut().take().unwrap())
+        let diagnostic = PHASE_DIAGNOSTIC.with(|slot| slot.borrow_mut().take().unwrap());
+        drop(self);
+        diagnostic
     }
 }
 

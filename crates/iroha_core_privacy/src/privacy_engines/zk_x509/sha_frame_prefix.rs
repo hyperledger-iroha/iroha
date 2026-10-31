@@ -42,7 +42,8 @@ fn header_byte_v1(domain: &[u8], fields: u16, offset: usize) -> Option<u8> {
     }
     let offset = offset - magic.len();
     if offset < 2 {
-        return Some((domain.len() as u16).to_be_bytes()[offset]);
+        let length = u16::try_from(domain.len()).expect("hash-frame domains are short constants");
+        return Some(length.to_be_bytes()[offset]);
     }
     let offset = offset - 2;
     if offset < domain.len() {
@@ -112,7 +113,6 @@ pub fn sha_frame_byte_v1(
     let version = ZK_X509_RELATION_VERSION_V1.to_be_bytes();
     let governance_version = ZK_X509_GOVERNANCE_RECORD_VERSION_V1.to_be_bytes();
     match manifest.role {
-        Role::CertificateTbs(_) | Role::CrlTbs => None,
         Role::CrlCommitment => {
             field_frame_byte_v1(ZK_X509_CRL_DER_DIGEST_DOMAIN_V1, 1, &[R], offset)
         }
@@ -173,7 +173,8 @@ pub fn sha_frame_byte_v1(
             ],
             offset,
         ),
-        Role::Projection(_) => None,
+        // Raw TBS calls and any other projection slot carry no added frame.
+        Role::CertificateTbs(_) | Role::CrlTbs | Role::Projection(_) => None,
         Role::TrustAnchorRecord => field_frame_byte_v1(
             ZK_X509_TRUST_ANCHOR_RECORD_DIGEST_DOMAIN_V1,
             8,

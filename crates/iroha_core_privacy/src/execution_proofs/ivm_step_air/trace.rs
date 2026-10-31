@@ -500,7 +500,7 @@ impl ScalarSegment {
                 .0
                 .iter()
                 .zip(&self.words)
-                .any(|(bytes, word)| bytes != word.to_le_bytes())
+                .any(|(bytes, word)| *bytes != word.to_le_bytes())
             || self
                 .contract
                 .code_offset()

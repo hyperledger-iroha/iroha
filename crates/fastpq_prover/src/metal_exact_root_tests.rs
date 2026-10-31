@@ -22,12 +22,16 @@ fn source(log: u32, columns: usize) -> Vec<Vec<u64>> {
 }
 
 fn oracle_add(left: u64, right: u64) -> u64 {
-    ((u128::from(left) + u128::from(right)) % u128::from(FIELD_MODULUS)) as u64
+    u64::try_from((u128::from(left) + u128::from(right)) % u128::from(FIELD_MODULUS))
+        .expect("residue modulo the field fits u64")
 }
 
 fn oracle_sub(left: u64, right: u64) -> u64 {
-    ((u128::from(left) + u128::from(FIELD_MODULUS) - u128::from(right)) % u128::from(FIELD_MODULUS))
-        as u64
+    u64::try_from(
+        (u128::from(left) + u128::from(FIELD_MODULUS) - u128::from(right))
+            % u128::from(FIELD_MODULUS),
+    )
+    .expect("residue modulo the field fits u64")
 }
 
 fn reference_stage(values: &mut [u64], root: u64, stage: u32) {
@@ -68,8 +72,9 @@ fn fused_global_model(values: &mut [u64], log: u32, root: u64, stage: u32) -> Ve
                     break;
                 }
                 assert_eq!(twiddle, goldilocks_pow(step, offset));
-                let low = ((cell - offset) * if paired { 4 } else { 2 } + offset) as usize;
-                let half = half as usize;
+                let low = usize::try_from((cell - offset) * if paired { 4 } else { 2 } + offset)
+                    .expect("model row index fits usize");
+                let half = usize::try_from(half).expect("model stage half fits usize");
                 if paired {
                     let squared = goldilocks_mul(twiddle, twiddle);
                     let a = values[low];
@@ -182,8 +187,10 @@ fn fourth_root_shift_matches_independent_products_at_every_supported_order() {
                     .map(|index| index.wrapping_mul(0x9e37_79b9_7f4a_7c15) % FIELD_MODULUS),
             ) {
                 let actual = metal_fourth_root_model(value, fourth);
-                let expected =
-                    (u128::from(value) * u128::from(fourth) % u128::from(FIELD_MODULUS)) as u64;
+                let expected = u64::try_from(
+                    u128::from(value) * u128::from(fourth) % u128::from(FIELD_MODULUS),
+                )
+                .expect("residue modulo the field fits u64");
                 assert_eq!(actual, expected);
             }
         }
@@ -697,7 +704,10 @@ fn required_metal_native19_pool_retention_cost_matches_original_values() {
     // 32MiB entries. It is not a production policy for oversized live loans.
     const HISTORICAL_16MIB_CACHE_BASELINE_PAGES: usize = (16 << 20) / METAL_BUFFER_PAGE_BYTES;
 
-    assert!(!cfg!(debug_assertions), "run in release mode");
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "run in release mode"
+    );
     select_metal_device().expect("native pool diagnostic requires actual Metal");
     let _lane = crate::backend::acquire_gpu_lane();
     let log = 19;
@@ -785,9 +795,6 @@ fn phase_diagnostic_scope_is_opt_in_and_clears_after_unwind() {
 fn required_metal_exact_root_phase_latency_matches_cpu_with_original_owners() {
     use rayon::prelude::*;
 
-    assert!(!cfg!(debug_assertions), "run in release mode");
-    select_metal_device().expect("phase diagnostic requires actual Metal");
-    let _lane = crate::backend::acquire_gpu_lane();
     struct Case {
         log: u32,
         columns: usize,
@@ -797,6 +804,13 @@ fn required_metal_exact_root_phase_latency_matches_cpu_with_original_owners() {
         expected: Vec<Vec<u64>>,
         actual: Vec<Vec<u64>>,
     }
+
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "run in release mode"
+    );
+    select_metal_device().expect("phase diagnostic requires actual Metal");
+    let _lane = crate::backend::acquire_gpu_lane();
     let mut cases = [(19, 4), (19, 8), (22, 4), (22, 8)]
         .into_iter()
         .map(|(log, columns)| {

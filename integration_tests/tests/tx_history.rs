@@ -376,7 +376,7 @@ async fn advance_to_height(network: &Network, target: u64) -> Result<()> {
                 last_tick_error = Some(error.to_string());
             }
             Err(error) => {
-                return Err(error.into());
+                return Err(error);
             }
         }
         sleep(Duration::from_secs(1)).await;

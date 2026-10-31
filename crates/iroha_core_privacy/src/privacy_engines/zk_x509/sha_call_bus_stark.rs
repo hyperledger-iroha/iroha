@@ -4192,22 +4192,28 @@ pub fn evaluate_sha_call_terminal_constraints_v1(
     core::array::from_fn(|lane| source[lane].sub(sha[lane]))
 }
 /// Maximum typed events in the Projection-to-SHA message/digest equality.
+#[cfg(test)]
 pub const ZK_X509_SHA_PROJECTION_EVENT_COUNT_V1: u64 = 7 * (512 + 1 + 8);
 /// Conservative numerator covering both SHA call and Projection-to-SHA lists.
 ///
 /// For fixed unequal lists the separate four-lane escape terms are bounded by
 /// `(10088/d)^4 + (3647/d)^4 <= (13735/d)^4`. This arithmetic does not establish
 /// the adaptive joint-protocol or Fiat-Shamir reduction.
+#[cfg(test)]
 pub const ZK_X509_SHA_CALL_BUS_COLLISION_NUMERATOR_V1: u64 =
     ZK_X509_SHA_CALL_EVENT_COUNT_V1 as u64 + ZK_X509_SHA_PROJECTION_EVENT_COUNT_V1;
 /// Exact algebraic collision-bound numerator for each word-memory equality.
+#[cfg(test)]
 pub const ZK_X509_SHA_WORD_MEMORY_COLLISION_NUMERATOR_V1: u64 =
     ZK_X509_SHA_MAX_MEMORY_ROWS_V1 as u64;
 /// Exact algebraic collision-bound numerator for the three-lane base-fold bus.
+#[cfg(test)]
 pub const ZK_X509_SHA_BASE_FOLD_COLLISION_NUMERATOR_V1: u64 = 440;
 /// Independent challenge lanes used by each SHA word/call equality.
+#[cfg(test)]
 pub const ZK_X509_SHA_COLLISION_LANES_V1: u8 = 4;
 /// Independent challenge lanes used by the SHA base-fold equality.
+#[cfg(test)]
 pub const ZK_X509_SHA_BASE_FOLD_COLLISION_LANES_V1: u8 = 3;
 /// Return conditional fixed-list collision arithmetic in diagnostic form.
 ///
@@ -4583,15 +4589,19 @@ mod tests {
         };
         // These component fixtures keep private fields synthetic while using
         // the actual canonical public frame bytes required by the SHA AIR.
-        let raw_len = message
-            .len()
-            .saturating_sub(sha_rfc_framed_field_offset_v1(manifest.role).unwrap_or(0));
+        let raw_len = u16::try_from(
+            message
+                .len()
+                .saturating_sub(sha_rfc_framed_field_offset_v1(manifest.role).unwrap_or(0)),
+        )
+        .expect("fixture raw length fits u16")
+        .to_be_bytes();
         for (offset, value) in message.iter_mut().enumerate() {
             if let Some(expected) = sha_frame_byte_v1(manifest, offset) {
                 *value = match expected {
                     ShaFrameByteV1::Constant(value) => value,
-                    ShaFrameByteV1::RawLengthHigh => (raw_len >> 8) as u8,
-                    ShaFrameByteV1::RawLengthLow => raw_len as u8,
+                    ShaFrameByteV1::RawLengthHigh => raw_len[0],
+                    ShaFrameByteV1::RawLengthLow => raw_len[1],
                 };
             }
         }
@@ -6699,15 +6709,15 @@ mod tests {
         assert!(separate_numerators <= 13_735_u128.pow(4));
         let (bus_union_bits, call_bits, total_bits) = algebraic_security_bits_v1();
         assert!(
-            (bus_union_bits - 173.68803543055358).abs() < 1.0e-12,
+            (bus_union_bits - 173.688_035_430_553_58).abs() < 1.0e-12,
             "{bus_union_bits}"
         );
         assert!(
-            (call_bits - 201.0177228388035).abs() < 1.0e-12,
+            (call_bits - 201.017_722_838_803_5).abs() < 1.0e-12,
             "{call_bits}"
         );
         assert!(
-            (total_bits - 165.6504198933986).abs() < 1.0e-12,
+            (total_bits - 165.650_419_893_398_6).abs() < 1.0e-12,
             "{total_bits}"
         );
         assert!(bus_union_bits > 173.688, "{bus_union_bits}");

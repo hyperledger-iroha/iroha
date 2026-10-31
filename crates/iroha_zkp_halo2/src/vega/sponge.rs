@@ -68,12 +68,11 @@ impl Keccak256 {
                 return;
             }
         }
-        let mut chunks = input.chunks_exact(KECCAK_256_RATE);
-        for chunk in &mut chunks {
+        let (chunks, remainder) = input.as_chunks::<KECCAK_256_RATE>();
+        for chunk in chunks {
             xor_rate_block(&mut self.state, chunk);
             keccakf(&mut self.state);
         }
-        let remainder = chunks.remainder();
         self.pending[..remainder.len()].copy_from_slice(remainder);
         self.pending_len = remainder.len();
     }
@@ -164,12 +163,11 @@ impl Drop for ZeroizingRateBlockV1 {
 }
 fn absorb_and_finalize_into(input: &[u8], delimiter: u8, state: &mut [u64; 25]) {
     state.fill(0);
-    let mut chunks = input.chunks_exact(KECCAK_256_RATE);
-    for chunk in &mut chunks {
+    let (chunks, remainder) = input.as_chunks::<KECCAK_256_RATE>();
+    for chunk in chunks {
         xor_rate_block(state, chunk);
         keccakf(state);
     }
-    let remainder = chunks.remainder();
     let mut final_block = ZeroizingRateBlockV1::zeroed();
     final_block.as_mut_array()[..remainder.len()].copy_from_slice(remainder);
     final_block.as_mut_array()[remainder.len()] ^= delimiter;
@@ -250,7 +248,7 @@ fn xor_rate_block(state: &mut [u64; 25], block: &[u8]) {
     debug_assert_eq!(block.len(), KECCAK_256_RATE);
     for (lane, bytes) in state
         .iter_mut()
-        .zip(block.chunks_exact(8))
+        .zip(block.as_chunks::<8>().0)
         .take(KECCAK_256_RATE / 8)
     {
         *lane ^= u64::from(bytes[0])

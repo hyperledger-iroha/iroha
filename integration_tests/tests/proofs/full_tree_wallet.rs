@@ -89,7 +89,7 @@ async fn record_on_every_validator(
     };
     let client = integration_tests::sync::rebind_blocking_client(&network.client(), |client| {
         client.transaction_status_timeout = Duration::from_secs(600);
-        client.transaction_ttl = Some(Duration::from_secs(660));
+        client.transaction_ttl = Some(Duration::from_mins(11));
     });
     read_on_dedicated_thread(move || {
         client.submit(

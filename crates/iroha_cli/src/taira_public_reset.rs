@@ -120,13 +120,6 @@ pub fn deployment_validated_genesis_fixture() -> iroha_genesis::ValidatedGenesis
     public_inputs::deployment_validated_genesis_fixture()
 }
 
-/// Executed signed genesis with four explicit active lane-validator account bindings.
-#[cfg(test)]
-pub fn deployment_lane_genesis_fixture()
--> (iroha_data_model::block::SignedBlock, iroha_crypto::KeyPair) {
-    public_inputs::deployment_lane_genesis_fixture()
-}
-
 #[path = "taira_public_reset_source.rs"]
 mod source;
 

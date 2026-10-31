@@ -4014,14 +4014,15 @@ impl Queue {
                         err: Error::Deferred(original),
                     });
                 }
-                let plan = match routing_plan {
-                    Some(plan) => self.resolve_precomputed_routing_plan_with_view(&tx, &view, plan),
-                    None => self
-                        .router
-                        .read()
-                        .try_route_plan_with_view(&tx, &view)
-                        .and_then(|plan| Self::resolve_view_routing_plan(plan, &view)),
-                };
+                let plan = routing_plan.map_or_else(
+                    || {
+                        self.router
+                            .read()
+                            .try_route_plan_with_view(&tx, &view)
+                            .and_then(|plan| Self::resolve_view_routing_plan(plan, &view))
+                    },
+                    |plan| self.resolve_precomputed_routing_plan_with_view(&tx, &view, plan),
+                );
                 let plan = match plan {
                     Ok(plan) => plan,
                     Err(error) => {
@@ -6914,7 +6915,7 @@ pub mod tests {
             authority_keypair,
             ..
         } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
-        let mut nexus = state.nexus_snapshot();
+        let nexus = state.nexus_snapshot();
         state
             .set_nexus(nexus.clone())
             .expect("apply initial single-lane Nexus config");
@@ -7077,7 +7078,7 @@ pub mod tests {
             authority_keypair,
             ..
         } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
-        let mut nexus = state.nexus_snapshot();
+        let nexus = state.nexus_snapshot();
         state
             .set_nexus(nexus.clone())
             .expect("apply initial single-lane Nexus config");
@@ -7956,7 +7957,6 @@ pub mod tests {
     }
     #[test]
     fn manifest_hot_reload_rejects_semantic_drift_atomically() {
-        let fixture_budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
         fn registry(path: &str, validator: AccountId, quorum: u32) -> LaneManifestRegistryHandle {
             let rules = GovernanceRules {
                 validators: vec![validator],
@@ -7979,6 +7979,7 @@ pub mod tests {
                 status,
             )])))
         }
+        let fixture_budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (alice, _) = gen_account_in("wonderland");

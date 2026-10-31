@@ -163,22 +163,18 @@ fn is_trigger_register_collision(err: &eyre::Report, trigger_id: &TriggerId) -> 
     err.chain().any(|cause| {
         if let Some(InstructionExecutionError::Repetition(repetition)) =
             cause.downcast_ref::<InstructionExecutionError>()
+            && *repetition.instruction() == InstructionType::Register
+            && let IdBox::TriggerId(id) = &repetition.id
         {
-            if *repetition.instruction() == InstructionType::Register {
-                if let IdBox::TriggerId(id) = &repetition.id {
-                    return id == trigger_id;
-                }
-            }
+            return id == trigger_id;
         }
         if let Some(ValidationFail::InstructionFailed(InstructionExecutionError::Repetition(
             repetition,
         ))) = cause.downcast_ref::<ValidationFail>()
+            && *repetition.instruction() == InstructionType::Register
+            && let IdBox::TriggerId(id) = &repetition.id
         {
-            if *repetition.instruction() == InstructionType::Register {
-                if let IdBox::TriggerId(id) = &repetition.id {
-                    return id == trigger_id;
-                }
-            }
+            return id == trigger_id;
         }
         false
     })
@@ -455,7 +451,7 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
             let baseline_non_empty = network
                 .peers()
                 .iter()
-                .filter_map(|peer| peer.best_effort_block_height())
+                .filter_map(iroha_test_network::NetworkPeer::best_effort_block_height)
                 .map(|height| height.non_empty)
                 .max()
                 .unwrap_or(0);
@@ -636,10 +632,9 @@ async fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> 
                 stringify!(trigger_should_be_able_to_modify_its_own_repeats_count),
             )
             .await
+                && !is_permission_grant_repetition(&err, &expected_permission)
             {
-                if !is_permission_grant_repetition(&err, &expected_permission) {
-                    return Err(err);
-                }
+                return Err(err);
             }
             let trigger_instructions: Vec<InstructionBox> = vec![
                 Mint::trigger_repetitions(1_u32, trigger_id.clone()).into(),
@@ -808,10 +803,9 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
                 stringify!(only_account_with_permission_can_register_trigger),
             )
             .await
+                && !is_permission_grant_repetition(&err, &expected_permission)
             {
-                if !is_permission_grant_repetition(&err, &expected_permission) {
-                    return Err(err);
-                }
+                return Err(err);
             }
             println!("Rabbit has got the permission");
             // Trying register the trigger with permissions
@@ -885,9 +879,7 @@ async fn unregister_trigger() -> Result<()> {
             if let Some(found_trigger) = found_trigger {
                 break found_trigger;
             }
-            if Instant::now() >= deadline {
-                panic!("trigger not found");
-            }
+            assert!(Instant::now() < deadline, "trigger not found");
             sleep(Duration::from_millis(250)).await;
         };
         let found_action = found_trigger.action();
@@ -1162,10 +1154,9 @@ async fn trigger_burn_repetitions() -> Result<()> {
             stringify!(trigger_burn_repetitions),
         )
         .await
+            && !is_permission_grant_repetition(&err, &expected_permission)
         {
-            if !is_permission_grant_repetition(&err, &expected_permission) {
-                return Err(err);
-            }
+            return Err(err);
         }
         let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal")?,

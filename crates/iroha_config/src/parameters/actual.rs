@@ -3023,7 +3023,7 @@ impl_default!(NexusStaking => {
 impl NexusStaking {
     /// Resolve the validator activation policy for a lane using its configured visibility.
     #[must_use]
-    pub fn validator_mode(&self, lane: LaneId, catalog: &LaneCatalog) -> LaneValidatorMode {
+    pub fn validator_mode(self, lane: LaneId, catalog: &LaneCatalog) -> LaneValidatorMode {
         let visibility = catalog
             .lanes()
             .iter()

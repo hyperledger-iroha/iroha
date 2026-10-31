@@ -60,7 +60,7 @@ fn installation_moves_exact_graph_and_both_events_without_allocation() {
 fn applied_sibling_invalidates_prepared_version_without_touching_outputs() {
     let state = state();
     let mut block = state.block(header());
-    let stale = {
+    let outdated = {
         let tx = block.transaction();
         tx.prepare_parameter_change(&change(17), None, None)
             .unwrap()
@@ -76,7 +76,7 @@ fn applied_sibling_invalidates_prepared_version_without_touching_outputs() {
     let external = next.world.external_event_buf.len();
     let internal = next.world.internal_event_buf.len();
     assert!(matches!(
-        next.world.install_parameter_change(stale),
+        next.world.install_parameter_change(outdated),
         Err(ParameterChangeError::Ownership(
             ParameterRetentionError::StalePredecessor
         ))
@@ -414,7 +414,7 @@ fn assert_actual_policy_rejection(
     offered: Parameter,
     installed: Option<Parameter>,
     genesis: bool,
-    expected: String,
+    expected: &str,
 ) {
     use crate::smartcontracts::Execute;
     use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
@@ -668,7 +668,7 @@ fn native_fx_install_keeps_original_parameter_version_guard() {
     use iroha_data_model::isi::settlement::FxCorridorPolicyRegistry;
     let state = state();
     let mut block = state.block(header());
-    let (stale, predecessor) = {
+    let (outdated, predecessor) = {
         let tx = block.transaction();
         assert!(tx.world.external_event_buf.is_empty() && tx.world.internal_event_buf.is_empty());
         let next = Parameter::Custom(FxCorridorPolicyRegistry::default().into_custom_parameter());
@@ -692,14 +692,14 @@ fn native_fx_install_keeps_original_parameter_version_guard() {
     for _ in 0..6 {
         tx.world
             .external_event_buf
-            .push(EventBox::Data(stale.event.clone()));
-        tx.world.internal_event_buf.push(stale.event.clone());
+            .push(EventBox::Data(outdated.event.clone()));
+        tx.world.internal_event_buf.push(outdated.event.clone());
     }
     let external = tx.world.external_event_buf.clone();
     let internal = tx.world.internal_event_buf.clone();
     assert_eq!((external.len(), internal.len()), (6, 6));
     assert!(matches!(
-        tx.world.install_parameter_change(stale),
+        tx.world.install_parameter_change(outdated),
         Err(ParameterChangeError::Ownership(
             ParameterRetentionError::StalePredecessor
         ))

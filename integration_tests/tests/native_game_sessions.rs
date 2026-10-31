@@ -1,4 +1,4 @@
-//! Four-validator generic game-session release gate, using RaceV1 only as an application adapter.
+//! Four-validator generic game-session release gate, using `RaceV1` only as an application adapter.
 //!
 //! This starts real peers and never substitutes a verifier or marks a profile qualified.
 //! Zero-stake sessions exercise retained inputs, disputes, restart, and genuine native proof
@@ -485,7 +485,7 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
     .ok_or_else(|| {
         eyre!("four-validator release gate cannot succeed with sandbox startup skipped")
     })?;
-    let result = timeout(Duration::from_secs(1_200), async {
+    let result = timeout(Duration::from_mins(20), async {
         let mut context = network.peers()[0].client().client().to_builder();
         // Allow actual native verification on development-profile validator binaries.
         context.transaction_status_timeout = Duration::from_secs(120);

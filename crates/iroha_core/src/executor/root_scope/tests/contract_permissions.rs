@@ -96,7 +96,9 @@ fn private_contract_permission_grant_and_revoke_keep_current_owner_authority() {
     for account in [BOB_ID.clone(), contract.subject_id()] {
         tx.world.accounts.insert(
             account,
-            iroha_data_model::account::AccountValue::new(Default::default()),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
         );
     }
     tx.world

@@ -130,8 +130,7 @@ async fn leader_client_for_submit(network: &sandbox::SerializedNetwork, probe: &
         .iter()
         .map(|peer| {
             peer.best_effort_block_height()
-                .map(|height| height.total)
-                .unwrap_or(0)
+                .map_or(0, |height| height.total)
         })
         .collect::<Vec<_>>();
     let fallback_seed = NEXT_SUBMIT_PEER_INDEX.fetch_add(1, Ordering::Relaxed);
@@ -254,7 +253,7 @@ async fn mint_asset_after_3_sec_scenario(
         let mut target_height = network
             .peers()
             .iter()
-            .filter_map(|peer| peer.best_effort_block_height())
+            .filter_map(iroha_test_network::NetworkPeer::best_effort_block_height)
             .map(|height| height.total)
             .max()
             .unwrap_or(0);
@@ -377,7 +376,7 @@ async fn pre_commit_trigger_should_be_executed_scenario(
             let mut target_height = network
                 .peers()
                 .iter()
-                .filter_map(|peer| peer.best_effort_block_height())
+                .filter_map(iroha_test_network::NetworkPeer::best_effort_block_height)
                 .map(|height| height.total)
                 .max()
                 .unwrap_or(0);
@@ -498,7 +497,7 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
         let mut target_height = network
             .peers()
             .iter()
-            .filter_map(|peer| peer.best_effort_block_height())
+            .filter_map(iroha_test_network::NetworkPeer::best_effort_block_height)
             .map(|height| height.total)
             .max()
             .unwrap_or(0);
@@ -630,7 +629,7 @@ async fn submit_sample_isi_on_every_block_commit(
     let initial_height = network
         .peers()
         .iter()
-        .filter_map(|peer| peer.best_effort_block_height())
+        .filter_map(iroha_test_network::NetworkPeer::best_effort_block_height)
         .map(|height| height.total)
         .max()
         .unwrap_or(0);

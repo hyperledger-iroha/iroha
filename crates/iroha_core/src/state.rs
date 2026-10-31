@@ -13263,14 +13263,17 @@ impl<'state> StateBlock<'state> {
         &self,
     ) -> Result<&iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1, &'static str>
     {
-        if let Some(original) = self.genesis_crypto_policy.as_ref() {
-            original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
-        } else {
-            self.world
-                .parameters
-                .get_before_block()
-                .require_crypto_policy()
-        }
+        self.genesis_crypto_policy.as_ref().map_or_else(
+            || {
+                self.world
+                    .parameters
+                    .get_before_block()
+                    .require_crypto_policy()
+            },
+            |original| {
+                original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
+            },
+        )
     }
     /// Returns the world view associated with this block scope.
     #[inline]
@@ -13927,14 +13930,15 @@ impl<'state> StateBlock<'state> {
         .map_err(|error| {
             crate::execution_attempt::ExecutionAttemptError::Rejected(error.to_string())
         })?;
-        let mut private_changed = false;
-        if let Some(pending) = private.pending_update
+        let mut private_changed = if let Some(pending) = private.pending_update
             && pending.effective_at_height == incoming_height
         {
             private.current_limits = pending.next_limits;
             private.pending_update = None;
-            private_changed = true;
-        }
+            true
+        } else {
+            false
+        };
         if private
             .protocol_closure_drain
             .is_some_and(|drain| drain.effective_at_height == incoming_height)
@@ -14672,14 +14676,17 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         &iroha_data_model::block::consensus::PublicLaneStakingPolicy,
         iroha_data_model::block::consensus::PublicLaneStakingPolicyError,
     > {
-        if let Some(original) = self.genesis_staking_policy {
-            original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
-        } else {
-            self.world
-                .parameters
-                .get_before_block()
-                .require_staking_policy()
-        }
+        self.genesis_staking_policy.map_or_else(
+            || {
+                self.world
+                    .parameters
+                    .get_before_block()
+                    .require_staking_policy()
+            },
+            |original| {
+                original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
+            },
+        )
     }
 
     /// Borrow the exact ordinary predecessor fee policy without a local mirror.
@@ -14716,14 +14723,17 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         &self,
     ) -> Result<&iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1, &'static str>
     {
-        if let Some(original) = self.genesis_crypto_policy.as_ref() {
-            original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
-        } else {
-            self.world
-                .parameters
-                .get_before_block()
-                .require_crypto_policy()
-        }
+        self.genesis_crypto_policy.as_ref().map_or_else(
+            || {
+                self.world
+                    .parameters
+                    .get_before_block()
+                    .require_crypto_policy()
+            },
+            |original| {
+                original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
+            },
+        )
     }
     /// Return whether execution is currently inside a scheduled or data-trigger body.
     #[inline]
@@ -15127,7 +15137,7 @@ impl<'state> StateQueryView<'state> {
             self.parameters_before_latest_block
                 .get()
                 .as_ref()
-                .unwrap_or(self.world.parameters.get())
+                .unwrap_or_else(|| self.world.parameters.get())
         } else {
             self.world.parameters.get()
         };
@@ -23605,16 +23615,13 @@ impl WorldTransaction<'_, '_> {
             if is_consensus_owned_custom_parameter(id) {
                 continue;
             }
-            let replace = match old_defaults.get(id) {
-                None => true,
-                Some(previous) => {
-                    previous != next
-                        && candidate
-                            .custom()
-                            .get(id)
-                            .is_none_or(|current| current == previous)
-                }
-            };
+            let replace = old_defaults.get(id).is_none_or(|previous| {
+                previous != next
+                    && candidate
+                        .custom()
+                        .get(id)
+                        .is_none_or(|current| current == previous)
+            });
             if replace {
                 let prepared = candidate.prepare_custom_parameter(next, pool)?;
                 candidate = prepared

@@ -422,6 +422,10 @@ fn gas_actual_allocator_refusal_covers_raw_final_and_ledger_arrays() {
 #[test]
 #[allow(unsafe_code)]
 fn gas_move_keeps_original_allocation_pointers_and_refunds_after_owner_drop() {
+    struct Closed {
+        value: Gas,
+        custody: GasCustody,
+    }
     let p = rate_parameters(&[record(&asset(14), Some("12.5"))]);
     let pool = AllocationBudget::new(1 << 20);
     let owner = AdmittedGas::try_from_parameters(&p, &pool).unwrap();
@@ -431,10 +435,6 @@ fn gas_move_keeps_original_allocation_pointers_and_refunds_after_owner_drop() {
         owner.get().units_per_gas[0].asset.as_ptr(),
     );
     let retained = pool.reserved_bytes();
-    struct Closed {
-        value: Gas,
-        custody: GasCustody,
-    }
     let mut moved = None;
     let requests = allocations_during(|| {
         // SAFETY: immediately pair exact original value and custody; no mutator escapes.

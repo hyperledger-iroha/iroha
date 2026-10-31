@@ -39,6 +39,11 @@ fn invalid(mut c: ObjectCircuit, message: &str) {
     assert!(!c.accepts(Fp::ZERO), "forged true: {message}");
 }
 #[test]
+#[expect(
+    clippy::decimal_bitwise_operands,
+    reason = "intentional test notation: 1085 is the decimal Android TEE fact set the \
+              credential fixtures spell everywhere, with one extra fact bit set"
+)]
 fn credential_evidence_and_policy_rules_return_total_verdicts() {
     let c = credential();
     assert!(c.accepts(Fp::ZERO));

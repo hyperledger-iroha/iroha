@@ -1,4 +1,4 @@
-//! Shared NPoS genesis overrides for nexus localnet integration tests.
+//! Shared `NPoS` genesis overrides for nexus localnet integration tests.
 use iroha::data_model::isi::{InstructionBox, SetParameter};
 use iroha_crypto::Hash as CryptoHash;
 use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};

@@ -61,7 +61,7 @@ fn publication_words(output: &CompileOutput) -> usize {
         .as_chunks::<4>()
         .0
         .iter()
-        .filter(|word| u32::from_le_bytes((*word).try_into().unwrap()) == publish)
+        .filter(|word| u32::from_le_bytes(**word) == publish)
         .count()
 }
 

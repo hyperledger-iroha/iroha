@@ -305,19 +305,6 @@ impl RetainedStateParameters {
         })
     }
 
-    /// Prepare an explicit component fixture through the exact production reader.
-    ///
-    /// No production path can call this convenience helper. Its input is authored
-    /// by the fixture; the successor follows the same funded source-bound path.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub(crate) fn prepare_fixture_parameter(
-        &self,
-        parameter: iroha_data_model::parameter::Parameter,
-        budget: &AllocationBudget,
-    ) -> Result<PreparedParameters, super::ParameterIngressError> {
-        self.prepare_parameter(&parameter, budget)
-    }
-
     /// Prepare a complete validated successor before a physical MV writer is opened.
     ///
     /// This binds the exact retained predecessor, not only the enclosing block

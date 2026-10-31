@@ -745,9 +745,7 @@ fn keys_from_chunks(root: &Cell, n: usize) -> Result<Vec<[u8; 48]>> {
             (node.data()[bytes] & 0x80 != 0) == more,
             "noncanonical key chunk continuation"
         );
-        for key in node.data()[..bytes].chunks_exact(48) {
-            keys.push(key.try_into().expect("fixed key"));
-        }
+        keys.extend_from_slice(node.data()[..bytes].as_chunks::<48>().0);
         if !more {
             return Ok(keys);
         }

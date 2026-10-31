@@ -927,8 +927,8 @@ fn parse_hex_32(text: &str) -> Option<[u8; 32]> {
         return None;
     }
     let mut bytes = [0_u8; 32];
-    for (byte, pair) in bytes.iter_mut().zip(text.as_bytes().chunks_exact(2)) {
-        *byte = (hex_value(pair[0])? << 4) | hex_value(pair[1])?;
+    for (byte, &[high, low]) in bytes.iter_mut().zip(text.as_bytes().as_chunks::<2>().0) {
+        *byte = (hex_value(high)? << 4) | hex_value(low)?;
     }
     Some(bytes)
 }

@@ -6998,13 +6998,13 @@ impl Executor {
         trigger_context: Option<(&TriggerId, u64)>,
         mut attachment_frame: Option<attachment_custody::ContractCustody<'_, '_>>,
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
+        // A contract frame cannot inherit a native instruction's signed ordinal.
+        use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
         if let Some(frame) = attachment_frame.as_mut() {
             frame.require_original_call(call).map_err(|error| {
                 attachment_direct::custody_validation_error(state_transaction, error)
             })?;
         }
-        // A contract frame cannot inherit a native instruction's signed ordinal.
-        use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
         state_transaction.current_direct_privacy_instruction_index = None;
         state_transaction.clear_direct_parliament_candidate_testing();
         state_transaction.current_direct_sccp_forgery = false;
@@ -7230,7 +7230,8 @@ impl Executor {
         if validation_outcome == crate::validation_fee::OpaqueDeferredValidationOutcome::NoOp {
             return Ok(ContractInvocationOutcome {
                 gas_used,
-                executed_instructions: Default::default(),
+                executed_instructions:
+                    crate::smartcontracts::ivm::host::ExecutedHostInstructions::default(),
                 next_nft_sequence,
             });
         }
@@ -8590,12 +8591,12 @@ impl Executor {
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        instruction: InstructionBox,
+        instruction: &InstructionBox,
     ) -> Result<(), ValidationFail> {
         self.execute_instruction_with_profile_and_contract_runtime_context(
             state_transaction,
             authority,
-            &instruction,
+            instruction,
             InstructionExecutionProfile::Runtime,
             None,
         )
@@ -8606,7 +8607,7 @@ impl Executor {
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        instruction: InstructionBox,
+        instruction: &InstructionBox,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
         if contract_runtime_context.is_some() {
@@ -8615,7 +8616,7 @@ impl Executor {
         self.execute_instruction_with_profile_and_contract_runtime_context(
             state_transaction,
             authority,
-            &instruction,
+            instruction,
             InstructionExecutionProfile::Runtime,
             contract_runtime_context,
         )
@@ -8651,13 +8652,13 @@ impl Executor {
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        instruction: InstructionBox,
+        instruction: &InstructionBox,
         profile: InstructionExecutionProfile,
     ) -> Result<(), ValidationFail> {
         self.execute_instruction_with_profile_and_contract_runtime_context(
             state_transaction,
             authority,
-            &instruction,
+            instruction,
             profile,
             None,
         )

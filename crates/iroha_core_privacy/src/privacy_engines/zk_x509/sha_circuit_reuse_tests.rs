@@ -441,7 +441,7 @@ mod reference {
 
 fn message(length: usize) -> Vec<u8> {
     (0..length)
-        .map(|index| ((index * 17 + 3) % 251) as u8)
+        .map(|index| u8::try_from((index * 17 + 3) % 251).unwrap())
         .collect()
 }
 

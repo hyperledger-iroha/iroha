@@ -31,10 +31,7 @@ pub(super) fn sponge(domain: u64, payload: &[Scalar]) -> Scalar {
     ]));
     let mut input = payload.iter().copied().chain(core::iter::once(Scalar::ONE));
     let mut first = Some(Scalar::from(payload.len() as u64));
-    loop {
-        let Some(left) = first.take().or_else(|| input.next()) else {
-            break;
-        };
+    while let Some(left) = first.take().or_else(|| input.next()) {
         let right = input.next().unwrap_or(Scalar::ZERO);
         state.0[0] += left;
         state.0[1] += right;

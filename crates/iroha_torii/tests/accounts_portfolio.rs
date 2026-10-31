@@ -1,5 +1,6 @@
 //! Torii UAID portfolio endpoint tests.
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::extract::connect_info::ConnectInfo;
 use http::StatusCode;
 use http_body_util::BodyExt as _;
@@ -27,8 +28,6 @@ use nonzero_ext::nonzero;
 use norito::json::{self, Value};
 use std::sync::Arc;
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
 const ACCOUNT_SIGNATORY: &str =
     "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
 #[tokio::test]

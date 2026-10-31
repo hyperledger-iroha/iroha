@@ -436,11 +436,7 @@ impl GoldilocksFp4V1 {
     pub(crate) fn canonical_be_bytes(bytes: [u8; 32]) -> Option<Self> {
         let mut values = [0_u64; GOLDILOCKS_FP4_DEGREE_V1];
         for (index, chunk) in bytes.as_chunks::<8>().0.iter().enumerate() {
-            values[index] = u64::from_be_bytes(
-                chunk
-                    .try_into()
-                    .expect("a 32-byte array has four exact 8-byte chunks"),
-            );
+            values[index] = u64::from_be_bytes(*chunk);
         }
         Self::canonical(values)
     }
@@ -2730,9 +2726,8 @@ mod tests {
             Ok(u64::MAX)
         }
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
-            Ok({
-                destination.fill(0xff);
-            })
+            destination.fill(0xff);
+            Ok(())
         }
     }
     struct ZeroRng;
@@ -2745,9 +2740,8 @@ mod tests {
             Ok(0)
         }
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
-            Ok({
-                destination.fill(0);
-            })
+            destination.fill(0);
+            Ok(())
         }
     }
     #[test]

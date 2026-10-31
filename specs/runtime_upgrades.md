@@ -382,10 +382,11 @@ A running predecessor network adopts this release once, at a governed checkpoint
    `A < H < E` and its signed snapshot.
 3. **Import.** With `[snapshot.upgrade_checkpoint]` locating `H`, the import rewrites the
    predecessor's World, proves it against block `H`'s certified World root under the predecessor's
-   root rule and requires the retired `runtime_upgrades` table to hold only adoption
-   authorizations, which enter that root, exactly one of which authorizes this selection at `H`
-   (activated at its start height `A`, `A < H < E`). The checkpoint block must not have changed
-   the table. Otherwise the import refuses; configuration alone never authorizes it.
+   root rule, with the entries of the retired `runtime_upgrades` table in that root. Exactly one
+   entry must authorize this selection at `H` (activated at its start height `A`, `A < H < E`),
+   and none may be a proposal starting after `H`, which the predecessor's governance cancels
+   first; the other records are settled and leave with the table. The checkpoint block must not
+   have changed the table. Otherwise the import refuses; configuration alone never authorizes it.
 4. **Anchor.** The import builds the `AdoptionRecordV1` (network, `H` and its block hash, both
    roots, the committee digest, the selection and the authorization's identity) and logs it.
 

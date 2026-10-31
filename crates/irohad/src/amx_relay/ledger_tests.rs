@@ -269,22 +269,22 @@ async fn cold_journal_reset_cannot_resign_a_retained_unknown_or_applied_identity
         reopened.test_lease.lock().unwrap().take();
         reopened.custody = original.custody.reopen_for_test();
         let reopened = Arc::new(reopened.with_test_observation());
-        let signer = Arc::new(CountingSigner {
+        let counting_signer = Arc::new(CountingSigner {
             signed,
             identity,
             signs: AtomicUsize::new(0),
         });
         let account = RelayAccount {
-            account: signer.clone(),
+            account: counting_signer.clone(),
             ledger: reopened,
         };
         // A decoded journal reset asks the actual account wrapper to sign the original
         // unsigned payload again. Native custody, not that label, decides whether it may.
-        let payload = norito::encode_canonical(signer.signed.payload()).unwrap();
+        let payload = norito::encode_canonical(counting_signer.signed.payload()).unwrap();
         let result = account.sign(&payload).await;
         if rejected {
             result.unwrap();
-            assert_eq!(signer.signs.load(Ordering::Relaxed), 1);
+            assert_eq!(counting_signer.signs.load(Ordering::Relaxed), 1);
         } else {
             assert!(
                 result.is_err(),
@@ -294,7 +294,7 @@ async fn cold_journal_reset_cannot_resign_a_retained_unknown_or_applied_identity
                 result.unwrap_err().code,
                 WorkflowErrorCode::EvidenceUnavailable
             );
-            assert_eq!(signer.signs.load(Ordering::Relaxed), 0);
+            assert_eq!(counting_signer.signs.load(Ordering::Relaxed), 0);
         }
     }
 }

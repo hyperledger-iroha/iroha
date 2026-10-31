@@ -3063,7 +3063,9 @@ fn musubi_provider_bundle_attestation_and_exact_release_contract_is_static() {
                     .map(String::as_str)
                     .collect::<Vec<_>>();
                 let properties = row[2 + required_len..]
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|pair| (pair[0].as_str(), pair[1].as_str()));
                 (row[0].as_str(), required, properties)
             })

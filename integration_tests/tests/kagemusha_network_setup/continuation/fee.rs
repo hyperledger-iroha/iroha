@@ -2,7 +2,7 @@
 //!
 //! The controller supplies a fresh dedicated fee target and genuine producer originals.
 //! No Receive instruction is submitted to this network; the native producer may already
-//! have exercised offline Receive and ArchiveReceive. This does not qualify physical devices.
+//! have exercised offline Receive and `ArchiveReceive`. This does not qualify physical devices.
 //! TODO: Compile and run against the integrated current-source catalog and stock nodes.
 
 use super::*;
@@ -239,9 +239,10 @@ fn inputs(
         &activation.certificates,
     )?;
     ensure!(verified.fee == 3, "exact fee payout");
-    installed
-        .verifier()
-        .verify_package_proofs(&claim_value.payment.send, Default::default())?;
+    installed.verifier().verify_package_proofs(
+        &claim_value.payment.send,
+        iroha_pasta::msm::MemoryBudget::default(),
+    )?;
     Ok(Inputs {
         scheme,
         manifest,

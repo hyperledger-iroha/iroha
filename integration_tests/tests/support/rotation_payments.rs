@@ -36,7 +36,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::Quantity;
 
 /// An independently pinned, durable owner for the monetary workload used by the ceremony.
-pub(super) struct CustomerWorkload {
+pub struct CustomerWorkload {
     session: NativePaymentSession,
     asset: AssetDefinitionId,
     recipient: AccountId,
@@ -124,7 +124,7 @@ impl CustomerWorkload {
 /// `session` retains the test's original independently signed-genesis-rooted verifier.
 /// `deadline` is the original absolute phase deadline, shared by transport and task wait.
 /// The caller must retain this original request/storage when its outcome is unknown.
-pub(super) async fn customer_payment_at_height(
+pub async fn customer_payment_at_height(
     client: &Client,
     recipient: AccountId,
     asset: AssetDefinitionId,

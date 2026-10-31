@@ -372,7 +372,7 @@ enum GenesisPeer {
     Nth(usize),
 }
 fn scaled_timeout(base: Duration, peer_count: usize) -> Duration {
-    let scale = ((peer_count + 3) / 4).max(1) as u32;
+    let scale = peer_count.div_ceil(4).max(1) as u32;
     base.saturating_mul(scale)
 }
 fn non_faulty_sync_timeout(
@@ -493,7 +493,7 @@ async fn start_network_under_relay(
         .map(|(stage, idx)| (idx, stage))
         .collect();
     let startup_timeout = scaled_timeout(network.peer_startup_timeout(), network.peers().len());
-    let start_results = match timeout(
+    let start_results = if let Ok(results) = timeout(
         startup_timeout,
         network
             .peers()
@@ -560,18 +560,17 @@ async fn start_network_under_relay(
     )
     .await
     {
-        Ok(results) => results,
-        Err(_) => {
-            let snapshot = network.startup_snapshot();
-            return Err(eyre!(
-                "expected peers to start within timeout ({startup_timeout:?}); startup snapshot: [{}]",
-                snapshot
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
+        results
+    } else {
+        let snapshot = network.startup_snapshot();
+        return Err(eyre!(
+            "expected peers to start within timeout ({startup_timeout:?}); startup snapshot: [{}]",
+            snapshot
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     };
     for result in start_results {
         result?;
@@ -992,7 +991,7 @@ impl UnstableNetwork {
         let peers = network.peers();
         let initial_non_empty = peers
             .iter()
-            .filter_map(|peer| peer.best_effort_block_height())
+            .filter_map(iroha_test_network::NetworkPeer::best_effort_block_height)
             .map(|height| height.non_empty)
             .max()
             .unwrap_or(0);
@@ -1170,8 +1169,7 @@ impl UnstableNetwork {
                     Ok(status) => BlockHeight::from(status).non_empty,
                     Err(_) => peer
                         .best_effort_block_height()
-                        .map(|height| height.non_empty)
-                        .unwrap_or(0),
+                        .map_or(0, |height| height.non_empty),
                 };
                 if non_empty >= target_height {
                     ready += 1;
@@ -1563,11 +1561,11 @@ impl UnstableNetwork {
                     }
                 };
                 let asset_value = asset.as_ref().map(|asset| asset.value().clone());
-                if let Some(asset) = asset.as_ref() {
-                    if asset.value() == &expected_supply {
-                        converged_peers = converged_peers.saturating_add(1);
-                        continue;
-                    }
+                if let Some(asset) = asset.as_ref()
+                    && asset.value() == &expected_supply
+                {
+                    converged_peers = converged_peers.saturating_add(1);
+                    continue;
                 }
                 last_seen = asset_value;
             }
@@ -1578,16 +1576,15 @@ impl UnstableNetwork {
             if should_resubmit_tx(allow_resubmit, now, next_resubmit_at) {
                 let attempt = resubmit_attempt.saturating_add(1);
                 let remaining = supply_deadline.saturating_duration_since(now);
-                if !remaining.is_zero() {
-                    if let Err(err) =
+                if !remaining.is_zero()
+                    && let Err(err) =
                         submit_tx("recovered_retry", remaining, recovered_candidates.clone()).await
-                    {
-                        iroha_logger::warn!(
-                            ?err,
-                            attempt,
-                            "recovered submit retry failed while waiting for supply"
-                        );
-                    }
+                {
+                    iroha_logger::warn!(
+                        ?err,
+                        attempt,
+                        "recovered submit retry failed while waiting for supply"
+                    );
                 }
                 resubmit_attempt = attempt;
                 next_resubmit_at = Instant::now() + submit_retry_backoff(attempt);
@@ -1782,8 +1779,7 @@ mod tests {
         let rotated = topology_for_permissioned_round(&peer_ids, &chain_id, height, 0);
         let preferred = rotated
             .iter()
-            .skip(1)
-            .next()
+            .nth(1)
             .expect("test roster should have a safe preferred peer")
             .clone();
         let preferred_faulty_ids = HashSet::from([preferred.clone()]);

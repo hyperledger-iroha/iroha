@@ -3463,12 +3463,14 @@ where
                 }
             }
         }
-        Err(first_failure.unwrap_or(match restorable.current_height {
-            Some(snapshot_height) => TryReadError::SuccessorRequired { snapshot_height },
-            None => TryReadError::SnapshotGenerationInvalid {
-                path: store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME),
-                reason: "no signed generation of this chain lies below the Kura tip".to_owned(),
-            },
+        Err(first_failure.unwrap_or_else(|| {
+            restorable.current_height.map_or_else(
+                || TryReadError::SnapshotGenerationInvalid {
+                    path: store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME),
+                    reason: "no signed generation of this chain lies below the Kura tip".to_owned(),
+                },
+                |snapshot_height| TryReadError::SuccessorRequired { snapshot_height },
+            )
         }))
     })
 }

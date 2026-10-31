@@ -123,7 +123,9 @@ fn folded_transaction(
 fn block(height: usize, transactions: Vec<FoldedTransaction>) -> FoldedBlock {
     FoldedBlock {
         height,
-        hash: HashOf::from_untyped_unchecked(Hash::prehashed([height as u8; 32])),
+        hash: HashOf::from_untyped_unchecked(Hash::prehashed(
+            [u8::try_from(height).expect("test heights fit one byte"); 32],
+        )),
         transactions: Some(transactions),
     }
 }

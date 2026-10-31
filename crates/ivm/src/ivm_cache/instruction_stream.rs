@@ -44,7 +44,7 @@ impl<'a> ValidatedInstructions<'a> {
             .enumerate()
             .map(|(index, bytes)| DecodedOp {
                 pc: (index as u64) * 4,
-                inst: u32::from_le_bytes(bytes.try_into().expect("validated complete word")),
+                inst: u32::from_le_bytes(*bytes),
             })
     }
 }

@@ -17561,7 +17561,7 @@ pub mod isi {
                 })?;
             let parameter = private_settlement_parameter
                 .as_ref()
-                .unwrap_or(self.inner());
+                .unwrap_or_else(|| self.inner());
             super::parameter_validation::validate_ivm_heap_parameter(parameter)?;
             super::parameter_validation::validate_parliament_lifecycle_parameter(parameter)
                 .map_err(|error| {
@@ -17826,8 +17826,7 @@ pub mod isi {
                 }
             }
             let mut genesis_cadence = None;
-            let mut root_fee_scope = None;
-            if let Parameter::Custom(next) = parameter {
+            let root_fee_scope = if let Parameter::Custom(next) = parameter {
                 if iroha_data_model::validation_fee::is_reserved_validation_fee_parameter_id(
                     next.id(),
                 ) {
@@ -18002,9 +18001,7 @@ pub mod isi {
                     }
                 }
                 let is_genesis = state_transaction._curr_block.is_genesis();
-                root_fee_scope = if next.id()
-                    == &iroha_data_model::block::consensus::RootFeePolicy::parameter_id()
-                {
+                if next.id() == &iroha_data_model::block::consensus::RootFeePolicy::parameter_id() {
                     Some(
                         crate::sumeragi::lanes::routing::read_routing_root_scope(
                             &*state_transaction.world,
@@ -18029,8 +18026,10 @@ pub mod isi {
                     )
                 } else {
                     None
-                };
-            }
+                }
+            } else {
+                None
+            };
             let prepared = state_transaction
                 .prepare_parameter_change(parameter, genesis_cadence, root_fee_scope)
                 .map_err(|original| {
@@ -26782,14 +26781,14 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
 
         #[test]
         fn manifest_verification_preserves_original_state_capacity_for_counter_and_frame() {
-            // Keep retired fixture State generations from reopening this original pool.
-            // Only the tested admission and synchronous owner refunds may change capacity.
-            let _constructor_retirement = crossbeam_epoch::pin();
             use std::{
                 future::Future as _,
                 pin::pin,
                 task::{Context, Poll, Waker},
             };
+            // Keep retired fixture State generations from reopening this original pool.
+            // Only the tested admission and synchronous owner refunds may change capacity.
+            let _constructor_retirement = crossbeam_epoch::pin();
 
             let signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
             let (_, manifest) = minimal_contract_artifact();

@@ -452,12 +452,7 @@ fn public_geometry_retains_all_callables_and_fixed_degree_four() {
             let base_end = super::super::WIDTH;
             let word_end = base_end + shape.words * WORD_WIDTH;
             let packets_end = word_end + shape.words * WORD_PORTS * packet::WIDTH;
-            let words = v[base_end..word_end]
-                .as_chunks::<WORD_WIDTH>()
-                .0
-                .iter()
-                .map(|w| *<&[F; WORD_WIDTH]>::try_from(w).unwrap())
-                .collect::<Vec<_>>();
+            let words = v[base_end..word_end].as_chunks::<WORD_WIDTH>().0.to_vec();
             let packets = v[word_end..packets_end]
                 .as_chunks::<{ WORD_PORTS * packet::WIDTH }>()
                 .0

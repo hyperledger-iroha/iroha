@@ -240,7 +240,7 @@ fn register_runtime_domain(network: &Network, client: &Client, domain: &DomainId
             }
             let retry = register_domain();
             match retry {
-                Ok(_) => Ok(()),
+                Ok(()) => Ok(()),
                 Err(retry_err)
                     if wait_for_domain_visibility(
                         client,
@@ -559,7 +559,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
         .first()
         .expect("network should expose at least one peer")
         .torii_url()
-        .to_string();
+        .clone();
     let propose_cancel = post_torii_app_json(
         &rt,
         &format!("{torii_base}/v1/multisig/cancel"),
@@ -852,7 +852,7 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
         "text output should contain one block per proposal entry"
     );
     let first_text_entry = &expected_proposals[0];
-    assert!(blocks[0].contains(&format!("multisig_account_id: {}", multisig_account_id)));
+    assert!(blocks[0].contains(&format!("multisig_account_id: {multisig_account_id}")));
     assert!(blocks[0].contains(&format!("proposal_id: {}", first_text_entry.proposal_id)));
     assert!(blocks[0].contains("status: COLLECTING_SIGNATURES"));
     assert!(blocks[0].contains(&format!(

@@ -78,7 +78,7 @@ fn find_genesis_assets_via_torii_iterable() -> Result<()> {
     let alice_assets_url = format!(
         "{}/v1/accounts/{}/assets?limit=1&include_total=true",
         peer.torii_url(),
-        &*ALICE_ID
+        *ALICE_ID
     );
     let alice_assets_body = rt.block_on(async {
         http.get(&alice_assets_url)

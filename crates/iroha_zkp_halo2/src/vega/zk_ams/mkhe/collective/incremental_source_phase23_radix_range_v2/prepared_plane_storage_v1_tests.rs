@@ -80,10 +80,8 @@ fn prepared_storage_stream_writes_exact_values_and_original_tail_across_both_rea
         for index in 0..32 {
             let chunk = snapshot.read_slot_v1(ordinal * 33 + index).unwrap();
             for (local, encoded) in chunk.as_slice_v1().as_chunks::<32>().0.iter().enumerate() {
-                let value = crate::vega::VegaT256ScalarV1::from_be_bytes_exact_ref(
-                    encoded.try_into().unwrap(),
-                )
-                .unwrap();
+                let value =
+                    crate::vega::VegaT256ScalarV1::from_be_bytes_exact_ref(encoded).unwrap();
                 assert_eq!(
                     value,
                     crate::vega::VegaT256ScalarV1::from_u64(index * 512 + local as u64 + ordinal)

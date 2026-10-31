@@ -110,7 +110,10 @@ fn compact_sha_base_projection_checks_length_and_clears_failed_or_unwound_batche
 #[test]
 #[ignore = "release-only comparison of original full-row replay and compact base projection"]
 fn compact_sha_base_projection_cost_diagnostic() {
-    assert!(!cfg!(debug_assertions), "use an optimized build");
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "use an optimized build"
+    );
     let schedule = ZkX509ShaCallScheduleV1::new(ZkX509ShaCallPublicShapeV1 {
         disclosed_attributes: 4,
     })

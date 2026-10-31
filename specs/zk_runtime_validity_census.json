@@ -1510,7 +1510,7 @@
    "owner": null,
    "path": "crates/iroha_test_network/src/lib.rs",
    "symbol": "IROHA_TEST_SKIP_BUILD_ENV",
-   "gates": "Environment variables read by tools that are not a validator: the command line locating its client configuration (HOME, USERPROFILE), the deployment tool locating its workspace and build directory (XDG_STATE_HOME, LOCALAPPDATA, CARGO_TARGET_DIR) and the test network harness (which binary to build and with which Cargo features, where to keep temporary directories, how many networks run in parallel, whether bind checks are skipped).",
+   "gates": "Environment variables read by tools that are not a validator: the command line locating its client configuration (HOME, USERPROFILE), the deployment tool locating its workspace and build directory (XDG_STATE_HOME, LOCALAPPDATA, CARGO_TARGET_DIR) and the test network harness (which binary to build and with which Cargo features, the release bundle anchors it admits, the developer tools it resolves on PATH, where to keep temporary directories, how many networks run in parallel, whether bind checks are skipped).",
    "decided_by": "Stays local to the tool. None of these values reaches a node's validation: the harness passes its choices to the daemons it starts through their configuration files and command lines.",
    "attribution": "read",
    "note": "AGENTS.md keeps environment toggles for developer convenience in tests only. PROGRAM_IROHAD_FEATURES_ENV selects the Cargo features of the daemon binary the harness builds; the feature gates themselves are the feature.* entries.",
@@ -1522,6 +1522,7 @@
     ["crates/iroha_deploy/src/managed/workspace.rs", "env_read", "XDG_STATE_HOME", 1],
     ["crates/iroha_deploy/src/sora_network.rs", "env_read", "CARGO_TARGET_DIR", 1],
     ["crates/iroha_test_network/src/config.rs", "env_read", "IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR", 1],
+    ["crates/iroha_test_network/src/development_process.rs", "env_read", "PATH", 1],
     ["crates/iroha_test_network/src/disposable_runtime_provider_broker.rs", "env_read", "TEMPDIR_IN_ENV", 1],
     ["crates/iroha_test_network/src/lib.rs", "env_read", "<expression>", 1],
     ["crates/iroha_test_network/src/lib.rs", "env_read", "CARGO", 1],
@@ -1540,7 +1541,8 @@
     ["crates/iroha_test_network/src/lib.rs", "env_read", "TEST_NETWORK_CARGO", 1],
     ["crates/iroha_test_network/src/lib.rs", "env_read", "env", 1],
     ["crates/iroha_test_network/src/lib.rs", "env_read", "key", 1],
-    ["crates/iroha_test_network/src/lib.rs", "env_read", "var", 1]
+    ["crates/iroha_test_network/src/lib.rs", "env_read", "var", 1],
+    ["crates/iroha_test_network/src/release_contract.rs", "env_read", "name", 1]
    ]
   },
   {
@@ -4154,8 +4156,8 @@
     ["crates/connect_norito_bridge/src/lib.rs", "global_manifest", "exact12", 17],
     ["crates/connect_norito_bridge/src/platform_jni.rs", "global_manifest", "capability_manifest", 3],
     ["crates/connect_norito_bridge/src/platform_jni.rs", "global_manifest", "exact12", 1],
-    ["crates/connect_norito_bridge/src/platform_jni/part_2.rs", "global_manifest", "capability_manifest", 14],
-    ["crates/connect_norito_bridge/src/platform_jni/part_2.rs", "global_manifest", "exact12", 32],
+    ["crates/connect_norito_bridge/src/platform_jni/part_2.rs", "global_manifest", "capability_manifest", 13],
+    ["crates/connect_norito_bridge/src/platform_jni/part_2.rs", "global_manifest", "exact12", 31],
     ["crates/connect_norito_bridge/src/platform_jni/part_3.rs", "global_manifest", "exact12", 12],
     ["crates/connect_norito_bridge/src/privacy_construction.rs", "global_manifest", "capability_manifest", 6],
     ["crates/connect_norito_bridge/src/privacy_construction.rs", "global_manifest", "exact12", 4],
@@ -4459,7 +4461,6 @@
     ["crates/iroha_data_model/src/musubi/streaming.rs", "global_manifest", "release_manifest", 2],
     ["crates/iroha_data_model/src/sorafs/mod.rs", "global_manifest", "release_manifest", 1],
     ["crates/iroha_data_model/src/sorafs/release_manifest_authority.rs", "global_manifest", "release_manifest", 87],
-    ["crates/iroha_test_network/src/lib.rs", "global_manifest", "release_manifest", 5],
     ["crates/irohad/src/external_software_signer/adapter.rs", "global_manifest", "release_manifest", 1],
     ["crates/irohad/src/external_software_signer/protocol.rs", "global_manifest", "release_manifest", 1],
     ["crates/irohad/src/musubi_publication_service/finality.rs", "global_manifest", "release_manifest", 4],
@@ -6580,7 +6581,7 @@
    "test-network-parliament-signers": {"class": "availability_gate", "entry": "feature.test_network_hooks", "cfg_sites": 3},
    "test-network-private-settlement-evidence": {"class": "availability_gate", "entry": "feature.test_network_hooks", "cfg_sites": 0},
    "zk-ipa-native": {"class": "validity_gate", "entry": "feature.zk_halo2_family", "cfg_sites": 1},
-   "zk-preverify": {"class": "validity_gate", "entry": "feature.zk_halo2_family", "cfg_sites": 16},
+   "zk-preverify": {"class": "validity_gate", "entry": "feature.zk_halo2_family", "cfg_sites": 15},
    "zk-proof-tags": {"class": "validity_gate", "entry": "feature.zk_halo2_family", "cfg_sites": 0},
    "zk-stark": {"class": "validity_gate", "entry": "feature.zk_stark", "cfg_sites": 47},
    "zk-tests": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},
@@ -6757,7 +6758,7 @@
  },
  "summary": {
   "entries": 235,
-  "sites": 1506,
+  "sites": 1507,
   "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 118, "open": 40, "out_of_plan": 21, "unsupported": 19},
   "by_owner": {"-": 139, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }

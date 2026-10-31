@@ -68,8 +68,8 @@ fn resolve_whole_device(
         || number
             .parse::<u32>()
             .ok()
-            .filter(|value| *value > 0)
-            .is_none()
+            .as_ref()
+            .is_none_or(|value| *value <= 0)
     {
         eyre::bail!("Inrou IO partition marker is not a positive partition number");
     }

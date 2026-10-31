@@ -16,7 +16,6 @@ use crate::{
         live_proposal_instructions_for_approval, multisig_instruction_decode_attempt,
     },
     state::StateTransaction,
-    tx::TransactionRejectionReason,
 };
 use core::fmt;
 use iroha_data_model::{
@@ -87,28 +86,6 @@ impl fmt::Display for OpaqueDeferredAuthorityError {
             }
         }
     }
-}
-
-/// Reject committee preparation, monetary staking and SCCP outbound records derived by opaque
-/// deferred groups.
-///
-/// Deferred multisig approvals are resolved against this execution overlay, so a live
-/// proposal cannot smuggle a command that its signers never reviewed as an instruction.
-///
-/// # Errors
-/// Any nested committee, monetary staking or `RecordSccpMessage` instruction, an unresolved
-/// approval, or an excessively deep proposal graph.
-pub fn reject_opaque_deferred_authority(
-    instruction_groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
-    state_transaction: &StateTransaction<'_, '_>,
-) -> Result<(), Attempt<TransactionRejectionReason>> {
-    reject_opaque_instruction_authority(
-        instruction_groups
-            .values()
-            .flat_map(|instructions| instructions.iter()),
-        state_transaction,
-    )
-    .map_err(|error| error.map_rejection(TransactionRejectionReason::Validation))
 }
 
 /// Validate the actual effects produced by an opaque host or verified replay.

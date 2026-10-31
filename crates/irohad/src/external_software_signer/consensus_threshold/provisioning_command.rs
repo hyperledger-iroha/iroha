@@ -288,8 +288,8 @@ fn run(args: Args) -> Result<(), PreparationError> {
     let components =
         crate::taira_runtime_signer::load_private_record_from_file(share_file, 96, |bytes| {
             let mut components = Zeroizing::new([[0; 32]; 3]);
-            for (component, bytes) in components.iter_mut().zip(bytes.chunks_exact(32)) {
-                component.copy_from_slice(bytes);
+            for (component, bytes) in components.iter_mut().zip(bytes.as_chunks::<32>().0) {
+                *component = *bytes;
             }
             Ok(components)
         })

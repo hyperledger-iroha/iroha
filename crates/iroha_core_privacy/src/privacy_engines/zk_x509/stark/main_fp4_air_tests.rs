@@ -149,7 +149,7 @@ fn projection_fp4_capability_evaluates_its_complete_registration_and_rejects_wro
     let mut rows = rows(registration);
     assert_eq!(
         evaluator
-            .evaluate_residues_v1(opening(&rows), &rows[4], challenges)
+            .evaluate_residues_v1(opening(&rows), &rows[4], &challenges)
             .unwrap()
             .len(),
         registration.segment.constraint_count
@@ -157,7 +157,7 @@ fn projection_fp4_capability_evaluates_its_complete_registration_and_rejects_wro
     rows[0].pop();
     assert!(
         evaluator
-            .evaluate_residues_v1(opening(&rows), &rows[4], challenges)
+            .evaluate_residues_v1(opening(&rows), &rows[4], &challenges)
             .is_err()
     );
 }

@@ -141,12 +141,9 @@ async fn wait_for_invoice_status(
     {
         Ok(result) => result,
         Err(elapsed) => {
-            let status = client
-                .client()
-                .status()
-                .get()
-                .await
-                .map(|status| {
+            let status = client.client().status().get().await.map_or_else(
+                |err| format!("status query failed: {err}"),
+                |status| {
                     format!(
                         "blocks={}, blocks_non_empty={}, txs_approved={}, txs_rejected={}",
                         status.blocks,
@@ -154,34 +151,27 @@ async fn wait_for_invoice_status(
                         status.txs_approved,
                         status.txs_rejected
                     )
-                })
-                .unwrap_or_else(|err| format!("status query failed: {err}"));
+                },
+            );
             let diagnostics = spawn_blocking({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
                 let trigger_id = trigger_id.clone();
                 move || {
-                    let invoice = subscription_invoice_for_nft(&client, &nft_id)
-                        .map(|invoice| format!("{invoice:?}"))
-                        .unwrap_or_else(|err| format!("invoice query failed: {err}"));
-                    let state = subscription_state_for_nft(&client, &nft_id)
-                        .map(|state| format!("{state:?}"))
-                        .unwrap_or_else(|err| format!("state query failed: {err}"));
+                    let invoice = subscription_invoice_for_nft(&client, &nft_id).map_or_else(|err| format!("invoice query failed: {err}"), |invoice| format!("{invoice:?}"));
+                    let state = subscription_state_for_nft(&client, &nft_id).map_or_else(|err| format!("state query failed: {err}"), |state| format!("{state:?}"));
                     let trigger = client
                         .client().query(FindTriggers::new())
-                        .execute_all()
-                        .map(|triggers| {
+                        .execute_all().map_or_else(|err| format!("trigger query failed: {err}"), |triggers| {
                             triggers
                                 .into_iter()
                                 .find(|trigger| trigger.id() == &trigger_id)
                                 .map(|trigger| format!("{:?}", trigger.action()))
                                 .unwrap_or_else(|| "missing".to_string())
-                        })
-                        .unwrap_or_else(|err| format!("trigger query failed: {err}"));
+                        });
                     let latest_block = client
                         .client().query(FindBlockHeaders)
-                        .execute_all()
-                        .map(|headers| {
+                        .execute_all().map_or_else(|err| format!("block header query failed: {err}"), |headers| {
                             headers.first().map_or_else(
                                 || "latest_block=none".to_string(),
                                 |header| {
@@ -192,12 +182,10 @@ async fn wait_for_invoice_status(
                                     )
                                 },
                             )
-                        })
-                        .unwrap_or_else(|err| format!("block header query failed: {err}"));
+                        });
                     let time_trigger_blocks = client
                         .client().query(FindBlocks)
-                        .execute_all()
-                        .map(|blocks| {
+                        .execute_all().map_or_else(|err| format!("block query failed: {err}"), |blocks| {
                             let hits = blocks
                                 .iter()
                                 .filter(|block| block.execution_outputs().iter().any(|output| matches!(output, ExecutionOutputV1::Time(_))))
@@ -221,8 +209,7 @@ async fn wait_for_invoice_status(
                             } else {
                                 format!("time_trigger_blocks={}", hits.join(" | "))
                             }
-                        })
-                        .unwrap_or_else(|err| format!("block query failed: {err}"));
+                        });
                     format!(
                         "{status}; {latest_block}; {time_trigger_blocks}; {state}; {invoice}; billing_trigger={trigger}"
                     )
@@ -281,7 +268,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
             let unit_key: Name = "requests".parse()?;
             let period_ms = 2_000_u64;
             let retry_backoff_ms = 500_u64;
-            let (start_time, start_ms) = schedule_start(&network);
+            let (start_time, start_ms) = schedule_start(network);
             let unit_price = Quantity::from(2_u32);
             let usage_delta = Quantity::from(3_u32);
             let amount = Quantity::from(6_u32);
@@ -602,7 +589,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
             let billing_trigger_id: TriggerId = "fixed_billing".parse()?;
             let nft_id: NftId = "subscription_fixed$wonderland.universal".parse()?;
             let period_ms = 3_000_u64;
-            let (start_time, start_ms) = schedule_start(&network);
+            let (start_time, start_ms) = schedule_start(network);
             let amount = Quantity::from(120_u32);
             let initial_balance = Quantity::from(300_u32);
             spawn_blocking({
@@ -864,7 +851,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
             let nft_id: NftId = "subscription_retry$wonderland.universal".parse()?;
             let period_ms = 1_500_u64;
             let retry_backoff_ms = 750_u64;
-            let (start_time, start_ms) = schedule_start(&network);
+            let (start_time, start_ms) = schedule_start(network);
             let amount = Quantity::from(120_u32);
             let initial_balance = Quantity::from(50_u32);
             spawn_blocking({

@@ -2569,14 +2569,12 @@ impl Execute for SlashPublicLaneValidator {
                     .into(),
             ));
         }
-        let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
         apply_slash_to_validator(
             state_transaction,
             (self.lane_id, &self.validator),
             self.offence_height,
             self.slash_id,
             &self.amount,
-            recorded_at_ms,
             &self.monetary_plan,
         )
     }
@@ -3575,7 +3573,6 @@ pub(crate) fn apply_slash_to_validator(
     offence_height: u64,
     slash_id: Hash,
     amount: &Quantity,
-    now_ms: u64,
     monetary_plan: &PublicLaneMonetaryPlanV1,
 ) -> Result<(), Error> {
     apply_slash_to_validator_inner(
@@ -3584,7 +3581,6 @@ pub(crate) fn apply_slash_to_validator(
         validator,
         slash_id,
         amount,
-        now_ms,
         Some(&ConsensusSlashLiability::Root(offence_height)),
         None,
         true,
@@ -3600,7 +3596,6 @@ pub(crate) fn apply_slash_to_validator_without_observability(
     validator: &AccountId,
     slash_id: Hash,
     amount: &Quantity,
-    now_ms: u64,
 ) -> Result<(), Error> {
     apply_slash_to_validator_inner(
         state_transaction,
@@ -3608,7 +3603,6 @@ pub(crate) fn apply_slash_to_validator_without_observability(
         validator,
         slash_id,
         amount,
-        now_ms,
         None,
         None,
         false,
@@ -3622,7 +3616,6 @@ pub(crate) fn apply_indexed_consensus_slash_to_validator(
     (lane_id, validator): (LaneId, &AccountId),
     slash_id: Hash,
     amount: &Quantity,
-    now_ms: u64,
     liability: &ConsensusSlashLiability,
     share_keys: &[PublicLaneStakeShareKey],
 ) -> Result<(), Error> {
@@ -3632,7 +3625,6 @@ pub(crate) fn apply_indexed_consensus_slash_to_validator(
         validator,
         slash_id,
         amount,
-        now_ms,
         Some(liability),
         Some(share_keys),
         false,
@@ -3646,7 +3638,6 @@ pub(crate) fn apply_indexed_slash_to_validator_without_observability(
     (lane_id, validator): (LaneId, &AccountId),
     slash_id: Hash,
     amount: &Quantity,
-    now_ms: u64,
     liability: &ConsensusSlashLiability,
     share_keys: &[PublicLaneStakeShareKey],
 ) -> Result<(), Error> {
@@ -3656,7 +3647,6 @@ pub(crate) fn apply_indexed_slash_to_validator_without_observability(
         validator,
         slash_id,
         amount,
-        now_ms,
         Some(liability),
         Some(share_keys),
         false,
@@ -3671,7 +3661,6 @@ fn apply_slash_to_validator_inner(
     validator: &AccountId,
     slash_id: Hash,
     amount: &Quantity,
-    now_ms: u64,
     liability: Option<&ConsensusSlashLiability>,
     indexed_share_keys: Option<&[PublicLaneStakeShareKey]>,
     record_execution_evidence: bool,
@@ -4030,7 +4019,6 @@ pub(crate) mod tests {
     use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::{ALICE_ID, gen_account_in};
     use nonzero_ext::nonzero;
-    use std::time::Duration;
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("staking fixture key generation should succeed")
     }
@@ -6237,7 +6225,7 @@ pub(crate) mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
-        let (validator, _delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
+        let (validator, _delegator, _escrow, asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(7);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -6332,7 +6320,7 @@ pub(crate) mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
-        let (validator, _, escrow, asset_definition) = prepare_accounts(&mut stx);
+        let (validator, _, _, asset_definition) = prepare_accounts(&mut stx);
         set_test_npos_penalty_windows(&mut stx, 1, 1);
         let (replacement, _) = gen_account_in("nexus");
         Register::account(Account::new(replacement.clone()))
@@ -6440,7 +6428,7 @@ pub(crate) mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
-        let (validator, _delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
+        let (validator, _delegator, _escrow, _asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(12);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -6561,7 +6549,7 @@ pub(crate) mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
-        let (validator, _delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
+        let (validator, _delegator, _escrow, asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(10);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -7819,7 +7807,7 @@ pub(crate) mod tests {
         let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
         let lane_id = LaneId::new(35);
-        let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
+        let (validator, _, _, asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
                 &stx,
@@ -8349,7 +8337,7 @@ pub(crate) mod tests {
     }
     #[test]
     fn register_rejects_below_min_stake() {
-        let mut state = setup_state();
+        let state = setup_state();
         let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
             .expect("funded parameter fixture block");
         let mut policy = parameters.require_staking_policy().unwrap().clone();
@@ -8639,7 +8627,7 @@ pub(crate) mod tests {
     }
     #[test]
     fn schedule_public_lane_unbond_rejects_mismatched_public_lane_validator_row() {
-        let mut state = setup_state();
+        let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
@@ -8868,7 +8856,6 @@ pub(crate) mod tests {
             (lane_id, &validator),
             Hash::new("self-pending-priority"),
             &Quantity::from(400_u64),
-            0,
             &ConsensusSlashLiability::Root(2),
             &share_keys,
         )
@@ -8907,7 +8894,7 @@ pub(crate) mod tests {
         let block = new_block_with_height_and_time(1, 0);
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
-        let (validator, _delegator, escrow, asset_definition) = prepare_accounts(&mut stx);
+        let (validator, _delegator, _escrow, asset_definition) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(175);
         set_test_npos_penalty_windows(&mut stx, 1, 1);
         RegisterPublicLaneValidator {
@@ -9151,14 +9138,12 @@ pub(crate) mod tests {
             let mut validation = state_block
                 .consensus_effects_transaction()
                 .expect("funded consensus-effects validation overlay");
-            let now_ms = validation.block_unix_timestamp_ms();
             apply_slash_to_validator_without_observability(
                 &mut validation,
                 lane_id,
                 &validator,
                 Hash::new("validation-only-consensus-slash"),
                 &Quantity::from(100_u64),
-                now_ms,
             )
             .expect("a valid slash must be applicable in the disposable overlay");
             let validation_record = validation

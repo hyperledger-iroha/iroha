@@ -2400,7 +2400,7 @@ impl Drop for ZeroizingFieldColumnV1 {
 /// Test-only counts around the original final-column eraser.
 #[cfg(test)]
 #[path = "aggregate_stark/field_column_inspection.rs"]
-pub(crate) mod field_column_inspection;
+pub mod field_column_inspection;
 fn zeroize_field_column_v1(values: &mut [F]) {
     for value in values {
         value.zeroize_v1();

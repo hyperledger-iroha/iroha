@@ -36,11 +36,11 @@ pub(super) fn poseidon(
         return false;
     };
     if state.len() != expected_words
-        || !state.as_chunks::<4>().0.iter().all(|limbs| {
-            limbs
-                .try_into()
-                .is_ok_and(|words| FieldElem(words).is_canonical())
-        })
+        || !state
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|limbs| FieldElem(*limbs).is_canonical())
     {
         return false;
     }
@@ -137,7 +137,7 @@ mod tests {
                 .as_chunks::<4>()
                 .0
                 .iter()
-                .all(|field| field == maximum)
+                .all(|field| *field == maximum)
         );
     }
 }

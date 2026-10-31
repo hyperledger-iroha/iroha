@@ -162,7 +162,7 @@ fn platform(
                 .map(|b| Sha256::digest(&b).into())
         })
         .collect::<Result<Vec<[u8; 32]>>>()?;
-    signers.sort();
+    signers.sort_unstable();
     let app = KagemushaWalletAppPolicyV1 {
         version: 1,
         scheme_id: scheme,

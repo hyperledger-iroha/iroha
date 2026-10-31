@@ -1475,12 +1475,7 @@ mod tests {
             padded.push(0);
         }
         padded.extend_from_slice(&bit_length.to_be_bytes());
-        padded
-            .as_chunks::<SHA256_BLOCK_BYTES>()
-            .0
-            .iter()
-            .map(|block| *block)
-            .collect()
+        padded.as_chunks::<SHA256_BLOCK_BYTES>().0.to_vec()
     }
 
     fn replace_witness(material: &Figure9McMaterial, witness: Vec<Scalar>) -> Figure9McMaterial {

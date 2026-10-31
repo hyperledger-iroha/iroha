@@ -3999,7 +3999,7 @@
         {
           "stage": "follower",
           "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
-          "contains": "if age > ZK_X509_MAX_CRL_AGE_SECONDS_V1 {"
+          "contains": "&& age > ZK_X509_MAX_CRL_AGE_SECONDS_V1"
         },
         {
           "stage": "follower",
@@ -25522,7 +25522,7 @@
             "exprs": {
               "MAX_LEAD": "16",
               "MAX_ADVANCE": "1_024",
-              "MAX_COVERAGE_AGE": "Duration::from_secs(30 * 60)",
+              "MAX_COVERAGE_AGE": "Duration::from_mins(30)",
               "SCRUB_CHUNK": "128"
             },
             "path": "crates/iroha_core/src/sumeragi/finality/retained.rs",
@@ -28005,7 +28005,7 @@
           ]
         },
         {
-          "reason": "Shape ceilings in the node, each of one record, file or loop: nesting depths (the private-instruction review, a recovery record, the fee-reward head tree); search and index ceilings in Kura's own files; ceilings on the configuration, paths and output of the read-only evidence reader and of the fee-reward evidence tool, and the child directory name of the KAGEMUSHA issuer-journal initialization tool; snapshot field sizes; manifest and outcome shapes of a game session; request shapes of the retail-fee service; a ticket, a signer and a chain identifier; the execution results and outputs a driver retains; and the rejection-tail and self-claim instruction counts. Each is compared where it is written. None is a transaction, block, frame or generic proof byte ceiling.",
+          "reason": "Shape ceilings in the node, each of one record, file or loop: nesting depths (the private-instruction review, a recovery record, the fee-reward head tree); search and index ceilings in Kura's own files; ceilings on the configuration, paths and output of the read-only evidence reader (its Unix and Windows store readers) and of the fee-reward evidence tool, and the child directory name of the KAGEMUSHA issuer-journal initialization tool; snapshot field sizes; manifest and outcome shapes of a game session; request shapes of the retail-fee service; a ticket, a signer and a chain identifier; the execution results and outputs a driver retains; and the rejection-tail and self-claim instruction counts. Each is compared where it is written. None is a transaction, block, frame or generic proof byte ceiling.",
           "files": [
             {
               "path": "crates/iroha_core/src/bin/validation_fee_rewards_evidence_verify.rs",
@@ -28057,6 +28057,14 @@
                 "self.max_decode_allocation_bytes <= 512 * 1024 * 1024": 1,
                 "self.max_output_bytes <= 256 * 1024 * 1024": 1,
                 "self.max_store_data_bytes <= 2 * 1024 * 1024 * 1024": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/kura/read_only_evidence_windows.rs",
+              "sites": {
+                "components <= 63": 1,
+                "length <= 32 * 1024 * 1024": 1,
+                "store.as_os_str().encode_wide().count() <= 4096": 1
               }
             },
             {

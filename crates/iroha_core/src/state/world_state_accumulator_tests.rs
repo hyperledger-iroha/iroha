@@ -35,7 +35,7 @@ fn documented_sum(entries: &[(Hash, Option<Hash>, Hash)]) -> [u16; LANES] {
             .update(&input)
             .finalize_xof()
             .fill(&mut bytes);
-        for (lane, pair) in lanes.iter_mut().zip(bytes.chunks_exact(2)) {
+        for (lane, pair) in lanes.iter_mut().zip(bytes.as_chunks::<2>().0) {
             *lane = lane.wrapping_add(u16::from(pair[0]) | (u16::from(pair[1]) << 8));
         }
     }

@@ -1,10 +1,7 @@
 //! Payout fixtures author monetary policy before authenticating their original genesis.
 
 use super::*;
-use crate::{
-    state::{StateReadOnly, WorldReadOnly},
-    sumeragi::test_chain::CertifiedTestChain,
-};
+use crate::{state::WorldReadOnly, sumeragi::test_chain::CertifiedTestChain};
 use iroha_data_model::{
     block::consensus::PublicLaneStakingPolicy,
     isi::SetParameter,
@@ -107,9 +104,7 @@ fn payout_authoring_still_refuses_missing_and_duplicate_signed_staking() {
         !matches!(parameter, Parameter::Custom(custom)
             if custom.id() == &PublicLaneStakingPolicy::parameter_id())
     });
-    let error = CertifiedTestChain::prepare(missing)
-        .err()
-        .expect("missing signed staking fails");
+    let error = CertifiedTestChain::prepare(missing).expect_err("missing signed staking fails");
     assert!(
         error
             .error
@@ -127,9 +122,8 @@ fn payout_authoring_still_refuses_missing_and_duplicate_signed_staking() {
         .unwrap()
         .clone();
     duplicate.genesis_parameters.push(staking);
-    let error = CertifiedTestChain::prepare(duplicate)
-        .err()
-        .expect("equal duplicate signed staking fails");
+    let error =
+        CertifiedTestChain::prepare(duplicate).expect_err("equal duplicate signed staking fails");
     assert!(
         error
             .error
@@ -153,8 +147,7 @@ fn payout_preseeded_npos_does_not_substitute_for_committed_parent_staking() {
     }
     assert!(config.world.view().parameters().staking_policy().is_none());
     let error = CertifiedTestChain::prepare(config)
-        .err()
-        .expect("uncommitted parent policy is not signed authority");
+        .expect_err("uncommitted parent policy is not signed authority");
     assert!(
         error
             .error

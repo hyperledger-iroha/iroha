@@ -53,7 +53,7 @@ impl<C: PastaCurve> Decode<C> {
             .as_chunks::<32>()
             .0
             .iter()
-            .flat_map(|bytes| bytes_to_limbs(&*bytes).map(C::Base::from_u128))
+            .flat_map(|bytes| bytes_to_limbs(bytes).map(C::Base::from_u128))
             .collect::<Vec<_>>();
         out.extend([
             C::Base::from(u64::from(self.length)),
@@ -166,7 +166,7 @@ fn native<C: PastaCurve>(bytes: &[u8; ACCUMULATOR_BYTES], k: u32) -> Option<Fold
     let g = decode_generator::<C>(&bytes[..32].try_into().ok()?).ok()?;
     let mut challenges = [C::ScalarExt::ZERO; K];
     for (chunk, value) in bytes[32..].as_chunks::<32>().0.iter().zip(&mut challenges) {
-        *value = decode_scalar(&*chunk).ok()?;
+        *value = decode_scalar(chunk).ok()?;
     }
     FoldInput::from_normalized(g, k, challenges).ok()
 }

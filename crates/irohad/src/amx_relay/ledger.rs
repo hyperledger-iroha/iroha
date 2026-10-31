@@ -42,7 +42,7 @@ enum Location {
     Observed(Option<u64>),
 }
 enum ProofInput {
-    Response(iroha::client::SumeragiFinalityProofResponse),
+    Response(Box<iroha::client::SumeragiFinalityProofResponse>),
     #[cfg(test)]
     Fixture(Box<SumeragiFinalityProof>),
 }
@@ -116,7 +116,7 @@ impl Source for OnlineSource {
             self.client
                 .read_sumeragi_finality_proof_response_async(height, self.scope)
                 .await
-                .map(ProofInput::Response)
+                .map(|response| ProofInput::Response(Box::new(response)))
         })
     }
 }
@@ -146,6 +146,10 @@ fn locked<T>(owner: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>> {
 }
 // Classify the original typed source, never its display string. These are
 // operational failures at an evidence gate, not authoritative monetary outcomes.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Used point-free as a `map_err` adapter, which passes each error by value."
+)]
 fn approval_evidence_failure(error: eyre::Report) -> StepFailure {
     use iroha_data_model::sumeragi::finality::NativeFinalityDecodeError;
     use iroha_torii_shared::amx_approval_read::{
@@ -215,13 +219,13 @@ fn approval_evidence_failure(error: eyre::Report) -> StepFailure {
             CustodyError::Execution(_) => WorkflowErrorCode::ProofInvalid,
         }
     } else if let Some(failure) = error.downcast_ref::<AmxApprovalReadFailureV1>() {
-        if !failure.is_valid() {
-            WorkflowErrorCode::ProofInvalid
-        } else {
+        if failure.is_valid() {
             match failure.reason {
                 AmxApprovalReadReasonV1::Capacity => WorkflowErrorCode::LocalResourceUnavailable,
                 AmxApprovalReadReasonV1::CutChanged => WorkflowErrorCode::EvidenceUnavailable,
             }
+        } else {
+            WorkflowErrorCode::ProofInvalid
         }
     } else if let Some(failure) = error.downcast_ref::<iroha::Error>() {
         match failure {
@@ -258,6 +262,10 @@ fn approval_evidence_failure(error: eyre::Report) -> StepFailure {
 }
 
 impl RelayLedger {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The relay receives its client, account, dispatch, verifier, scope, fee intent, read budget and custody explicitly."
+    )]
     pub(super) fn new(
         client: Arc<Client>,
         account: &AccountClient,
@@ -346,6 +354,10 @@ impl RelayLedger {
             .await??)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One native step receives its slot, expected digest, progress, candidate verifier, proof, height and handoff explicitly."
+    )]
     async fn advance_native(
         &self,
         slot: Slot,
@@ -812,7 +824,7 @@ impl RelayLedger {
         Ok(())
     }
     async fn proof(&self, height: u64) -> Result<ProofInput> {
-        self.reads.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| remaining.checked_sub(1))
+        self.reads.try_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| remaining.checked_sub(1))
             .map_err(|_| eyre!("AMX destination proof-read budget exhausted; retained verifier remains resumable"))?;
         self.source
             .proof(NonZeroU64::new(height).ok_or_else(|| eyre!("zero AMX destination locator"))?)
@@ -825,12 +837,10 @@ impl RelayLedger {
         }
         let saved = self.load_native(Slot::LiveApproval).await?;
         let mut digest = saved.as_ref().map(|saved| saved.digest);
-        let target = height.max(
-            saved
-                .as_ref()
-                .and_then(|saved| saved.tip.as_ref())
-                .map_or(0, |tip| tip.height()),
-        );
+        let target = height.max(saved.as_ref().and_then(|saved| saved.tip.as_ref()).map_or(
+            0,
+            iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock::height,
+        ));
         if let Some(tip) = saved.as_ref().and_then(|saved| saved.tip.as_ref())
             && tip.height() == target
         {
@@ -1015,7 +1025,7 @@ impl RelayLedger {
                 .advance_native(
                     slot.clone(),
                     Some(digest),
-                    progress.clone(),
+                    progress,
                     verifier,
                     response,
                     next,
@@ -1078,7 +1088,9 @@ impl RelayLedger {
             Location::Observed(None) => return Ok(CommittedOutcome::ObservedNotFinal),
             Location::Observed(Some(height)) => height,
         };
-        let verified = self.carrier_block(identity, height).await?;
+        // Box the verified block so the native closure, and every future awaiting it,
+        // carries a pointer instead of the complete block.
+        let verified = Box::new(self.carrier_block(identity, height).await?);
         let identity = *identity;
         self.native(move |ledger| {
             let evidence = ledger.carrier_evidence(&verified, &identity)?;

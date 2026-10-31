@@ -216,7 +216,6 @@ impl<T> PublicationMutex<T> {
     /// awaiting this event. A wake grants no predecessor or publication authority;
     /// retry must re-acquire the same target and rejoin its original journals.
     /// No publication, height change, timer, or scheduled polling is required.
-    #[cfg(test)]
     pub(crate) fn try_lock_or_wait(
         &self,
     ) -> Result<PublicationGuard<'_, T>, iroha_allocation::release::ReleaseWait> {

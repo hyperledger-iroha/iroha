@@ -20,7 +20,7 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly as _;
 
-pub(crate) fn paid_chain() -> CertifiedTestChain {
+pub fn paid_chain() -> CertifiedTestChain {
     native_payment::maximum_payment_chain(PaymentKind::Applied)
 }
 

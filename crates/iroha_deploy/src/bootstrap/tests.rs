@@ -11,7 +11,7 @@ fn key(seed: u8) -> KeyPair {
     KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
 }
 
-pub(crate) fn metadata(checkpoint: &SumeragiFinalityCheckpoint) -> NetworkMetadata {
+pub fn metadata(checkpoint: &SumeragiFinalityCheckpoint) -> NetworkMetadata {
     NetworkMetadata {
         network_name: "fixture".into(),
         network_id: checkpoint.network_id(),
@@ -33,7 +33,7 @@ pub(crate) fn metadata(checkpoint: &SumeragiFinalityCheckpoint) -> NetworkMetada
     }
 }
 
-pub(crate) fn authenticated(
+pub fn authenticated(
     metadata: NetworkMetadata,
     checkpoint: &SumeragiFinalityCheckpoint,
 ) -> AuthenticatedBootstrap {
@@ -51,7 +51,7 @@ fn profile(checkpoint: &SumeragiFinalityCheckpoint) -> InstalledNetworkProfile {
     .unwrap()
 }
 
-pub(crate) fn discovered(checkpoint: &SumeragiFinalityCheckpoint) -> NativeBootstrap {
+pub fn discovered(checkpoint: &SumeragiFinalityCheckpoint) -> NativeBootstrap {
     NativeBootstrap {
         network_id: checkpoint.network_id(),
         verifier: FinalityVerifier::from_checkpoint(
@@ -89,7 +89,7 @@ fn native_bootstrap_pins_network_and_resumes_after_exclusive_reopen() {
         BootstrapStore::open(&path),
         Err(BootstrapError::Busy)
     ));
-    let result = store.accept(&selected, discovered(&checkpoint)).unwrap();
+    let result = store.accept(&selected, &discovered(&checkpoint)).unwrap();
     assert_eq!(result.metadata().network_id, checkpoint.network_id());
     assert_eq!(result.metadata().chain_id, selected.chain_id());
     assert_eq!(
@@ -104,7 +104,7 @@ fn native_bootstrap_pins_network_and_resumes_after_exclusive_reopen() {
     );
     assert_eq!(result.into_verifier().checkpoint(), &checkpoint);
     let bytes = std::fs::read(path.join("accepted.nrt")).unwrap();
-    store.accept(&selected, discovered(&checkpoint)).unwrap();
+    store.accept(&selected, &discovered(&checkpoint)).unwrap();
     assert_eq!(std::fs::read(path.join("accepted.nrt")).unwrap(), bytes);
     drop(store);
     let store = BootstrapStore::open(&path).unwrap();
@@ -126,7 +126,7 @@ fn bootstrap_rejects_profile_reset_policy_and_discovery_substitution() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("bootstrap");
     let store = BootstrapStore::open(&path).unwrap();
-    store.accept(&selected, discovered(&checkpoint)).unwrap();
+    store.accept(&selected, &discovered(&checkpoint)).unwrap();
     let bytes = std::fs::read(path.join("accepted.nrt")).unwrap();
     for changed in [
         InstalledNetworkProfile::new(
@@ -159,7 +159,7 @@ fn bootstrap_rejects_profile_reset_policy_and_discovery_substitution() {
         .unwrap(),
     ] {
         assert!(store.load(&changed).is_err());
-        assert!(store.accept(&changed, discovered(&checkpoint)).is_err());
+        assert!(store.accept(&changed, &discovered(&checkpoint)).is_err());
     }
     let mut reset = NativeFinalityFixture::start_with_mode(
         checkpoint.chain_id(),
@@ -169,18 +169,18 @@ fn bootstrap_rejects_profile_reset_policy_and_discovery_substitution() {
     assert_ne!(reset.network_id(), checkpoint.network_id());
     assert!(
         store
-            .accept(&selected, discovered(&reset.checkpoint()))
+            .accept(&selected, &discovered(&reset.checkpoint()))
             .is_err()
     );
     let mut changed = discovered(&checkpoint);
     changed.faucet.amount = 50_000_u64.into();
-    assert!(store.accept(&selected, changed).is_err());
+    assert!(store.accept(&selected, &changed).is_err());
     let mut changed = discovered(&checkpoint);
     changed.capabilities.network_prefix = 754;
-    assert!(store.accept(&selected, changed).is_err());
+    assert!(store.accept(&selected, &changed).is_err());
     let mut changed = discovered(&checkpoint);
     changed.faucet.network_id = reset.network_id();
-    assert!(store.accept(&selected, changed).is_err());
+    assert!(store.accept(&selected, &changed).is_err());
     assert_eq!(std::fs::read(path.join("accepted.nrt")).unwrap(), bytes);
 }
 
@@ -206,7 +206,7 @@ fn native_bootstrap_refuses_unsupported_managed_owner_before_acceptance() {
     let store = BootstrapStore::open(&directory.path().join("bootstrap")).unwrap();
     let mut native = discovered(&checkpoint);
     native.capabilities.allowed_signing = vec!["secp256k1".into()];
-    assert!(store.accept(&selected, native).is_err());
+    assert!(store.accept(&selected, &native).is_err());
     assert!(store.load(&selected).unwrap().is_none());
 }
 
@@ -269,9 +269,9 @@ fn same_decision_with_alternate_quorum_preserves_the_original_checkpoint_witness
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("bootstrap");
     let store = BootstrapStore::open(&path).unwrap();
-    store.accept(&selected, discovered(&original)).unwrap();
+    store.accept(&selected, &discovered(&original)).unwrap();
     let retained = std::fs::read(path.join("accepted.nrt")).unwrap();
-    let accepted = store.accept(&selected, discovered(&alternate)).unwrap();
+    let accepted = store.accept(&selected, &discovered(&alternate)).unwrap();
     assert_eq!(accepted.into_verifier().checkpoint(), &original);
     assert_eq!(std::fs::read(path.join("accepted.nrt")).unwrap(), retained);
 }
@@ -285,9 +285,9 @@ fn bootstrap_never_rewinds_or_replaces_a_same_height_decision() {
     let high = fixture.checkpoint();
     let directory = tempfile::tempdir().unwrap();
     let store = BootstrapStore::open(&directory.path().join("bootstrap")).unwrap();
-    store.accept(&selected, discovered(&low)).unwrap();
-    store.accept(&selected, discovered(&high)).unwrap();
-    assert!(store.accept(&selected, discovered(&low)).is_err());
+    store.accept(&selected, &discovered(&low)).unwrap();
+    store.accept(&selected, &discovered(&high)).unwrap();
+    assert!(store.accept(&selected, &discovered(&low)).is_err());
     let mut fork = NativeFinalityFixture::new();
     let mut header = fork.next_header();
     header.creation_time_ms += 7;
@@ -296,7 +296,7 @@ fn bootstrap_never_rewinds_or_replaces_a_same_height_decision() {
     assert_ne!(fork.checkpoint().block_hash(), high.block_hash());
     assert!(
         store
-            .accept(&selected, discovered(&fork.checkpoint()))
+            .accept(&selected, &discovered(&fork.checkpoint()))
             .is_err()
     );
     assert_eq!(
@@ -320,8 +320,8 @@ fn concurrent_acceptance_retains_the_highest_verified_checkpoint() {
     let directory = tempfile::tempdir().unwrap();
     let store = BootstrapStore::open(&directory.path().join("bootstrap")).unwrap();
     std::thread::scope(|scope| {
-        let low_result = scope.spawn(|| store.accept(&selected, discovered(&low)));
-        let high_result = scope.spawn(|| store.accept(&selected, discovered(&high)));
+        let low_result = scope.spawn(|| store.accept(&selected, &discovered(&low)));
+        let high_result = scope.spawn(|| store.accept(&selected, &discovered(&high)));
         let _ = low_result.join().unwrap();
         high_result.join().unwrap().unwrap();
     });
@@ -344,7 +344,7 @@ fn bootstrap_records_and_exact_lock_cannot_be_recreated_after_loss() {
     for missing in ["bootstrap.lock", "accepted.nrt"] {
         let path = directory.path().join(missing.replace('.', "-"));
         let store = BootstrapStore::open(&path).unwrap();
-        store.accept(&selected, discovered(&checkpoint)).unwrap();
+        store.accept(&selected, &discovered(&checkpoint)).unwrap();
         if missing == "bootstrap.lock" {
             // Windows retains exclusive deletion custody while the lock handle is open.
             drop(store);
@@ -352,7 +352,7 @@ fn bootstrap_records_and_exact_lock_cannot_be_recreated_after_loss() {
         } else {
             std::fs::remove_file(path.join(missing)).unwrap();
             assert!(store.load(&selected).is_err());
-            assert!(store.accept(&selected, discovered(&checkpoint)).is_err());
+            assert!(store.accept(&selected, &discovered(&checkpoint)).is_err());
             drop(store);
         }
         assert!(BootstrapStore::open(&path).is_err());
@@ -362,11 +362,11 @@ fn bootstrap_records_and_exact_lock_cannot_be_recreated_after_loss() {
     {
         let path = directory.path().join("replaced-lock");
         let store = BootstrapStore::open(&path).unwrap();
-        store.accept(&selected, discovered(&checkpoint)).unwrap();
+        store.accept(&selected, &discovered(&checkpoint)).unwrap();
         std::fs::rename(path.join("bootstrap.lock"), path.join("original.lock")).unwrap();
         drop(store.directory.create_lock("bootstrap.lock").unwrap());
         assert!(store.load(&selected).is_err());
-        assert!(store.accept(&selected, discovered(&checkpoint)).is_err());
+        assert!(store.accept(&selected, &discovered(&checkpoint)).is_err());
     }
 }
 
@@ -380,7 +380,7 @@ fn bootstrap_failed_publication_requires_reopening_original_custody() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("bootstrap");
     let store = BootstrapStore::open(&path).unwrap();
-    store.accept(&selected, discovered(&low)).unwrap();
+    store.accept(&selected, &discovered(&low)).unwrap();
     std::fs::rename(path.join("accepted.nrt"), path.join("retained.nrt")).unwrap();
     std::fs::create_dir(path.join("accepted.nrt")).unwrap();
     let retained = RetainedBootstrap {
@@ -396,7 +396,7 @@ fn bootstrap_failed_publication_requires_reopening_original_custody() {
     std::fs::remove_dir(path.join("accepted.nrt")).unwrap();
     std::fs::rename(path.join("retained.nrt"), path.join("accepted.nrt")).unwrap();
     assert!(store.load(&selected).is_err());
-    assert!(store.accept(&selected, discovered(&high)).is_err());
+    assert!(store.accept(&selected, &discovered(&high)).is_err());
     drop(store);
     let store = BootstrapStore::open(&path).unwrap();
     assert_eq!(
@@ -408,7 +408,7 @@ fn bootstrap_failed_publication_requires_reopening_original_custody() {
             .checkpoint(),
         &low
     );
-    store.accept(&selected, discovered(&high)).unwrap();
+    store.accept(&selected, &discovered(&high)).unwrap();
 }
 
 #[test]
@@ -418,7 +418,7 @@ fn bounded_records_and_native_checkpoints_reject_malformed_material() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("bootstrap");
     let store = BootstrapStore::open(&path).unwrap();
-    store.accept(&selected, discovered(&checkpoint)).unwrap();
+    store.accept(&selected, &discovered(&checkpoint)).unwrap();
     let retained = std::fs::read(path.join("accepted.nrt")).unwrap();
     assert!(decode::<BootstrapRecord>(&[], MAX_BOOTSTRAP_BYTES).is_err());
     assert!(decode::<BootstrapRecord>(&retained, retained.len() - 1).is_err());
@@ -436,7 +436,7 @@ fn bounded_records_and_native_checkpoints_reject_malformed_material() {
         )
         .unwrap();
     assert!(store.load(&selected).is_err());
-    assert!(store.accept(&selected, discovered(&checkpoint)).is_err());
+    assert!(store.accept(&selected, &discovered(&checkpoint)).is_err());
     let mut data = metadata(&checkpoint);
     data.torii_roots.push(data.torii_roots[0].clone());
     assert!(validate_metadata(&data).is_err());

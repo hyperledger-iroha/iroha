@@ -1249,7 +1249,7 @@ mod platform {
         name: &OsStr,
         expected: Option<FileIdentity>,
     ) -> io::Result<()> {
-        let actual = file_identity(&native_metadata(&file)?)?;
+        let actual = file_identity(&native_metadata(file)?)?;
         if expected.is_some_and(|expected| expected != actual) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -1279,7 +1279,7 @@ mod platform {
         name: &OsStr,
         expected: Option<FileIdentity>,
     ) -> io::Result<()> {
-        let actual = file_identity(&native_metadata(&directory)?)?;
+        let actual = file_identity(&native_metadata(directory)?)?;
         if expected.is_some_and(|expected| expected != actual) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -2745,7 +2745,7 @@ mod platform {
         _name: &OsStr,
         expected: Option<FileIdentity>,
     ) -> io::Result<()> {
-        let actual = file_identity(&native_metadata(&file)?)?;
+        let actual = file_identity(&native_metadata(file)?)?;
         if expected.is_some_and(|expected| expected != actual) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -2776,7 +2776,7 @@ mod platform {
         name: &OsStr,
         expected: Option<FileIdentity>,
     ) -> io::Result<()> {
-        let actual = file_identity(&native_metadata(&directory)?)?;
+        let actual = file_identity(&native_metadata(directory)?)?;
         if expected.is_some_and(|expected| expected != actual) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,

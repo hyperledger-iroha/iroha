@@ -219,7 +219,7 @@ mod app_routed_read_http_admission_tests {
             })
             .collect();
         assert_eq!(collections.len(), 34);
-        for pair in collections.chunks_exact(2) {
+        for pair in collections.as_chunks::<2>().0 {
             assert_eq!(pair[0].endpoint, pair[1].endpoint);
             assert_eq!(
                 pair[0].decoder,
@@ -1512,7 +1512,9 @@ mod app_routed_read_http_admission_tests {
         .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
-            axum::body::to_bytes(response.into_body(), 1024).await.unwrap(),
+            axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap(),
             r#"{"items":[1,2],"next_cursor":null}"#
         );
         assert_eq!(*owners.lock().unwrap(), tiers[..2]);
@@ -1536,7 +1538,9 @@ mod app_routed_read_http_admission_tests {
         .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
-            axum::body::to_bytes(response.into_body(), 1024).await.unwrap(),
+            axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap(),
             r#"{"items":[1],"next_cursor":"unread-row"}"#
         );
         assert_eq!(*owners.lock().unwrap(), tiers);

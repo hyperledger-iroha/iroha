@@ -355,9 +355,6 @@ fn append_canonical_group_block_v1(
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
     for encoded in chunk.as_mut_bytes_v1().as_chunks::<32>().0 {
-        let encoded: &[u8; 32] = encoded
-            .try_into()
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
         values.push(
             VegaT256ScalarV1::from_be_bytes_exact_ref(encoded)
                 .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?,

@@ -1210,7 +1210,7 @@ fn main_projection_source_matches_every_direct_native_column() {
     let trace = build_zk_x509_projection_trace_v1(&statement, &witness).expect("projection trace");
     let post_base = projection_provider_post_base_v1(&statement);
     let direct_aux =
-        build_zk_x509_projection_aux_trace_v1(&trace.base, &trace.fixed, post_base.projection())
+        build_zk_x509_projection_aux_trace_v1(&trace.base, &trace.fixed, &post_base.projection())
             .expect("direct projection aux");
     let mut projection = MainProjectionTraceGroupSourceV1::for_main_v1(&layout, &statement, &trace)
         .expect("production projection source");
@@ -1417,7 +1417,7 @@ fn main_projection_fixed_rows_and_residues_match_direct_common_domain_adapter() 
             &aux_current,
             &aux_next,
             &fixed.current,
-            challenges,
+            &challenges,
         )
         .expect("direct projection residues");
         assert_eq!(production, direct);

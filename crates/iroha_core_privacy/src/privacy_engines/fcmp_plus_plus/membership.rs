@@ -290,7 +290,7 @@ pub(super) fn constrain_input<'c1, 'c2, T: CircuitTranscript>(
         .as_chunks::<6>()
         .0
         .iter()
-        .map(<[super::bulletproof::Variable]>::to_vec)
+        .map(|chunk| chunk.to_vec())
         .collect::<Vec<_>>();
     first_layer::<SeleneSuite, _>(
         c1_circuit,

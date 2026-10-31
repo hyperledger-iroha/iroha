@@ -47,9 +47,7 @@ fn effective_file_permit_parallelism_limit() -> usize {
     {
         return parsed;
     }
-    let cores = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(1);
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
     cores
         .saturating_div(DEFAULT_NETWORK_PARALLELISM_PEERS.max(1))
         .max(1)
@@ -948,7 +946,11 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
     network.ensure_blocks(1).await?;
     // Ensure the account has at least one external transaction to format.
     let client = network.client();
-    let peer_clients: Vec<_> = network.peers().iter().map(|peer| peer.client()).collect();
+    let peer_clients: Vec<_> = network
+        .peers()
+        .iter()
+        .map(iroha_test_network::NetworkPeer::client)
+        .collect();
     tokio::task::spawn_blocking({
         let client = client.clone();
         move || -> Result<()> {
@@ -1083,7 +1085,11 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
     network.ensure_blocks(1).await?;
     // Ensure the account has at least one external transaction to format.
     let client = network.client();
-    let peer_clients: Vec<_> = network.peers().iter().map(|peer| peer.client()).collect();
+    let peer_clients: Vec<_> = network
+        .peers()
+        .iter()
+        .map(iroha_test_network::NetworkPeer::client)
+        .collect();
     tokio::task::spawn_blocking({
         let client = client.clone();
         move || -> Result<()> {
@@ -1732,7 +1738,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     let maturity_ms = u64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)?
-            .checked_add(Duration::from_secs(43_200))
+            .checked_add(Duration::from_hours(12))
             .expect("maturity timestamp arithmetic should succeed")
             .as_millis(),
     )

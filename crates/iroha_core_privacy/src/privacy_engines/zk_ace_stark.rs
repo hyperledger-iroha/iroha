@@ -1344,17 +1344,13 @@ fn public_output_words(
         .as_chunks::<8>()
         .0
         .iter()
-        .chain(public_inputs.replay_nullifier.chunks_exact(8))
+        .chain(public_inputs.replay_nullifier.as_chunks::<8>().0)
         .enumerate()
     {
         // Canonical digest lanes are independent Goldilocks residues encoded
         // little-endian. Proof-field elements use big-endian on the outer ZKA1
         // wire, but this relation boundary preserves the digest representation.
-        let raw = u64::from_le_bytes(
-            chunk
-                .try_into()
-                .expect("chunks_exact produces eight-byte digest words"),
-        );
+        let raw = u64::from_le_bytes(*chunk);
         words[word_index] = F::canonical(raw).ok_or(ZkAceStarkError::NonCanonicalPublicDigest)?;
     }
     Ok(words)
@@ -3618,14 +3614,10 @@ mod tests {
             .as_chunks::<8>()
             .0
             .iter()
-            .chain(public_inputs.replay_nullifier.chunks_exact(8))
+            .chain(public_inputs.replay_nullifier.as_chunks::<8>().0)
             .map(|chunk| {
-                F::canonical(u64::from_le_bytes(
-                    chunk
-                        .try_into()
-                        .expect("Poseidon digest has exact eight-byte residues"),
-                ))
-                .expect("Poseidon squeeze emits canonical Goldilocks residues")
+                F::canonical(u64::from_le_bytes(*chunk))
+                    .expect("Poseidon squeeze emits canonical Goldilocks residues")
             })
             .collect::<Vec<_>>();
         assert_eq!(
@@ -3705,9 +3697,8 @@ mod tests {
             Ok(u64::MAX)
         }
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
-            Ok({
-                destination.fill(0xFF);
-            })
+            destination.fill(0xFF);
+            Ok(())
         }
     }
     impl rand::TryCryptoRng for MaxValueRng {}

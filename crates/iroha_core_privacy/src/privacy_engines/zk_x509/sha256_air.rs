@@ -445,13 +445,7 @@ fn build_sha256_circuit_unchecked_v1(
         .as_chunks::<4>()
         .0
         .iter()
-        .map(|bytes| {
-            builder.input_word(u32::from_be_bytes(
-                bytes
-                    .try_into()
-                    .expect("SHA-256 word chunk is exactly four bytes"),
-            ))
-        })
+        .map(|bytes| builder.input_word(u32::from_be_bytes(*bytes)))
         .collect();
     for block in input_words.as_chunks::<16>().0 {
         let mut schedule = Vec::with_capacity(64);

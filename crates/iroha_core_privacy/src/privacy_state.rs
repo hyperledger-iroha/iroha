@@ -4593,7 +4593,6 @@ pub fn validate_privacy_persisted_state_v1(
         provenance
             .validate()
             .map_err(|error| format!("invalid privacy root provenance: {error}"))?;
-        key.namespace().protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
         history_by_scope
             .entry((key.namespace(), key.role()))
             .or_default()
@@ -4860,7 +4859,6 @@ pub fn validate_privacy_persisted_state_v1(
             .map_err(|error| format!("invalid privacy root-head key: {error}"))?;
         head.validate()
             .map_err(|error| format!("invalid privacy root-head record: {error}"))?;
-        key.namespace().protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
         if !history_by_scope.contains_key(&(key.namespace(), key.role())) {
             return Err(format!(
                 "privacy root head for {:?}/{:?} has no retained history",

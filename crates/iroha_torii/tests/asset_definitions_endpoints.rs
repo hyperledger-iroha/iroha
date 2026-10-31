@@ -337,12 +337,11 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
         .unwrap();
     let status = resp.status();
     let body = resp.into_body().collect().await.unwrap().to_bytes();
-    if status != StatusCode::OK {
-        panic!(
-            "unexpected status {status}: {}",
-            String::from_utf8_lossy(body.as_ref())
-        );
-    }
+    assert!(
+        status == StatusCode::OK,
+        "unexpected status {status}: {}",
+        String::from_utf8_lossy(body.as_ref())
+    );
     let doc: norito::json::Value = norito::json::from_slice(&body).expect("valid json");
     let items = doc["items"].as_array().expect("items");
     let usd_literal = usd_id.to_string();
@@ -359,5 +358,4 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
     runtime.shutdown().await;
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

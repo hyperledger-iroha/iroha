@@ -1,4 +1,5 @@
 //! Integration coverage for Torii MCP endpoints.
+use crate::fixtures;
 use axum::{
     body::{Body, Bytes},
     http::{HeaderName, HeaderValue, Request, StatusCode, header},
@@ -23,8 +24,6 @@ use std::{
     time::Duration,
 };
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
 const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 const TOOL_LIST_PAGE_LIMIT: usize = 128;
 fn build_router(
@@ -36,7 +35,7 @@ fn build_router(
         &cfg.common.key_pair,
         Vec::new(),
         None,
-        iroha_primitives::time::TimeSource::new_system(),
+        &iroha_primitives::time::TimeSource::new_system(),
     );
     let state = native_chain.state().clone();
     let kura = native_chain.kura().clone();
@@ -91,6 +90,7 @@ async fn mcp_fixture_has_applied_global_root_authority() {
     app.shutdown().await;
 }
 /// Exact proof family required by the explicitly selected target route.
+#[derive(Clone, Copy)]
 enum McpTargetAuthentication {
     /// Registered canonical account proof over the actual network and forwarded request.
     CanonicalAccount,
@@ -582,9 +582,10 @@ async fn find_tool(app: &axum::Router, target_name: &str) -> Value {
             }
         }
         let next_cursor = checked_next_tools_cursor(result, cursor.as_deref(), &mut seen_cursors);
-        if next_cursor.is_none() {
-            panic!("tool {target_name} not found in tools/list");
-        }
+        assert!(
+            !next_cursor.is_none(),
+            "tool {target_name} not found in tools/list"
+        );
         cursor = next_cursor;
     }
     panic!(
@@ -3367,8 +3368,8 @@ async fn mcp_jsonrpc_tools_call_contracts_code_get_accepts_canonical_code_hash_p
     );
     // A canonical Iroha hash has an odd final digit, so all zeroes is malformed too.
     for (id, code_hash) in [
-        (104061, "not-a-code-hash".to_owned()),
-        (104062, "00".repeat(32)),
+        (104_061, "not-a-code-hash".to_owned()),
+        (104_062, "00".repeat(32)),
     ] {
         let arguments = authenticated_mcp_target_arguments(
             &app,
@@ -4533,7 +4534,7 @@ async fn mcp_jsonrpc_tools_call_transactions_get_rejects_retired_path_transactio
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106121,
+            "id": 106_121,
             "method": "tools/call",
             "params": {
                 "name": "iroha.transactions.get",
@@ -4622,7 +4623,7 @@ async fn mcp_jsonrpc_tools_call_instructions_get_rejects_retired_flat_aliases() 
             "transaction_hash",
         ),
         (
-            106150,
+            106_150,
             norito::json!({
                 "path": { "hash": ("00".repeat(32)), "index": 0 },
                 "instruction_index": 1
@@ -4662,7 +4663,7 @@ async fn mcp_jsonrpc_tools_call_instructions_get_rejects_retired_path_transactio
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 1061511,
+            "id": 1_061_511,
             "method": "tools/call",
             "params": {
                 "name": "iroha.instructions.get",
@@ -4691,7 +4692,7 @@ async fn mcp_jsonrpc_tools_call_instructions_get_rejects_retired_path_transactio
 mcp_alias_dispatch_test! {
     #[tokio::test]
     async fn mcp_jsonrpc_tools_call_agent_alias_assets_list_accepts_flat_query_fields => success(
-        106151,
+        106_151,
         "iroha.assets.list",
         LimitOne,
         "assets list alias with flat query fields should dispatch successfully",
@@ -4700,7 +4701,7 @@ mcp_alias_dispatch_test! {
 mcp_alias_dispatch_test! {
     #[tokio::test]
     async fn mcp_jsonrpc_tools_call_agent_alias_assets_get_accepts_canonical_path => error(
-        106152,
+        106_152,
         "iroha.assets.get",
         InvalidAssetId,
         "invalid asset id should be marked as MCP tool error for asset detail alias",
@@ -4717,7 +4718,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_nfts_chain_list_dispatches_route() {
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106151,
+            "id": 106_151,
             "method": "tools/call",
             "params": {
                 "name": "iroha.nfts.chain.list",
@@ -4750,7 +4751,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_nfts_chain_list_dispatches_route() {
 mcp_alias_dispatch_test! {
     #[tokio::test]
     async fn mcp_jsonrpc_tools_call_agent_alias_nfts_list_accepts_flat_query_fields => success(
-        106153,
+        106_153,
         "iroha.nfts.list",
         LimitOne,
         "nfts list alias with flat query fields should dispatch successfully",
@@ -4759,7 +4760,7 @@ mcp_alias_dispatch_test! {
 mcp_alias_dispatch_test! {
     #[tokio::test]
     async fn mcp_jsonrpc_tools_call_agent_alias_nfts_get_accepts_canonical_path => error(
-        106154,
+        106_154,
         "iroha.nfts.get",
         InvalidNftId,
         "invalid nft id should be marked as MCP tool error for nft detail alias",
@@ -4769,7 +4770,7 @@ mcp_alias_dispatch_test! {
 mcp_alias_dispatch_test! {
     #[tokio::test]
     async fn mcp_jsonrpc_tools_call_agent_alias_nfts_query_accepts_flat_envelope_fields => success(
-        106155,
+        106_155,
         "iroha.nfts.query",
         LimitTwo,
         "nfts query alias with flat envelope fields should dispatch successfully",
@@ -4785,7 +4786,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_rwas_chain_list_dispatches_route() {
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106156,
+            "id": 106_156,
             "method": "tools/call",
             "params": {
                 "name": "iroha.rwas.chain.list",
@@ -4818,7 +4819,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_rwas_chain_list_dispatches_route() {
 mcp_alias_dispatch_test! {
     #[tokio::test]
     async fn mcp_jsonrpc_tools_call_agent_alias_rwas_list_accepts_flat_query_fields => success(
-        106157,
+        106_157,
         "iroha.rwas.list",
         LimitOne,
         "rwas list alias with flat query fields should dispatch successfully",
@@ -4827,7 +4828,7 @@ mcp_alias_dispatch_test! {
 mcp_alias_dispatch_test! {
     #[tokio::test]
     async fn mcp_jsonrpc_tools_call_agent_alias_rwas_get_accepts_canonical_path => error(
-        106158,
+        106_158,
         "iroha.rwas.get",
         InvalidRwaId,
         "invalid rwa id should be marked as MCP tool error for rwa detail alias",
@@ -4837,7 +4838,7 @@ mcp_alias_dispatch_test! {
 mcp_alias_dispatch_test! {
     #[tokio::test]
     async fn mcp_jsonrpc_tools_call_agent_alias_rwas_query_accepts_flat_envelope_fields => success(
-        106159,
+        106_159,
         "iroha.rwas.query",
         LimitTwo,
         "rwas query alias with flat envelope fields should dispatch successfully",
@@ -5095,7 +5096,7 @@ async fn mcp_jsonrpc_tools_call_rejects_retired_one_shot_onboarding_tool() {
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106201,
+            "id": 106_201,
             "method": "tools/call",
             "params": {
                 "name": "iroha.accounts.onboard",
@@ -5187,7 +5188,7 @@ async fn mcp_jsonrpc_tools_call_account_assets_accepts_canonical_path() {
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106211,
+            "id": 106_211,
             "method": "tools/call",
             "params": {
                 "name": "iroha.accounts.assets",
@@ -5285,7 +5286,7 @@ async fn mcp_jsonrpc_tools_call_account_portfolio_accepts_canonical_path() {
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106221,
+            "id": 106_221,
             "method": "tools/call",
             "params": {
                 "name": "iroha.accounts.portfolio",
@@ -5317,7 +5318,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_domains_list_accepts_flat_query_fiel
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106222,
+            "id": 106_222,
             "method": "tools/call",
             "params": {
                 "name": "iroha.domains.list",
@@ -5345,7 +5346,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_domains_list_accepts_flat_query_fiel
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 1062222,
+            "id": 1_062_222,
             "method": "tools/call",
             "params": {
                 "name": "iroha.domains.list",
@@ -5363,7 +5364,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_domains_list_accepts_flat_query_fiel
 mcp_alias_dispatch_test! {
     #[tokio::test]
     async fn mcp_jsonrpc_tools_call_agent_alias_domains_get_accepts_canonical_path => error(
-        1062221,
+        1_062_221,
         "iroha.domains.get",
         InvalidDomainId,
         "invalid domain id should be marked as MCP tool error for domain detail alias",
@@ -5373,7 +5374,7 @@ mcp_alias_dispatch_test! {
 mcp_alias_dispatch_test! {
     #[tokio::test]
     async fn mcp_jsonrpc_tools_call_agent_alias_domains_query_accepts_flat_envelope_fields => success(
-        106223,
+        106_223,
         "iroha.domains.query",
         LimitTwo,
         "domains query alias with flat envelope fields should dispatch successfully",
@@ -5389,7 +5390,7 @@ async fn mcp_jsonrpc_tools_call_musubi_v1_query_requires_typed_body() {
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 10622301,
+            "id": 10_622_301,
             "method": "tools/call",
             "params": {
                 "name": "iroha.musubi.queries.exact_package",
@@ -5419,7 +5420,7 @@ async fn mcp_jsonrpc_tools_call_musubi_v1_rejects_signing_fields() {
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106223011,
+            "id": 106_223_011,
             "method": "tools/call",
             "params": {
                 "name": "iroha.musubi.instructions.release_yank_set",
@@ -5476,7 +5477,7 @@ async fn mcp_jsonrpc_tools_call_musubi_v1_yank_instruction_builds_unsigned_paylo
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 10622302,
+            "id": 10_622_302,
             "method": "tools/call",
             "params": {
                 "name": "iroha.musubi.instructions.release_yank_set",
@@ -5654,5 +5655,4 @@ async fn mcp_jsonrpc_connect_session_create_derives_sid_from_exact_identity() {
 include!("mcp_endpoints/connect_session_lifecycle_test.rs");
 include!("mcp_endpoints/connect_and_registration_tests.rs");
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

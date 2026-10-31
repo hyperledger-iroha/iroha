@@ -1,6 +1,6 @@
 //! Four-validator rejection until the complete IVM execution relation is admitted.
 //!
-//! A normal contract call establishes a live counter. Fresh signed IvmProved
+//! A normal contract call establishes a live counter. Fresh signed `IvmProved`
 //! requests at every peer must yield the exact unavailable-relation rejection,
 //! exact typed admission or committed results and unchanged state after an Applied barrier.
 //! Native alias, corruption and forged-witness coverage belongs to the retained
@@ -66,7 +66,7 @@ fn bounded_client(client: Client) -> Client {
     integration_tests::sync::rebind_blocking_client(&client, |configured| {
         configured.transaction_status_timeout = OBSERVATION_TIMEOUT;
         configured.torii_request_timeout = Duration::from_secs(90);
-        configured.transaction_ttl = Some(Duration::from_secs(660));
+        configured.transaction_ttl = Some(Duration::from_mins(11));
     })
 }
 
@@ -80,7 +80,7 @@ async fn transaction(
     let account = client.account_client();
     let mut payload = account.prepare_transaction(
         AccountTransactionDraft::new(executable, fee_payment.clone(), metadata.clone())
-            .with_time_to_live(Duration::from_secs(660)),
+            .with_time_to_live(Duration::from_mins(11)),
     )?;
     payload.nonce = Some(NonZeroU32::new(nonce).expect("nonzero test nonce"));
     // Quote this exact draft before signing. Core fee_bound_for_admission_payload

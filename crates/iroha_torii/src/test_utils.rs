@@ -1123,7 +1123,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             resources: iroha_config::parameters::actual::SnapshotResourcePolicy::default(),
             verification_public_key: None,
             signing_private_key: None,
-            upgrade_checkpoint: Default::default(),
+            upgrade_checkpoint: iroha_config::parameters::user::SnapshotUpgradeCheckpoint::default(),
         },
         telemetry_profile: A::TelemetryProfile::Disabled,
         telemetry: None,

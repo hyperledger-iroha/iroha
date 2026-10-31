@@ -1,5 +1,6 @@
 //! Smoke test that Webhooks endpoints are exposed via the merged sub-router.
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::http::Request;
 use http::StatusCode;
 use iroha_core::{
@@ -12,8 +13,6 @@ use iroha_model_base::peer::PeerId;
 use iroha_torii::Torii;
 use std::sync::Arc;
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
 #[tokio::test]
 async fn webhooks_endpoints_exposed_by_default() {
     // Minimal Torii setup
@@ -207,5 +206,4 @@ async fn webhooks_endpoints_hidden_when_disabled() {
     runtime.shutdown().await;
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

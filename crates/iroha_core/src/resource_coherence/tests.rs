@@ -822,10 +822,17 @@ fn governed_signer_tightening_cannot_strand_original_two_signer_cleanup() {
 
 #[test]
 fn signed_genesis_installs_initial_private_policy_at_the_first_successor() {
+    use iroha_data_model::privacy::{PrivateSettlementPolicyUpdateV1, PrivateSettlementPolicyV1};
+    use iroha_data_model::{
+        isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1,
+        privacy::{
+            IvmPrivateNoteLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
+            PrivacyProtocolPolicyKeyV1,
+        },
+    };
     // The reduced generic transaction cap needs its own privacy-policy successor;
     // the private extension does not rewrite that immutable policy owner.
     let mut config = genesis_config(Some(2));
-    use iroha_data_model::privacy::{PrivateSettlementPolicyUpdateV1, PrivateSettlementPolicyV1};
     let mut limits = PrivateSettlementPolicyV1::protocol_default().current_limits;
     limits.max_participants = 16;
     config.genesis_parameters.push(Parameter::Custom(
@@ -840,13 +847,6 @@ fn signed_genesis_installs_initial_private_policy_at_the_first_successor() {
         .to_custom_parameter()
         .unwrap(),
     ));
-    use iroha_data_model::{
-        isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1,
-        privacy::{
-            IvmPrivateNoteLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
-            PrivacyProtocolPolicyKeyV1,
-        },
-    };
     let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
     config.genesis_instructions.push(
         SchedulePrivacyProtocolLimitsUpdateV1::new(

@@ -55,7 +55,7 @@ fn global_root() -> Result<amx::Root> {
         .with_base_seed("native-amx-real-four-seven-four")
         .with_genesis_keypair(amx::genesis_key(0))
         .with_block_cadence(Duration::from_millis(amx::CADENCE_MS))
-        .with_peer_startup_timeout(Duration::from_secs(20 * 60))
+        .with_peer_startup_timeout(Duration::from_mins(20))
         .with_npos_genesis_bootstrap(1_000_u64.into())
         .with_committee_validator_p2p_bootstrap(CommitteeValidatorP2pBootstrap::new(4)?)?
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(

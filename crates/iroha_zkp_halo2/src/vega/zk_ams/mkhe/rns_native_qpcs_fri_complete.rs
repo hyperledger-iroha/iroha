@@ -1116,7 +1116,7 @@ impl RnsNativeClaimedNumericBindingAxesV1 {
         }
         let mut tails = [0_u8; RNS_NATIVE_QPCS_CLAIMED_NUMERIC_TAIL_BYTES_V1];
         let mut count = 0_usize;
-        let mut entries = tails.chunks_exact_mut(24);
+        let mut entries = tails.as_chunks_mut::<24>().0.iter_mut();
         for (a, product, opening_quotient) in numeric_tails {
             let entry = entries
                 .next()

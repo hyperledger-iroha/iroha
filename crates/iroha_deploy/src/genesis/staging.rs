@@ -82,14 +82,14 @@ fn public_xor_profile_for_manifest(
 ) -> Option<super::profile::GenesisProfile> {
     public_xor_profile_for_chain_id(manifest.chain_id().as_str())
 }
-/// Read the exact authored staking policy and validate its NPoS currency binding.
+/// Read the exact authored staking policy and validate its `NPoS` currency binding.
 ///
 /// Custody and monetary bounds come from the original manifest parameter. Node
 /// configuration cannot supply a missing policy or redirect bootstrap transfers.
 ///
 /// # Errors
 /// Returns the original policy decode error or a missing, retired, ambiguous or
-/// mismatched NPoS XOR binding.
+/// mismatched `NPoS` XOR binding.
 pub fn committed_npos_bootstrap_staking_policy(
     manifest: &RawGenesisTransaction,
 ) -> Result<PublicLaneStakingPolicy, color_eyre::eyre::Error> {

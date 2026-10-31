@@ -129,7 +129,7 @@ fn projection_auxiliary_clears_success_failure_and_unwind() {
     let mut wrong_fixed = trace.fixed.clone();
     wrong_fixed.copy_sigma[0] = wrong_fixed.copy_sigma[0].add(F::ONE);
     let (result, observations) = observe_v1(|| {
-        build_zk_x509_projection_aux_trace_v1(&trace.base, &wrong_fixed, tests::challenges())
+        build_zk_x509_projection_aux_trace_v1(&trace.base, &wrong_fixed, &tests::challenges())
     });
     assert!(matches!(
         result,
@@ -145,7 +145,7 @@ fn projection_auxiliary_clears_success_failure_and_unwind() {
                 let aux = build_zk_x509_projection_aux_trace_v1(
                     &trace.base,
                     &trace.fixed,
-                    tests::challenges(),
+                    &tests::challenges(),
                 )
                 .unwrap();
                 assert_eq!(aux.rows.len(), ZK_X509_PROJECTION_TRACE_SIZE_V1);

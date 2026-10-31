@@ -125,19 +125,16 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
         let sig = snapshot_dir.join("snapshot.sig");
         let merkle = snapshot_dir.join("snapshot.merkle.json");
         let ready = data.exists() && digest.exists() && sig.exists() && merkle.exists();
-        if ready {
-            if let Ok(snapshot_bytes) = std::fs::read(&data) {
-                if let Ok(value) = norito::json::from_slice::<norito::json::Value>(&snapshot_bytes)
-                {
-                    let height = value
-                        .get("block_hashes")
-                        .and_then(norito::json::Value::as_array)
-                        .map(|entries| entries.len() as u64)
-                        .unwrap_or(0);
-                    if height >= expected_snapshot_height {
-                        break true;
-                    }
-                }
+        if ready
+            && let Ok(snapshot_bytes) = std::fs::read(&data)
+            && let Ok(value) = norito::json::from_slice::<norito::json::Value>(&snapshot_bytes)
+        {
+            let height = value
+                .get("block_hashes")
+                .and_then(norito::json::Value::as_array)
+                .map_or(0, |entries| entries.len() as u64);
+            if height >= expected_snapshot_height {
+                break true;
             }
         }
         if Instant::now() >= snapshot_deadline {

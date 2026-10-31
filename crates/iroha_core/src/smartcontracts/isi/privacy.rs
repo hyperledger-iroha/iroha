@@ -521,7 +521,7 @@ impl Execute for SchedulePrivacyProtocolLimitsUpdateV1 {
             .privacy_protocol_policies
             .get(&key)
             .copied()
-            .unwrap_or(PrivacyProtocolPolicyV1 {
+            .unwrap_or_else(|| PrivacyProtocolPolicyV1 {
                 protocol_id: self.protocol_id,
                 current_limits: PrivacyProtocolLimitsV1::canonical_default_v1(self.protocol_id),
                 pending_update: None,

@@ -474,6 +474,9 @@ mod tests {
         long.insert("id".into(), Value::String("x".repeat(100)));
         let long = Value::Object(long);
         let rendered = render_table(&[long], &["id".to_owned()]);
-        assert!(rendered.lines().nth(1).unwrap().chars().count() == MAX_CELL_CHARS);
+        assert_eq!(
+            rendered.lines().nth(1).unwrap().chars().count(),
+            MAX_CELL_CHARS
+        );
     }
 }

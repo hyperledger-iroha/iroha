@@ -1465,11 +1465,11 @@ fn check_result_scope(
     committed: &CommittedBlock,
     root_scope: SumeragiRootScope,
 ) -> Result<(), ChainReadError> {
-    check_projected_result_scope(CheckedFrameRef::from_original(committed), root_scope)
+    check_projected_result_scope(&CheckedFrameRef::from_original(committed), root_scope)
 }
 
 fn check_projected_result_scope(
-    frame: CheckedFrameRef<'_>,
+    frame: &CheckedFrameRef<'_>,
     root_scope: SumeragiRootScope,
 ) -> Result<(), ChainReadError> {
     if root_scope != SumeragiRootScope::Global && frame.active_result {
@@ -1550,7 +1550,7 @@ impl PrefixVerifierContext {
 
     fn prepare_advance_source(
         &self,
-        prefix: PrefixRef<'_>,
+        prefix: &PrefixRef<'_>,
         source: CertificateSource<'_>,
         artifacts: Option<PrefixArtifacts>,
         query_cache: (bool, Option<&mut QueryCacheOwner>),
@@ -1753,7 +1753,7 @@ impl PrefixVerifierContext {
 
     fn verify_commit_qc_source(
         &self,
-        frame: CheckedFrameRef<'_>,
+        frame: &CheckedFrameRef<'_>,
         authority: AuthorityRef<'_>,
         commit_qc: &Qc,
     ) -> Result<(), ChainReadError> {
@@ -1924,8 +1924,8 @@ fn verify_boundary_source(
 }
 
 fn verify_projected_boundary_source(
-    certified: CheckedFrameRef<'_>,
-    parent: ParentProjection,
+    certified: &CheckedFrameRef<'_>,
+    parent: &ParentProjection,
     authority: AuthorityRef<'_>,
 ) -> Result<(), ChainReadError> {
     let height = certified.parent.height;
@@ -1964,27 +1964,6 @@ fn verify_projected_boundary_source(
         }
     }
     Ok(())
-}
-
-fn verify_availability(
-    committed: &CommittedBlock,
-    config: &iroha_sumeragi::types::HeightConfig,
-    crypto: &dyn iroha_sumeragi::crypto::Crypto,
-    prepared: Option<(
-        iroha_sumeragi::availability::AvailabilityFrame,
-        iroha_sumeragi::availability::PayloadBytes,
-    )>,
-    admit_scratch: &mut dyn FnMut(usize) -> Result<(), ExecutionDeferred>,
-    budget: Option<&iroha_allocation::AllocationBudget>,
-) -> Result<(), VerificationReadError> {
-    verify_availability_source(
-        CertificateSource::Original(committed),
-        config,
-        crypto,
-        prepared,
-        admit_scratch,
-        budget,
-    )
 }
 
 fn verify_availability_source(

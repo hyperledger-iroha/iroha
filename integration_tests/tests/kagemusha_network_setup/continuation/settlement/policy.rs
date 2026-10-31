@@ -105,7 +105,7 @@ fn set_availability(
     }))
 }
 
-pub(crate) fn before_payout(
+pub fn before_payout(
     network: &Network,
     genesis_owner: &KeyPair,
     output: &Path,
