@@ -595,6 +595,10 @@ developer localnet enables private calls out of the box, and its client may host
 `universal.universal`. Any other network must
 install both verifying keys in genesis and select them in its `zk_validity_policy_v1`: the
 default executor refuses post-genesis key registration, even with `CanManageVerifyingKeys`.
+A private action proves against the call's current roster, so if the call changes first the
+CLI proves again. A proof that goes stale before it is submitted costs nothing. A submission
+the ledger rejects as stale is still charged its full fee, and the CLI stops after three.
+
 See `scripts/kaigi_demo.sh` for a complete call against a disposable local network.
 
 ### ZK vote tally (app API convenience)

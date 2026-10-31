@@ -26,6 +26,7 @@ use std::{
     io::{ErrorKind, Read as _, Write as _},
     path::Path,
     str::FromStr as _,
+    time::Duration,
 };
 use zeroize::Zeroizing;
 
@@ -58,8 +59,12 @@ enum SecretPolicy {
 }
 
 /// The caller's standing in one call, parsed from a single state view.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent fact the participation route reports."
+)]
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct CallStanding {
+pub(super) struct CallStanding {
     private: bool,
     ended: bool,
     is_host: bool,
@@ -197,6 +202,19 @@ fn read_standing<C: RunContext>(
     CallStanding::from_response(&response, |literal| {
         crate::resolve_account_id(context, literal)
     })
+}
+
+/// Read this account's standing, so a caller can tell whether a proof is still current.
+pub(super) fn call_standing<C: RunContext>(context: &C, call_id: &KaigiId) -> Result<CallStanding> {
+    let client = context.client_from_config()?;
+    read_standing(context, &client, call_id)
+}
+
+/// A random wait of at most `limit_ms`. Without randomness a retry is only more likely
+/// to collide again, which is no reason to fail the action.
+pub(super) fn retry_spread(limit_ms: u64) -> Duration {
+    let random = SysRng.try_next_u64().unwrap_or(0);
+    Duration::from_millis(random % (limit_ms + 1))
 }
 
 /// Prove a host create against the deterministic empty roster.

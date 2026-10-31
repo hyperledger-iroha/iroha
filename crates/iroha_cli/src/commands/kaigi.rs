@@ -7,7 +7,7 @@ use crate::cli_output::print_with_optional_text;
 use crate::{Run, RunContext};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Args, Subcommand, ValueEnum};
-use eyre::{Result, WrapErr};
+use eyre::{Result, WrapErr, ensure};
 use iroha::data_model::{
     kaigi::scalar::KaigiAuthorizationScalarV1,
     kaigi::{
@@ -200,26 +200,65 @@ const PROOF_ARTIFACT_ARGS: [&str; 4] = [
     "roster_root_hex",
     "proof_hex",
 ];
-/// Attempts for one private action. Each retry reads current state and proves again,
-/// since a proof is bound to the exact roster root the ledger holds when it executes.
+/// Attempts for one private action that may reach the ledger. Each retry reads current
+/// state and proves again, since a proof is bound to the exact roster root the ledger holds
+/// when it executes. A rejected attempt pays the full transaction fee, so this stays small.
 const PRIVATE_SUBMIT_ATTEMPTS: usize = 3;
+/// Proofs one action may discard because the call moved while they were being made.
+/// A discarded proof costs time and no fee.
+const PRIVATE_DISCARDED_PROOFS: usize = 16;
+/// Longest random wait before proving again after a lost race, in milliseconds. Racers that
+/// retry together lose together and each pays, so spreading them over about a block lets
+/// the later ones see the new root before they spend anything.
+const PRIVATE_RETRY_SPREAD_MS: u64 = 3_000;
 /// Submit a private action, re-proving when other activity changed the call first.
 ///
 /// Roster changes serialize per call, so in a busy call an honest action can lose
-/// the race and be rejected without having done anything wrong.
+/// the race and be rejected without having done anything wrong, and still pay for it.
 fn submit_with_fresh_proof<C: RunContext>(
     context: &mut C,
-    mut build: impl FnMut(&C) -> Result<iroha::data_model::isi::InstructionBox>,
+    call_id: &KaigiId,
+    build: impl FnMut(&C) -> Result<iroha::data_model::isi::InstructionBox>,
+) -> Result<()> {
+    drive_private_submission(
+        context,
+        |context| private::call_standing(context, call_id),
+        build,
+        |context, instruction| context.finish([instruction]),
+        || std::thread::sleep(private::retry_spread(PRIVATE_RETRY_SPREAD_MS)),
+    )
+}
+/// Prove and submit until the action lands, submitting only a proof that is still current.
+fn drive_private_submission<C, S: PartialEq, I>(
+    context: &mut C,
+    mut read: impl FnMut(&C) -> Result<S>,
+    mut prove: impl FnMut(&C) -> Result<I>,
+    mut submit: impl FnMut(&mut C, I) -> Result<()>,
+    mut pause: impl FnMut(),
 ) -> Result<()> {
     let mut attempt = 1;
+    let mut discarded = 0;
     loop {
-        let instruction = build(&*context)?;
-        match context.finish([instruction]) {
+        let before = read(&*context)?;
+        let instruction = prove(&*context)?;
+        if read(&*context)? != before {
+            discarded += 1;
+            ensure!(
+                discarded < PRIVATE_DISCARDED_PROOFS,
+                "this call is changing faster than a proof can be made; stopped after {discarded} unsubmitted proofs, so try again shortly"
+            );
+            eprintln!(
+                "the call changed during proving, so this proof was not submitted and cost no fee; proving again"
+            );
+            continue;
+        }
+        match submit(context, instruction) {
             Err(error) if attempt < PRIVATE_SUBMIT_ATTEMPTS && is_stale_private_context(&error) => {
                 attempt += 1;
                 eprintln!(
-                    "the call changed while this action was in flight; proving again (attempt {attempt} of {PRIVATE_SUBMIT_ATTEMPTS})"
+                    "the call changed before this action landed, and the rejected attempt was still charged its fee; proving again (attempt {attempt} of {PRIVATE_SUBMIT_ATTEMPTS})"
                 );
+                pause();
             }
             result => return result,
         }
@@ -594,7 +633,7 @@ impl Run for JoinArgs {
         };
         if let Some(secret_file) = self.secret_file {
             ensure_signed_by_participant(context, &participant)?;
-            return submit_with_fresh_proof(context, |context| {
+            return submit_with_fresh_proof(context, &call_id, |context| {
                 private::authorize_call_action(
                     context,
                     &call_id,
@@ -602,7 +641,7 @@ impl Run for JoinArgs {
                     host.as_ref(),
                     &secret_file,
                 )
-                .map(&instruction)
+                .map(instruction)
             });
         }
         let privacy = parse_optional_privacy_artifacts(
@@ -733,7 +772,7 @@ impl Run for LeaveArgs {
         };
         if let Some(secret_file) = self.secret_file {
             ensure_signed_by_participant(context, &participant)?;
-            return submit_with_fresh_proof(context, |context| {
+            return submit_with_fresh_proof(context, &call_id, |context| {
                 private::authorize_call_action(
                     context,
                     &call_id,
@@ -741,7 +780,7 @@ impl Run for LeaveArgs {
                     None,
                     &secret_file,
                 )
-                .map(&instruction)
+                .map(instruction)
             });
         }
         let privacy = parse_optional_privacy_artifacts(
@@ -798,7 +837,7 @@ impl Run for EndArgs {
             ))
         };
         if let Some(secret_file) = self.secret_file {
-            return submit_with_fresh_proof(context, |context| {
+            return submit_with_fresh_proof(context, &call_id, |context| {
                 private::authorize_call_action(
                     context,
                     &call_id,
@@ -806,7 +845,7 @@ impl Run for EndArgs {
                     None,
                     &secret_file,
                 )
-                .map(&instruction)
+                .map(instruction)
             });
         }
         let privacy = parse_optional_privacy_artifacts(
@@ -860,7 +899,7 @@ impl Run for RecordUsageArgs {
             ))
         };
         if let Some(secret_file) = self.secret_file {
-            return submit_with_fresh_proof(context, |context| {
+            return submit_with_fresh_proof(context, &call_id, |context| {
                 let usage = private::authorize_usage(
                     context,
                     &call_id,
@@ -1598,23 +1637,117 @@ mod tests {
         assert!(private.contains(&format!("--host {host}")));
         assert!(private.contains("--secret-file"));
     }
-    #[test]
-    fn only_a_stale_context_rejection_triggers_a_fresh_proof() {
+    /// The shape a submission fails with once the client has read the signed reason.
+    fn rejected(message: &str) -> eyre::Report {
         use iroha::data_model::{
             ValidationFail,
             isi::error::{InstructionExecutionError, InvalidParameterError},
             transaction::error::TransactionRejectionReason,
         };
-        // The shape a submission fails with once the client has read the signed reason.
-        let rejected = |message: &str| {
-            eyre::Report::new(TransactionRejectionReason::Validation(
-                ValidationFail::InstructionFailed(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(message.to_owned()),
-                )),
-            ))
-            .wrap_err("transaction reached a terminal failure")
-            .wrap_err("failed to submit the transaction")
-        };
+        eyre::Report::new(TransactionRejectionReason::Validation(
+            ValidationFail::InstructionFailed(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message.to_owned()),
+            )),
+        ))
+        .wrap_err("transaction reached a terminal failure")
+        .wrap_err("failed to submit the transaction")
+    }
+    /// What one simulated action did: proofs made, submissions paid for and waits taken.
+    #[derive(Debug, Default, PartialEq, Eq)]
+    struct Drive {
+        proofs: usize,
+        submissions: usize,
+        pauses: usize,
+    }
+    /// Run the driver over scripted reads and submissions; an exhausted script keeps the
+    /// standing at 0 and accepts the submission.
+    fn drive(reads: &[u8], submissions: Vec<&'static str>) -> (Drive, Result<()>) {
+        let counts = std::cell::RefCell::new(Drive::default());
+        let mut reads = reads.iter().copied();
+        let mut submissions = submissions.into_iter();
+        let result = drive_private_submission(
+            &mut (),
+            |()| Ok(reads.next().unwrap_or(0)),
+            |()| {
+                counts.borrow_mut().proofs += 1;
+                Ok(())
+            },
+            |(), ()| {
+                counts.borrow_mut().submissions += 1;
+                submissions
+                    .next()
+                    .map_or(Ok(()), |message| Err(rejected(message)))
+            },
+            || counts.borrow_mut().pauses += 1,
+        );
+        (counts.into_inner(), result)
+    }
+    #[test]
+    fn a_proof_whose_call_moved_is_replaced_without_paying() {
+        // Moved during the first proof, then stable: only the second proof is submitted.
+        let (counts, result) = drive(&[0, 1, 1, 1], Vec::new());
+        result.expect("the fresh proof lands");
+        assert_eq!(
+            counts,
+            Drive {
+                proofs: 2,
+                submissions: 1,
+                pauses: 0
+            }
+        );
+    }
+    #[test]
+    fn a_lost_race_waits_and_stops_after_the_paid_attempt_limit() {
+        let (counts, result) = drive(
+            &[],
+            vec![
+                KAIGI_STALE_ROSTER_ROOT_ERROR_V1,
+                KAIGI_STALE_ROSTER_ROOT_ERROR_V1,
+                KAIGI_STALE_ROSTER_ROOT_ERROR_V1,
+            ],
+        );
+        let error = result.expect_err("the third paid loss is final");
+        assert!(is_stale_private_context(&error), "{error:?}");
+        assert_eq!(
+            counts,
+            Drive {
+                proofs: PRIVATE_SUBMIT_ATTEMPTS,
+                submissions: PRIVATE_SUBMIT_ATTEMPTS,
+                pauses: PRIVATE_SUBMIT_ATTEMPTS - 1
+            }
+        );
+    }
+    #[test]
+    fn a_rejection_for_another_reason_is_not_retried() {
+        let (counts, result) = drive(&[], vec!["nullifier already used"]);
+        assert!(result.is_err());
+        assert_eq!(
+            counts,
+            Drive {
+                proofs: 1,
+                submissions: 1,
+                pauses: 0
+            }
+        );
+    }
+    #[test]
+    fn a_call_that_never_settles_stops_without_submitting() {
+        // Every read differs from the one before, so no proof is ever current.
+        let reads: Vec<u8> = (0..=u8::MAX).collect();
+        let (counts, result) = drive(&reads, Vec::new());
+        let error = result.expect_err("the discard limit is final");
+        assert!(error.to_string().contains("unsubmitted proofs"), "{error}");
+        assert_eq!(
+            counts,
+            Drive {
+                proofs: PRIVATE_DISCARDED_PROOFS,
+                submissions: 0,
+                pauses: 0
+            }
+        );
+    }
+    #[test]
+    fn only_a_stale_context_rejection_triggers_a_fresh_proof() {
         for stale in [
             KAIGI_STALE_ROSTER_ROOT_ERROR_V1,
             KAIGI_STALE_USAGE_CONTEXT_ERROR_V1,
