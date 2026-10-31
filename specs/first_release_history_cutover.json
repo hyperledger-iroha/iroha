@@ -228,7 +228,7 @@
   "pinned_history": {
     "manifest": "fixtures/core/first_release_history/manifest.json",
     "format": "iroha.first_release_history.pinned.v1",
-    "history_sha256": "8f704a31f1714c8c81b6ce2ba60902c236e21d50c02735e8e3e8e3e714acb762",
+    "history_sha256": "61150ac3a98554758bc796d305430952d2c3ec66258251330790b3bb8cd2fdf5",
     "generator": {
       "path": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
       "test": "capture_pinned_first_release_history"
@@ -888,7 +888,7 @@
       "anchors": [
         {
           "path": "crates/irohad/src/compatibility_probe.rs",
-          "contains": "pub gas_schedule_hash: String"
+          "contains": "pub host_profiles: Vec<String>"
         },
         {
           "path": "crates/iroha_core/src/sumeragi/node.rs",

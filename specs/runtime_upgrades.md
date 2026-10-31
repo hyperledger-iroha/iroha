@@ -1,6 +1,6 @@
 # Runtime change sets — as built
 
-Status: as built, 2026-10-30. [`live_runtime_upgrades.md`](live_runtime_upgrades.md) is the
+Status: as built, 2026-10-31. [`live_runtime_upgrades.md`](live_runtime_upgrades.md) is the
 design; this document records the implemented surface of its change-set lifecycle (§6) for the
 universal root. The ABI-v1 manifest records, their `ProposeRuntimeUpgrade`,
 `ActivateRuntimeUpgrade` and `CancelRuntimeUpgrade` instructions, the
@@ -120,13 +120,62 @@ settlement authority:
   definition is completion-only, only the completions run. Opening new custody runs under
   neither, and disabling stops every instruction.
 - **Activation.** A change set whose successor leaves a completion of a live escrow unbound, or
-  bound to an inactive or disabled interface or implementation, lapses at its effective height
-  instead of activating. A definition is therefore disabled only once every escrow that needs it
-  has completed.
+  changes its original binding, transitive declared calls, storage, kernel, commitment, services
+  or host profiles, or disables any required definition, lapses at its effective height. The
+  baseline bundle conservatively declares all its native callees. Keeping a replacement active
+  does not transfer the original custody obligation to it. Until captured completion capabilities
+  exist, rebinding those dependencies requires draining custody first.
+- **Executor replacement.** `Executor::migrate` refuses while any native escrow or lock remains
+  live, before loading code or running migration effects. This includes identical-code migrations,
+  which can still change permissions or State. Replacing the authorization component requires
+  drained custody until captured completion authority or a certified transfer is implemented.
 
-Not yet registered: pending consent (multisig), scheduled triggers, migration cursors, AMX
-participations and obligations that contracts create. Obligations do not yet retain a captured
-completion closure that dispatch honors after a rebinding.
+## Deferred consent
+
+`iroha_core::runtime::expectation` captures the resolved bindings and their transitive immutable
+definitions, including the kernel, commitment, services and host profiles. Cyclic calls are visited
+once. A domain-separated canonical digest of this closure and the exact installed executor code
+is committed with each deferred action; loaded runtime caches do not enter it:
+
+- A multisig proposal occurrence owns its digest under `multisig/proposal-expectation/`. Approval
+  checks it before recording a vote or executing. Changed semantics require a fresh proposal nonce
+  and new approvals; the old occurrence can still be cancelled or expire. Pruning removes both
+  records. Raw contract storage cannot access the native `multisig/` namespace.
+- Trigger registration commits the digest in reserved `__runtime_expectation_v1` metadata. A
+  caller cannot supply, replace or remove it. Data callbacks with changed or restricted semantics
+  skip the matched event without rejecting its originating transaction or consuming a repetition.
+  By-call execution rejects before effects; Time and Pipeline execution keep their existing
+  persistent retry, exhaustion and quarantine policies. Restoring semantics never replays an event
+  skipped during suspension.
+- Restrictions are checked independently of the digest. Local codec/resource refusals retain the
+  execution deferral; they are not a reason to skip a callback or commit a rejection.
+
+The baseline native implementation declares a conservative superset of callees, so one native
+capture can include the entire baseline. Opaque IVM, contract-call and custom-instruction captures
+cover the complete callable binding set; expanding that surface requires renewed consent too.
+Explicitly following current bindings and narrower authenticated dynamic-call manifests remain
+unimplemented.
+
+Migration cursors, AMX participations and contract-created obligations still need kernel
+registration. Escrows do not yet retain a captured completion capability that dispatch honors after
+a rebinding. These protections do not close the whole obligation lifecycle of design §7.2.
+
+Persisted pending proposals and triggers require their original capture. There is no restore-time
+fallback that manufactures consent from the current selection. A predecessor snapshot containing
+uncaptured deferred work cannot be imported unchanged: adoption must explicitly certify its
+preserved context or first drain/cancel that work. This is a populated-State acceptance change even
+though no World table was added, and is not an encoding-neutral live deployment.
+
+## Unsupported transition effects
+
+The shared successor resolver rejects storage retirement, installation of storage cells,
+activation of migration definitions and manual retention/release of completion capabilities: the
+cursor, write-barrier, initialization, cutover and kernel capability engines are not implemented.
+Proposal/enactment and node support attestation use this resolver; block start
+also checks it and lapses an already scheduled unsupported transition without changing the
+selection. Empty-table additions remain admissible; an executing release still has to implement
+the resulting selection. Recognizing every definition in a successor is not evidence that a
+release can perform a storage transition.
 
 ## Notice policy
 
@@ -201,6 +250,12 @@ refreshes it after every `RuntimeUpgradeEvent::Activated`. The compatibility pro
 ## Still open
 
 Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `roadmap.md` N14:
-the bound ratification case and review progress for renewals, obligations and
-completion capabilities, migrations and storage capabilities, checkpoints and the startup floor,
-and the governed adoption on Taira.
+kernel obligation registration and completion capabilities, migrations and storage capabilities,
+complete-State commitments, checkpoints and the startup floor, and governed adoption on Taira.
+Parliament lifecycle parameter updates are validated, but Core still needs the frozen
+governance-clock policy and anonymous-ballot integration owned by
+[`parliament_ballot_implementation_goals.md`](parliament_ballot_implementation_goals.md) E2.
+Its current block-height/timed-OVN lifecycle is not a substitute for that integration.
+The closure resolver still uses the baseline's ordinary graph allocations; complete funded graph
+custody and trigger-fanout resource qualification remain part of the complete-State work. Component
+tests alone do not qualify live deployment.

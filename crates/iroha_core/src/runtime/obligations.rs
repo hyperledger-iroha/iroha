@@ -9,8 +9,10 @@
 //!   continue or complete a live escrow still run, because work already admitted continues;
 //! - while it is completion-only, the instructions that complete a live escrow still run;
 //! - an instruction that opens new custody runs under neither;
-//! - a change set whose successor leaves a live escrow without a bound, active and enabled way to
-//!   complete lapses at its effective height instead of activating.
+//! - a change set whose successor changes a live escrow's completion binding or declared
+//!   dependency closure, or disables any of those dependencies, lapses at its effective height.
+//!   Until captured completion capabilities support rebinding, retaining an active replacement
+//!   implementation is insufficient: it has not inherited the original custody obligation.
 //!
 //! TODO(§7.2): obligations created by contracts register through a kernel syscall with their
 //! captured completion closure, retained in `RootSelectionV1::completion_closures`, and complete
@@ -18,7 +20,7 @@
 //! consent (multisig, §8.2), scheduled triggers, migration cursors and AMX participations become
 //! further kinds.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_data_model::{
     escrow::{AssetEscrowStatus, EscrowId},
@@ -35,7 +37,10 @@ use iroha_data_model::{
         wire_id_of,
     },
     runtime::{
-        definition::{DefinitionId, RestrictionV1, RootSelectionV1},
+        definition::{
+            BindingV1, DefinitionDescriptorV1, DefinitionId, DefinitionLookup, RestrictionV1,
+            RootSelectionV1,
+        },
         lifecycle::ObligationKindV1,
     },
 };
@@ -192,7 +197,7 @@ impl LiveObligations {
     }
 }
 
-/// Whether `selection` leaves `definition` active and not disabled.
+/// Whether `selection` retains `definition` in its execution closure and does not disable it.
 fn executes(selection: &RootSelectionV1, definition: DefinitionId) -> bool {
     let disabled = selection
         .restrictions
@@ -203,42 +208,114 @@ fn executes(selection: &RootSelectionV1, definition: DefinitionId) -> bool {
                 RestrictionV1::Disabled(_)
             )
         });
-    selection.active.binary_search(&definition).is_ok() && !disabled
+    let retained = definition == selection.kernel
+        || definition == selection.commitment_profile
+        || definition == selection.services_profile
+        || selection.active.binary_search(&definition).is_ok()
+        || selection
+            .installed_storage
+            .binary_search(&definition)
+            .is_ok();
+    retained && !disabled
 }
 
-/// Why `selection` would strand the `live` obligations, if it would: a completion of a live
-/// obligation kind that it leaves unbound, or binds to an inactive or disabled definition (§7.2).
-pub(crate) fn stranded(selection: &RootSelectionV1, live: &LiveObligations) -> Option<String> {
+/// The selection's binding of `wire_id`.
+fn binding<'a>(selection: &'a RootSelectionV1, wire_id: &str) -> Option<&'a BindingV1> {
+    selection
+        .bindings
+        .binary_search_by(|binding| binding.wire_id.as_str().cmp(wire_id))
+        .ok()
+        .map(|index| &selection.bindings[index])
+}
+
+/// Why `successor` cannot keep an escrow's original completion closure executable.
+///
+/// The baseline native bundle conservatively declares all interfaces it can invoke. Preserve
+/// those bindings too: keeping a direct completion binding while changing one of its callees
+/// changes its semantics just as surely as rebinding the completion itself. Following descriptor
+/// identities also retains its storage, codecs, verification rules and resource limits.
+fn escrow_closure_gap(
+    predecessor: &RootSelectionV1,
+    successor: &RootSelectionV1,
+    published: &impl DefinitionLookup,
+) -> Option<String> {
+    let mut pending = BTreeSet::from([
+        predecessor.kernel,
+        predecessor.commitment_profile,
+        predecessor.services_profile,
+    ]);
+    // Controlled locks can invoke IVM contracts from native code; the baseline bundle therefore
+    // also retains the predecessor's admitted host profiles until custody has drained.
+    pending.extend(predecessor.active.iter().copied().filter(|id| {
+        matches!(
+            published.definition(id),
+            Some(DefinitionDescriptorV1::HostProfile(_))
+        )
+    }));
+    for wire_id in escrow_completions() {
+        let Some(original) = binding(predecessor, wire_id) else {
+            return Some(format!("completion {wire_id} was already unbound"));
+        };
+        pending.extend([original.interface, original.implementation]);
+    }
+    let mut visited = BTreeSet::new();
+    while let Some(definition) = pending.pop_first() {
+        if !visited.insert(definition) {
+            continue;
+        }
+        if !executes(successor, definition) {
+            return Some(format!("needs {definition}, which is inactive or disabled"));
+        }
+        let Some(descriptor) = published.definition(&definition) else {
+            return Some(format!("needs unpublished definition {definition}"));
+        };
+        if let DefinitionDescriptorV1::Interface(interface) = descriptor {
+            let wire_id = interface.wire_id.as_str();
+            let Some(original) = binding(predecessor, wire_id) else {
+                return Some(format!("dependency {wire_id} was already unbound"));
+            };
+            let Some(next) = binding(successor, wire_id) else {
+                return Some(format!("dependency {wire_id} is unbound"));
+            };
+            if original != next {
+                return Some(format!(
+                    "dependency {wire_id} is rebound without a captured completion capability"
+                ));
+            }
+            pending.insert(original.implementation);
+        }
+        pending.extend(
+            descriptor
+                .typed_dependencies()
+                .into_iter()
+                .map(|(_, id)| id),
+        );
+    }
+    None
+}
+
+/// Why `successor` would strand `live` obligations, if it would (§7.2).
+///
+/// Escrows currently have no captured completion capability that dispatch can follow after a
+/// rebinding. Keep their predecessor closure unchanged through every activation while custody is
+/// live, rather than silently treating a newly bound implementation as their settlement authority.
+pub(crate) fn stranded(
+    predecessor: &RootSelectionV1,
+    successor: &RootSelectionV1,
+    published: &impl DefinitionLookup,
+    live: &LiveObligations,
+) -> Option<String> {
     for (kind, count) in &live.0 {
-        let completions = match kind {
-            ObligationKindV1::Escrow => escrow_completions(),
+        let gap = match kind {
+            ObligationKindV1::Escrow => escrow_closure_gap(predecessor, successor, published),
             // TODO(§7.2): these kinds do not register yet; `LiveObligations::of` counts none.
             ObligationKindV1::PendingConsent
             | ObligationKindV1::ScheduledTrigger
             | ObligationKindV1::MigrationCursor
             | ObligationKindV1::AmxParticipation => continue,
         };
-        for wire_id in completions {
-            let binding = selection
-                .bindings
-                .binary_search_by(|binding| binding.wire_id.as_str().cmp(wire_id))
-                .ok()
-                .map(|index| &selection.bindings[index]);
-            let gap = match binding {
-                None => "is unbound".to_owned(),
-                Some(binding) => match [binding.interface, binding.implementation]
-                    .into_iter()
-                    .find(|definition| !executes(selection, *definition))
-                {
-                    Some(definition) => {
-                        format!("needs {definition}, which is inactive or disabled")
-                    }
-                    None => continue,
-                },
-            };
-            return Some(format!(
-                "{count} live {kind:?} obligations complete through {wire_id}, which {gap}"
-            ));
+        if let Some(gap) = gap {
+            return Some(format!("{count} live {kind:?} obligations: {gap}"));
         }
     }
     None

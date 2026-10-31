@@ -1195,6 +1195,15 @@ pub struct ExpectationV1 {
     pub bindings: Vec<BindingV1>,
     /// Expected execution services profile.
     pub services_profile: DefinitionId,
+    /// Expected sequencing, framing and atomic-execution kernel.
+    pub kernel: DefinitionId,
+    /// Expected commitment rules of the execution root.
+    pub commitment_profile: DefinitionId,
+    /// Immutable transitive dependencies, including host profiles, sorted and unique.
+    pub definitions: Vec<DefinitionId>,
+    /// Opaque executable code may dynamically call any current interface. Its capture covers
+    /// the complete binding set, so adding a callable interface also requires renewed consent.
+    pub exact_bindings: bool,
 }
 
 /// Stable rejection of the live-upgrade mechanism, committed in transaction results.
@@ -1232,9 +1241,9 @@ pub enum RuntimeRejectionV1 {
         /// Its restriction.
         restriction: RestrictionV1,
     },
-    /// A binding or the services profile differs from the expectation (wire ID {wire_id:?})
+    /// A binding, execution profile or dependency differs from the expectation (wire ID {wire_id:?})
     ExpectationMismatch {
-        /// The wire ID whose binding differs, or `None` for the services profile.
+        /// The wire ID whose binding differs, or `None` for an execution profile or dependency.
         wire_id: Option<String>,
     },
 }
@@ -1257,8 +1266,30 @@ impl ExpectationV1 {
     /// # Errors
     /// The stable rejection for the first difference.
     pub fn check(&self, selection: &RootSelectionV1) -> Result<(), RuntimeRejectionV1> {
-        if self.services_profile != selection.services_profile {
+        if self.services_profile != selection.services_profile
+            || self.kernel != selection.kernel
+            || self.commitment_profile != selection.commitment_profile
+            || !self
+                .bindings
+                .windows(2)
+                .all(|pair| pair[0].wire_id < pair[1].wire_id)
+            || !self.definitions.windows(2).all(|pair| pair[0] < pair[1])
+            || (self.exact_bindings && self.bindings.len() != selection.bindings.len())
+        {
             return Err(RuntimeRejectionV1::ExpectationMismatch { wire_id: None });
+        }
+        for definition in &self.definitions {
+            if *definition != selection.kernel
+                && *definition != selection.commitment_profile
+                && *definition != selection.services_profile
+                && selection.active.binary_search(definition).is_err()
+                && selection
+                    .installed_storage
+                    .binary_search(definition)
+                    .is_err()
+            {
+                return Err(RuntimeRejectionV1::ExpectationMismatch { wire_id: None });
+            }
         }
         for expected in &self.bindings {
             let actual = selection

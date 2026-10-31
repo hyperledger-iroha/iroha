@@ -1,4 +1,7 @@
 //! Executor authorization, execution and custody regression tests.
+#[path = "executor_custody_tests.rs"]
+mod custody_upgrade;
+
 use super::*;
 use crate::{
     kura::Kura,

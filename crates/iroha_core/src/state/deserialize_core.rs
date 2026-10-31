@@ -150,9 +150,11 @@ fn validate_resource_policy_versions(
     execution_budget: &iroha_allocation::AllocationBudget,
 ) -> Result<(), StateRestoreError> {
     crate::resource_coherence::validate_restored_policy(&world.view(), committed_height).map_err(
-        |error| json::Error::InvalidField {
-            field: "state.world.resource_policy".to_owned(),
-            message: error.to_string(),
+        |error| {
+            error.map_rejection(|error| json::Error::InvalidField {
+                field: "state.world.resource_policy".to_owned(),
+                message: error.to_string(),
+            })
         },
     )?;
     // Acquire the original undo cut atomically. Reading separate Cell predecessors
@@ -162,9 +164,11 @@ fn validate_resource_policy_versions(
     // committed height exists. Even that retained undo must be coherent.
     let previous_height = committed_height.saturating_sub(1);
     crate::resource_coherence::validate_restored_policy(&previous_world, previous_height).map_err(
-        |error| json::Error::InvalidField {
-            field: "state.world.resource_policy.revert".to_owned(),
-            message: error.to_string(),
+        |error| {
+            error.map_rejection(|error| json::Error::InvalidField {
+                field: "state.world.resource_policy.revert".to_owned(),
+                message: error.to_string(),
+            })
         },
     )?;
     Ok(())
@@ -1074,6 +1078,59 @@ mod state_snapshot_decode_error_tests {
             Err(StateRestoreError::Serialization(json::Error::InvalidField { ref field, .. }))
                 if field == "state.world.resource_policy.revert"
         ));
+    }
+
+    #[test]
+    fn private_extension_restore_rejects_malformed_current_and_original_undo() {
+        use iroha_data_model::{
+            parameter::{CustomParameter, Parameter},
+            privacy::PrivateSettlementPolicyV1,
+        };
+        use iroha_primitives::json::Json;
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
+        let world = World::try_with_execution_budget([], [], [], &budget).unwrap();
+        let install = |parameter| {
+            let mut overlay = world.block();
+            let prepared = overlay
+                .parameters
+                .get()
+                .prepare_parameter(&Parameter::Custom(parameter), &budget)
+                .unwrap();
+            let successor = prepared
+                .into_successor(overlay.parameters.get(), &budget)
+                .map_err(|(_, error)| error)
+                .unwrap();
+            *overlay.parameters.get_mut() = successor;
+            overlay.commit();
+        };
+        let malformed = CustomParameter::new(
+            PrivateSettlementPolicyV1::parameter_id().clone(),
+            Json::from_str_norito("{}").unwrap(),
+        );
+        install(malformed);
+        assert!(
+            matches!(validate_resource_policy_versions(&world, 0, &budget),
+            Err(StateRestoreError::Serialization(json::Error::InvalidField { ref field, .. })) if field == "state.world.resource_policy")
+        );
+        install(
+            PrivateSettlementPolicyV1::protocol_default()
+                .to_custom_parameter()
+                .unwrap(),
+        );
+        crate::resource_coherence::validate_restored_policy(&world.view(), 0).unwrap();
+        assert!(
+            matches!(validate_resource_policy_versions(&world, 0, &budget),
+            Err(StateRestoreError::Serialization(json::Error::InvalidField { ref field, .. })) if field == "state.world.resource_policy.revert")
+        );
+        // Local codec refusal remains distinct even when the current value is well formed.
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+        let refused = norito::with_decode_limits_scope(limits, || {
+            validate_resource_policy_versions(&world, 0, &budget)
+        })
+        .unwrap_err();
+        assert!(
+            matches!(refused, StateRestoreError::ExecutionDeferred(ref original) if original.decode_refusal().is_some())
+        );
     }
 
     #[test]

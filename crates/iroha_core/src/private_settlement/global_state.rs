@@ -3427,11 +3427,21 @@ pub mod tests {
                     )
                     .unwrap();
                 let mut policy =
-                    iroha_data_model::privacy::PrivacyConsensusPolicyV1::taira_default();
-                policy.current_limits.private_settlement.max_carrier_bytes =
+                    iroha_data_model::privacy::PrivateSettlementPolicyV1::protocol_default();
+                policy.current_limits.max_carrier_bytes =
                     if tightened { required - 1 } else { required };
                 policy.validate().unwrap();
-                world.privacy_consensus_policy = mv::cell::Cell::new(policy);
+                let mut parameters =
+                    crate::state::parameter_cell_block_for_testing(&world).unwrap();
+                crate::state::set_parameter_cell_for_testing(
+                    &mut parameters,
+                    iroha_data_model::parameter::Parameter::Custom(
+                        policy.to_custom_parameter().unwrap(),
+                    ),
+                    world.sccp_committee_generations.allocation_budget(),
+                )
+                .unwrap();
+                parameters.commit();
                 if (is_finalize || is_abort) && tightened {
                     use iroha_data_model::privacy::{
                         IvmPrivateNoteLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,

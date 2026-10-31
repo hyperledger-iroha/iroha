@@ -59,6 +59,104 @@ fn a_change_set_that_adds_an_instruction_is_admitted() {
 }
 
 #[test]
+fn unsupported_storage_effects_are_rejected_before_scheduling() {
+    let storage = published();
+    let view = storage.view();
+    let lookup = PublishedDefinitions(&view);
+    for (change, operation) in [
+        (
+            test_support::retire_baseline_storage(network(), 200),
+            "storage migration cutover",
+        ),
+        (
+            test_support::install_storage(network(), 200, true),
+            "storage cell initialization",
+        ),
+        (
+            test_support::activate_migration(network(), 200),
+            "migration execution",
+        ),
+    ] {
+        change
+            .apply(&baseline(), &lookup)
+            .expect("the descriptor transition is closed");
+        let error = admit(
+            &change,
+            &network(),
+            100,
+            notice(),
+            &baseline(),
+            &BTreeMap::new(),
+            &lookup,
+        )
+        .expect_err("closed definitions cannot substitute for lifecycle effects");
+        assert!(error.to_string().contains(operation), "{error}");
+    }
+    let table = test_support::install_storage(network(), 200, false);
+    admit(
+        &table,
+        &network(),
+        100,
+        notice(),
+        &baseline(),
+        &BTreeMap::new(),
+        &lookup,
+    )
+    .expect("an empty table may be proposed before its implementing release is installed");
+}
+
+#[test]
+fn completion_selection_edits_cannot_substitute_for_registered_custody() {
+    use iroha_data_model::runtime::definition::CompletionClosureV1;
+    let catalog = release_catalog().expect("catalog");
+    let baseline = baseline();
+    let closure = CompletionClosureV1 {
+        obligation: [0x75; 32],
+        definitions: vec![baseline.bindings[0].implementation],
+    };
+    let mut retained = baseline.clone();
+    retained.completion_closures.push(closure.clone());
+    let storage = published();
+    let view = storage.view();
+    for (predecessor, successor, transition) in [
+        (
+            &baseline,
+            &retained,
+            SelectionTransitionV1::RetainCompletion(closure.clone()),
+        ),
+        (
+            &retained,
+            &baseline,
+            SelectionTransitionV1::ReleaseCompletion(closure.obligation),
+        ),
+    ] {
+        let mut change = test_support::deprecate_baseline_bundle(network(), 200);
+        change.predecessor = predecessor.id().unwrap();
+        change.successor = successor.id().unwrap();
+        change.transitions = vec![transition];
+        change
+            .apply(predecessor, &catalog.definitions)
+            .expect("a structurally valid selection edit");
+        let error = admit(
+            &change,
+            &network(),
+            100,
+            notice(),
+            predecessor,
+            &BTreeMap::new(),
+            &PublishedDefinitions(&view),
+        )
+        .expect_err("selection entries provide no kernel registration or transfer proof");
+        assert!(
+            error
+                .to_string()
+                .contains("kernel-registered completion capabilities"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn admission_refuses_short_notice_foreign_networks_and_data_space_roots() {
     let storage = published();
     let view = storage.view();
@@ -393,41 +491,47 @@ fn block_start_activates_a_supported_change_set_at_its_height() {
 
 #[test]
 fn block_start_lapses_a_change_set_that_would_strand_a_live_escrow() {
-    let wire_id =
+    for wire_id in [
         iroha_data_model::isi::wire_id_of::<iroha_data_model::isi::escrow::ReleaseAssetEscrow>()
-            .expect("registered");
-    let change = test_support::restrict_baseline_interface(
-        network(),
-        150,
-        wire_id,
-        RestrictionKindV1::Disabled,
-    );
-    let id = change.id().unwrap();
-    let status = |state: &crate::state::State| {
-        let block = state.try_block(header_at(150)).expect("block start");
-        let status = block
-            .world
-            .runtime_change_sets
-            .get(&id)
-            .map(|record| record.status);
-        (status, block.world.runtime_selection.get().clone())
-    };
+            .expect("registered"),
+        // The baseline escrow implementation can invoke this interface. Keeping its direct
+        // completion bound is insufficient if a declared callee is disabled.
+        iroha_data_model::isi::wire_id_of::<iroha_data_model::isi::Log>()
+            .expect("registered callee"),
+    ] {
+        let change = test_support::restrict_baseline_interface(
+            network(),
+            150,
+            wire_id,
+            RestrictionKindV1::Disabled,
+        );
+        let id = change.id().unwrap();
+        let status = |state: &crate::state::State| {
+            let block = state.try_block(header_at(150)).expect("block start");
+            let status = block
+                .world
+                .runtime_change_sets
+                .get(&id)
+                .map(|record| record.status);
+            (status, block.world.runtime_selection.get().clone())
+        };
 
-    let state = scheduled_state(&change, &validators(), 4);
-    {
-        let escrow = test_support::live_escrow(1);
-        let mut escrows = state.world.asset_escrows.block();
-        escrows.insert(escrow.id, escrow);
-        escrows.commit();
+        let state = scheduled_state(&change, &validators(), 4);
+        {
+            let escrow = test_support::live_escrow(1);
+            let mut escrows = state.world.asset_escrows.block();
+            escrows.insert(escrow.id, escrow);
+            escrows.commit();
+        }
+        let (lapsed, selection) = status(&state);
+        assert_eq!(lapsed, Some(ChangeSetStatusV1::Lapsed(150)));
+        assert_eq!(selection, baseline(), "escrow release stays executable");
+
+        let drained = scheduled_state(&change, &validators(), 4);
+        let (activated, selection) = status(&drained);
+        assert_eq!(activated, Some(ChangeSetStatusV1::Activated(150)));
+        assert_eq!(selection.id().unwrap(), change.successor);
     }
-    let (lapsed, selection) = status(&state);
-    assert_eq!(lapsed, Some(ChangeSetStatusV1::Lapsed(150)));
-    assert_eq!(selection, baseline(), "escrow release stays executable");
-
-    let drained = scheduled_state(&change, &validators(), 4);
-    let (activated, selection) = status(&drained);
-    assert_eq!(activated, Some(ChangeSetStatusV1::Activated(150)));
-    assert_eq!(selection.id().unwrap(), change.successor);
 }
 
 #[test]
@@ -449,6 +553,38 @@ fn block_start_lapses_a_change_set_without_every_validator() {
         baseline(),
         "a lapsed change set never applies"
     );
+}
+
+#[test]
+fn block_start_lapses_attested_but_unimplemented_storage_effects() {
+    for change in [
+        test_support::retire_baseline_storage(network(), 150),
+        test_support::install_storage(network(), 150, true),
+        test_support::activate_migration(network(), 150),
+    ] {
+        let id = change.id().expect("identity");
+        let state = scheduled_state(&change, &validators(), 4);
+        let block = state
+            .try_block(header_at(150))
+            .expect("unsupported effects must not halt the old selection");
+        assert_eq!(
+            block
+                .world
+                .runtime_change_sets
+                .get(&id)
+                .map(|record| record.status),
+            Some(ChangeSetStatusV1::Lapsed(150)),
+        );
+        assert_eq!(*block.world.runtime_selection.get(), baseline());
+        assert!(
+            change.publish.iter().all(|descriptor| block
+                .world
+                .runtime_definitions
+                .get(&descriptor.id().expect("definition identity"))
+                .is_none()),
+            "a lapsed change publishes no definitions"
+        );
+    }
 }
 
 #[test]

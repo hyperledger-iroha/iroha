@@ -218,7 +218,21 @@ fn rebinding_breaks_a_signed_expectation() {
             implementation: old_impl,
         }],
         services_profile: selection.services_profile,
+        kernel: selection.kernel,
+        commitment_profile: selection.commitment_profile,
+        definitions: sorted(vec![claim, old_impl, selection.services_profile]),
+        exact_bindings: false,
     };
+    assert_eq!(
+        norito::decode_from_bytes::<ExpectationV1>(&norito::to_bytes(&expectation).unwrap())
+            .unwrap(),
+        expectation,
+    );
+    assert_eq!(
+        norito::json::from_str::<ExpectationV1>(&norito::json::to_json(&expectation).unwrap())
+            .unwrap(),
+        expectation,
+    );
     assert_eq!(expectation.check(&selection), Ok(()));
 
     let fixed = implementation(&ids, claim, "bond.claim.fixed");

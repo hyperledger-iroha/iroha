@@ -15,7 +15,8 @@ validated limits. It does not require protocol registration, activation,
 lifecycle history or an all-protocol qualification record. Unfinished native
 implementations remain unavailable. Governance may schedule increases or
 decreases within canonical hard bounds at an exact height strictly after the
-admission block; the next block is allowed. Changes take effect at the start of
+admission block; relation-closing changes also respect the captured private-payment
+drain described below. Changes take effect at the start of
 that block after the scheduling transaction commits. Persisted histories are
 validated against the current retention cap and their authenticated attained
 count. New appends use the minimum of the current and pending caps; due pruning
@@ -658,24 +659,49 @@ receipt queries do not depend on access to restricted verification material.
 
 ## Committed validity policy and local capacity
 
-`World.privacy_consensus_policy.current_limits.private_settlement` is the sole
-owner of private-payment admission limits. `PrivateSettlementValidityLimitsV1`
-binds participant count, original context-to-expiry span, three phase durations,
-selected fixed padding classes, proof and complete canonical capsule bytes,
-canonical signed carrier bytes, minimum sidecar retention and minimum auditor
-threshold. The selected-context proof authenticates this policy cell and the
-native protocol's exact optional policy row or its absence in the same complete
+The typed `PrivateSettlementPolicyV1` under custom parameter
+`private_settlement_policy_v1` owns private-payment admission limits in the
+existing `World.parameters` cell. It holds current limits, at most one pending
+update and an optional captured protocol-closure drain. Its canonical Norito JSON
+payload is bounded to 4096 bytes. Authenticated absence means the immutable native
+V1 baseline; a malformed, noncanonical or invalid present value never selects that
+baseline. Local codec refusal preserves retry custody. Bootstrap and replay do
+not create a missing parameter.
+
+`PrivateSettlementValidityLimitsV1` binds participant count, original
+context-to-expiry span, three phase durations, selected fixed padding classes,
+proof and complete canonical capsule bytes, canonical signed carrier bytes,
+minimum sidecar retention and minimum auditor threshold. The selected-context
+proof authenticates the complete Parameters cell before extracting the extension,
+and the native protocol's exact optional policy row or its absence in the same
 World cut. Neither node configuration nor a caller-supplied policy grants native
 admission. The proof profile, audit schema and policy version are fixed V1 values.
 
-The existing governed `SchedulePrivacyConsensusPolicyUpdateV1` owns updates.
-At ordinary height `H >= 2`, a changed private policy must activate at
+Governed `SetParameter` schedules a successor without replacing current limits or
+an outstanding update. At ordinary height `H >= 2`, a changed policy activates at
 `E > H + current.max_expiry_blocks`, using checked arithmetic. New admission must
 have original expiry strictly below every pending private-policy or native
-relation-closing deadline. A pending generic native-policy closure retains only
-the original governed drain span needed to validate that boundary; subsequent
-private-policy changes cannot shorten it. There is one current policy and one
-pending update per existing owner, without a policy-history archive.
+relation-closing deadline. Scheduling a generic native-policy closure while the
+extension exists or staged locks remain atomically captures its protocol
+identifier, scheduled and effective heights, canonical successor-limit hash and
+original private expiry span in this extension. Subsequent private-policy changes
+cannot shorten that drain. With neither extension nor staged locks, a valid
+closure updates only its original protocol-policy row; it does not insert a
+parameter or require a missing capture. Its pending effective height still
+exclusively bounds new admission. Block-start processing validates linkage for
+present extensions, applies due limits and clears completed captures in the same
+overlay. Snapshot restoration checks both current and predecessor policy state.
+No policy-history archive is introduced.
+
+The original general privacy-policy layouts remain unchanged, and moving the
+protocol-policy key into Model preserves its sole nominal wire identity,
+`iroha_core::privacy_state::PrivacyProtocolPolicyKeyV1`. The genesis-signed SORA
+Nexus policy keeps its original private-settlement field order and frozen V1
+baseline values, including fixed sidecar capacity slots. Those signing slots are
+independent of both this governed extension and current node-local capacity;
+they do not reconstruct arbitrary historical configurations. See
+[`first_release_history_cutover.md`](first_release_history_cutover.md) for the
+unchanged-fixture replay qualification contract.
 
 Signed genesis may initialize this policy with a strictly future activation,
 including `E = 2`. No prior monetary obligation exists at genesis: the canonical
@@ -697,10 +723,16 @@ conservative complete Finalize/Abort envelope derived from its original manifest
 account and fee context. The sole canonical writer supplies size counting; the
 V1 wire-to-frame conversion is applied once. Native carriers allow at most sixteen
 actual signers, while retaining the complete original nonsigning account roster.
-Current signature authentication and revocation still apply. Generic resource
-updates must preserve the fixed 4 MiB complete continuation frame, sixteen signer
-slots, and the existing block reserve; they cannot strand an accepted original
-obligation by lowering a transaction or block cap.
+Current signature authentication and revocation still apply. While the same
+authenticated World cut contains staged private-settlement locks, generic
+resource updates must preserve the fixed 4 MiB complete continuation frame,
+sixteen signer slots and the existing block reserve. Final-candidate validation
+sees newly registered locks before publication; snapshot checks use the matching
+current or predecessor cut. With no such obligations and no explicit extension,
+the immutable baseline does not impose new generic transaction/signature floors
+on an existing history. An explicit extension separately requires its current
+and scheduled carrier caps to fit the generic transaction cap, even when no locks
+remain.
 
 Finalize and Abort consume their exact original registered obligation and native
 evidence after a later admission policy takes effect. They do not pass through

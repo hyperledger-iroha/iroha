@@ -544,20 +544,6 @@ impl Execute for SchedulePrivacyProtocolLimitsUpdateV1 {
             ));
         }
         let pending = PrivacyProtocolLimitsUpdateV1 {
-            private_settlement_drain_blocks:
-                iroha_data_model::privacy::private_settlement_protocol_closes_v1(
-                    &current.current_limits,
-                    &self.next_limits,
-                )
-                .then_some(
-                    state_transaction
-                        .world
-                        .privacy_consensus_policy
-                        .get()
-                        .current_limits
-                        .private_settlement
-                        .max_expiry_blocks,
-                ),
             scheduled_at_height: incoming_height,
             effective_at_height: self.effective_at_height,
             next_limits: self.next_limits,
@@ -577,6 +563,71 @@ impl Execute for SchedulePrivacyProtocolLimitsUpdateV1 {
             .map_err(|error| {
                 invalid_privacy_parameter(format!("privacy protocol policy rejected: {error}"))
             })?;
+        // Capture the original admission horizon and exact closure target before
+        // publishing either the protocol row or its companion parameter.
+        if iroha_data_model::privacy::private_settlement_protocol_closes_v1(
+            &current.current_limits,
+            &pending.next_limits,
+        ) && (state_transaction
+            .world
+            .parameters
+            .get()
+            .custom()
+            .contains_key(iroha_data_model::privacy::PrivateSettlementPolicyV1::parameter_id())
+            || state_transaction
+                .world
+                .private_settlement_staged_locks
+                .iter()
+                .next()
+                .is_some())
+        {
+            let mut extension = crate::private_settlement::policy::read(
+                state_transaction.world.parameters.get(),
+                Some(&current),
+                incoming_height,
+            )
+            .map_err(|error| {
+                state_transaction.world.attempt_error_to_instruction_error(
+                    error.map_rejection(invalid_privacy_parameter),
+                )
+            })?;
+            extension.protocol_closure_drain = Some(
+                iroha_data_model::privacy::PrivateSettlementProtocolClosureDrainV1::capture(
+                    self.protocol_id,
+                    &pending,
+                    extension.current_limits.max_expiry_blocks,
+                )
+                .map_err(|error| {
+                    state_transaction.world.attempt_error_to_instruction_error(
+                        crate::private_settlement::policy::attempt(error)
+                            .map_rejection(invalid_privacy_parameter),
+                    )
+                })?,
+            );
+            extension
+                .validate_protocol_policy(Some(&next))
+                .map_err(|error| {
+                    state_transaction.world.attempt_error_to_instruction_error(
+                        crate::private_settlement::policy::attempt(error)
+                            .map_rejection(invalid_privacy_parameter),
+                    )
+                })?;
+            let parameter = iroha_data_model::parameter::Parameter::Custom(
+                extension.to_custom_parameter().map_err(|error| {
+                    state_transaction.world.attempt_error_to_instruction_error(
+                        crate::private_settlement::policy::attempt(error)
+                            .map_rejection(invalid_privacy_parameter),
+                    )
+                })?,
+            );
+            let prepared = state_transaction
+                .prepare_parameter_change(&parameter, None, None)
+                .map_err(|error| state_transaction.parameter_change_instruction_error(error))?;
+            state_transaction
+                .world
+                .install_parameter_change(prepared)
+                .map_err(|error| state_transaction.parameter_change_instruction_error(error))?;
+        }
         state_transaction
             .world
             .privacy_protocol_policies
@@ -5800,45 +5851,113 @@ mod tests {
     }
 
     #[test]
+    fn baseline_native_protocol_closure_keeps_original_row_only_without_obligations() {
+        use iroha_data_model::privacy::{IvmPrivateNoteLimitsV1, PrivateSettlementPolicyV1};
+        let state = governance_execution_state();
+        let mut block = state.block(governance_execution_header(&state));
+        let mut transaction = block.transaction();
+        grant_governance(&mut transaction);
+        let original_parameters = transaction.world.parameters.get().clone();
+        let events = transaction.world.internal_event_buf.len();
+        let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+        SchedulePrivacyProtocolLimitsUpdateV1::new(
+            protocol,
+            TEST_BLOCK_HEIGHT + 1,
+            PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
+                max_input_count: 1,
+                max_output_count: 1,
+            }),
+        )
+        .execute(&ALICE_ID, &mut transaction)
+        .unwrap();
+        assert_eq!(*transaction.world.parameters.get(), original_parameters);
+        assert_eq!(transaction.world.internal_event_buf.len(), events);
+        assert!(
+            !transaction
+                .world
+                .parameters
+                .get()
+                .custom()
+                .contains_key(PrivateSettlementPolicyV1::parameter_id())
+        );
+        let key = PrivacyProtocolPolicyKeyV1::new(protocol);
+        let retained = transaction
+            .world
+            .privacy_protocol_policies
+            .get(&key)
+            .unwrap();
+        let policy = crate::private_settlement::policy::read(
+            transaction.world.parameters.get(),
+            Some(retained),
+            TEST_BLOCK_HEIGHT,
+        )
+        .unwrap();
+        assert_eq!(
+            iroha_data_model::privacy::private_settlement_admission_deadline_v1(
+                &policy,
+                Some(retained)
+            ),
+            Some(TEST_BLOCK_HEIGHT + 1)
+        );
+    }
+
+    #[test]
     fn native_private_policy_schedules_drain_original_obligations_before_activation() {
         use iroha_data_model::privacy::{
-            IvmPrivateNoteLimitsV1, PrivacyConsensusPolicyV1, PrivacyProtocolLimitsV1,
-            private_settlement_admission_deadline_v1,
+            IvmPrivateNoteLimitsV1, PrivacyProtocolLimitsV1, PrivateSettlementPolicyUpdateV1,
+            PrivateSettlementPolicyV1, private_settlement_admission_deadline_v1,
         };
         let state = governance_execution_state();
         let mut block = state.block(governance_execution_header(&state));
         let mut transaction = block.transaction();
         grant_governance(&mut transaction);
-        let original = *transaction.world.privacy_consensus_policy.get();
-        let span = original.current_limits.private_settlement.max_expiry_blocks;
+        transaction.world.add_account_permission(
+            &ALICE_ID,
+            iroha_data_model::permission::Permission::from(
+                iroha_executor_data_model::permission::parameter::CanSetParameters,
+            ),
+        );
+        let original =
+            PrivateSettlementPolicyV1::from_parameters(transaction.world.parameters.get()).unwrap();
+        let span = original.current_limits.max_expiry_blocks;
         let last = TEST_BLOCK_HEIGHT + span;
         let mut next = original.current_limits;
-        next.private_settlement.max_carrier_bytes -= 1;
+        next.max_carrier_bytes -= 1;
+        let schedule = |height| {
+            iroha_data_model::isi::SetParameter::new(
+                iroha_data_model::parameter::Parameter::Custom(
+                    PrivateSettlementPolicyV1 {
+                        pending_update: Some(PrivateSettlementPolicyUpdateV1 {
+                            scheduled_at_height: 1,
+                            effective_at_height: height,
+                            next_limits: next,
+                        }),
+                        ..original
+                    }
+                    .to_custom_parameter()
+                    .unwrap(),
+                ),
+            )
+        };
         let execute = |instruction: iroha_data_model::isi::InstructionBox,
                        tx: &mut StateTransaction<'_, '_>| {
             crate::executor::Executor::Initial.execute_instruction(tx, &ALICE_ID, instruction)
         };
-        assert!(
-            execute(
-                SchedulePrivacyConsensusPolicyUpdateV1::new(last, next).into(),
-                &mut transaction
-            )
-            .is_err()
+        assert!(execute(schedule(last).into(), &mut transaction).is_err());
+        assert_eq!(
+            PrivateSettlementPolicyV1::from_parameters(transaction.world.parameters.get()).unwrap(),
+            original
         );
-        assert_eq!(*transaction.world.privacy_consensus_policy.get(), original);
-        execute(
-            SchedulePrivacyConsensusPolicyUpdateV1::new(last + 1, next).into(),
-            &mut transaction,
-        )
-        .unwrap();
-        let pending = *transaction.world.privacy_consensus_policy.get();
+        execute(schedule(last + 1).into(), &mut transaction).unwrap();
+        let pending =
+            PrivateSettlementPolicyV1::from_parameters(transaction.world.parameters.get()).unwrap();
         assert_eq!(
             pending.pending_update.unwrap().effective_at_height,
             last + 1
         );
         let frame = norito::encode_canonical(&pending).unwrap();
         assert_eq!(
-            norito::decode_canonical::<PrivacyConsensusPolicyV1>(&frame).unwrap(),
+            norito::decode_canonical::<PrivateSettlementPolicyV1>(&frame).unwrap(),
             pending
         );
 
@@ -5873,17 +5992,18 @@ mod tests {
             .get(&key)
             .unwrap();
         assert_eq!(
-            retained
-                .pending_update
+            PrivateSettlementPolicyV1::from_parameters(transaction.world.parameters.get())
                 .unwrap()
-                .private_settlement_drain_blocks,
-            Some(span)
+                .protocol_closure_drain
+                .unwrap()
+                .original_max_expiry_blocks,
+            span
         );
         assert_eq!(
             private_settlement_admission_deadline_v1(&pending, Some(&retained)),
             Some(last + 1)
         );
-        let admission = pending.current_limits.private_settlement;
+        let admission = pending.current_limits;
         admission
             .validate_admission(
                 2,
@@ -5906,7 +6026,7 @@ mod tests {
         );
         drop(transaction);
         assert_eq!(
-            *block.world.privacy_consensus_policy.get(),
+            PrivateSettlementPolicyV1::from_parameters(block.world.parameters.get()).unwrap(),
             original,
             "uncommitted schedules roll back together"
         );
@@ -5944,7 +6064,6 @@ mod tests {
             .expect("authorized ordinary update from implicit defaults");
         let expected = PrivacyProtocolPolicyV1 {
             pending_update: Some(iroha_data_model::privacy::PrivacyProtocolLimitsUpdateV1 {
-                private_settlement_drain_blocks: None,
                 scheduled_at_height: TEST_BLOCK_HEIGHT,
                 effective_at_height: TEST_BLOCK_HEIGHT + 1,
                 next_limits: next,

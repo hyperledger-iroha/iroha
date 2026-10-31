@@ -444,7 +444,7 @@ pub fn context_fixture(
         }
     });
     PrivateSettlementContextProofV1 {
-        privacy_policy: iroha_data_model::privacy::PrivacyConsensusPolicyV1::taira_default(),
+        parameters: iroha_data_model::parameter::Parameters::default(),
         protocol_policy: None,
         pool: PrivateSettlementPoolCutProofV1 {
             world: WorldStateSnapshotV1 {

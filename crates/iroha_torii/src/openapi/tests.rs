@@ -818,7 +818,6 @@ fn privacy_protocol_policy_schema_matches_native_limits_and_future_updates() {
         next_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
             max_polynomial_count: 3,
         }),
-        private_settlement_drain_blocks: None,
     };
     let policy = PrivacyProtocolPolicyV1 {
         protocol_id,

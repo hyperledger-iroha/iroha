@@ -19,12 +19,14 @@ use iroha_data_model::{
         runtime_upgrade_policy::RuntimeUpgradePolicyV1,
     },
     runtime::{
-        definition::{DefinitionDescriptorV1, DefinitionId, DefinitionLookup, RootSelectionV1},
+        definition::{
+            DefinitionDescriptorV1, DefinitionId, DefinitionLookup, RootSelectionV1, StorageShapeV1,
+        },
         lifecycle::{
-            ChangeSetEndorsementV1, ChangeSetId, ChangeSetRecordV1, ChangeSetStatusV1, ChangeSetV1,
-            RootScopeV1, RuntimeNoticeV1, RuntimeUpgradeActionV1, SelectionTransitionV1,
-            SignedSupportAttestationV1, check_change_set_provenance, committee_digest,
-            committee_supports,
+            AppliedChangeSet, ChangeSetEndorsementV1, ChangeSetId, ChangeSetRecordV1,
+            ChangeSetStatusV1, ChangeSetV1, RootScopeV1, RuntimeNoticeV1, RuntimeUpgradeActionV1,
+            SelectionTransitionV1, SignedSupportAttestationV1, check_change_set_provenance,
+            committee_digest, committee_supports,
         },
     },
 };
@@ -112,6 +114,7 @@ where
                     format!("scheduled change set {id} no longer applies: {error}").into(),
                 )
             })?;
+        check_transition_support(&record.change_set, &applied, &lookup)?;
         added.extend(applied.published);
         selection = applied.selection;
     }
@@ -203,10 +206,63 @@ where
         published,
         added: &staged,
     };
-    change_set
+    let applied = change_set
         .apply(&meets, &lookup)
-        .map(|applied| applied.selection)
-        .map_err(|error| Error::InvariantViolation(format!("change set {id}: {error}").into()))
+        .map_err(|error| Error::InvariantViolation(format!("change set {id}: {error}").into()))?;
+    check_transition_support(change_set, &applied, &lookup)?;
+    Ok(applied.selection)
+}
+
+/// Reject transitions whose effects this lifecycle engine cannot perform (§14.8).
+///
+/// Merely recognizing every successor definition does not implement a migration cutover or write
+/// a cell's declared initial bytes. Empty-table additions and definitions of future releases may
+/// still be proposed; their release support is checked when a node attests. Unsupported lifecycle
+/// effects are rejected consistently at proposal, attestation and activation instead of reaching
+/// the accumulator after changing the selection.
+fn check_transition_support(
+    change_set: &ChangeSetV1,
+    applied: &AppliedChangeSet,
+    published: &impl DefinitionLookup,
+) -> Result<(), Error> {
+    let descriptor = |id| {
+        applied
+            .published
+            .get(id)
+            .or_else(|| published.definition(id))
+    };
+    for transition in &change_set.transitions {
+        let unsupported = match transition {
+            SelectionTransitionV1::RetireStorage(_) => Some("storage migration cutover"),
+            SelectionTransitionV1::RetainCompletion(_)
+            | SelectionTransitionV1::ReleaseCompletion(_) => {
+                Some("kernel-registered completion capabilities")
+            }
+            SelectionTransitionV1::InstallStorage(id)
+                if matches!(
+                    descriptor(id),
+                    Some(DefinitionDescriptorV1::Storage(storage))
+                        if matches!(storage.shape, StorageShapeV1::Cell)
+                ) =>
+            {
+                Some("storage cell initialization")
+            }
+            SelectionTransitionV1::Activate(id)
+                if matches!(descriptor(id), Some(DefinitionDescriptorV1::Migration(_))) =>
+            {
+                Some("migration execution")
+            }
+            _ => None,
+        };
+        if let Some(operation) = unsupported {
+            // TODO(§5.4): implement certified cursors, write barriers, initialization and atomic
+            // cutover before admitting transitions that require these effects.
+            return Err(Error::InvariantViolation(
+                format!("runtime transition requires unimplemented {operation}").into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Check one validator's attestation of a scheduled change set (§6, "Attest").
@@ -324,8 +380,21 @@ pub(crate) fn activate_due(
                 .apply(&current, &PublishedDefinitions(&wtx.runtime_definitions))
                 .ok()
                 .filter(|applied| {
+                    if let Err(reason) = check_transition_support(
+                        &record.change_set,
+                        applied,
+                        &PublishedDefinitions(&wtx.runtime_definitions),
+                    ) {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                        return false;
+                    }
                     // A successor that strands a live obligation never activates (§7.2).
-                    let stranded = super::obligations::stranded(&applied.selection, &live);
+                    let stranded = super::obligations::stranded(
+                        &current,
+                        &applied.selection,
+                        &PublishedDefinitions(&wtx.runtime_definitions),
+                        &live,
+                    );
                     if let Some(reason) = &stranded {
                         iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
                     }

@@ -17543,9 +17543,28 @@ pub mod isi {
         ) -> Result<(), Error> {
             state_transaction
                 .consume_parliament_candidate_testing_parameter(self.inner(), authority)?;
-            super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
-            state_transaction.validate_execution_output_parameter(self.inner())?;
-            if let Parameter::Sumeragi(change) = self.inner() {
+            let private_settlement_parameter =
+                super::parameter_validation::prepare_private_settlement_parameter(
+                    self.inner(),
+                    state_transaction,
+                )
+                .map_err(|error| {
+                    state_transaction
+                        .world
+                        .attempt_error_to_instruction_error(error)
+                })?;
+            let parameter = private_settlement_parameter
+                .as_ref()
+                .unwrap_or(self.inner());
+            super::parameter_validation::validate_ivm_heap_parameter(parameter)?;
+            super::parameter_validation::validate_parliament_lifecycle_parameter(parameter)
+                .map_err(|error| {
+                    state_transaction
+                        .world
+                        .attempt_error_to_instruction_error(error)
+                })?;
+            state_transaction.validate_execution_output_parameter(parameter)?;
+            if let Parameter::Sumeragi(change) = parameter {
                 if let iroha_data_model::parameter::system::SumeragiParameter::MaxClockDriftMs(
                     drift,
                 ) = change
@@ -17622,7 +17641,7 @@ pub mod isi {
                     )
                 })?;
             }
-            if let Parameter::Custom(custom) = self.inner() {
+            if let Parameter::Custom(custom) = parameter {
                 use iroha_data_model::parameter::GovernanceClockParametersV1;
                 if custom.id() == GovernanceClockParametersV1::parameter_id() {
                     let current = state_transaction.world.parameters.get().sumeragi();
@@ -17802,7 +17821,7 @@ pub mod isi {
             }
             let mut genesis_cadence = None;
             let mut root_fee_scope = None;
-            if let Parameter::Custom(next) = self.inner() {
+            if let Parameter::Custom(next) = parameter {
                 if iroha_data_model::validation_fee::is_reserved_validation_fee_parameter_id(
                     next.id(),
                 ) {
@@ -18007,7 +18026,7 @@ pub mod isi {
                 };
             }
             let prepared = state_transaction
-                .prepare_parameter_change(self.inner(), genesis_cadence, root_fee_scope)
+                .prepare_parameter_change(parameter, genesis_cadence, root_fee_scope)
                 .map_err(|original| {
                     state_transaction.parameter_change_instruction_error(original)
                 })?;
@@ -18041,6 +18060,12 @@ pub mod isi {
             upgraded_executor
                 .migrate(raw_executor.clone(), state_transaction, authority)
                 .map_err(|migration_error| match migration_error {
+                    crate::executor::ExecutorMigrationError::LiveCustody => {
+                        InstructionExecutionError::InvariantViolation(
+                            "executor migration would strand live escrow or lock obligations"
+                                .into(),
+                        )
+                    }
                     crate::executor::ExecutorMigrationError::LocalRefusalRetained => {
                         InstructionExecutionError::InvariantViolation(
                             "local executor migration did not complete".into(),
@@ -33156,6 +33181,154 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             SetParameter::new(Parameter::Custom(custom.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "installed exact grant retry does not mutate SNS ownership");
             assert_eq!(stx.world.parameters.get().custom().get(&parameter_id), Some(&custom));
+        });
+        world_test!(set_parameter_parliament_lifecycle_rejects_invalid_updates_atomically {
+            use iroha_data_model::parameter::{CustomParameter, ParliamentLifecycleParametersV1};
+            use iroha_primitives::json::Json;
+
+            // Both authored genesis and ordinary execution enforce the same contract.
+            for height in [1, 2] {
+                let state = blank_state();
+                let block = new_dummy_block_at_height(NonZeroU64::new(height).unwrap());
+                let mut state_block = state.block(block.as_ref().header());
+                let mut stx = state_block.transaction();
+                let mut policy = ParliamentLifecycleParametersV1::default();
+                policy.lifecycle.qualification_window_ms = 1;
+                policy.lifecycle.enactment_delay_ms = 0;
+                let installed = policy.to_custom_parameter().expect("valid policy");
+                SetParameter(Parameter::Custom(installed.clone()))
+                    .expect_execute(&ALICE_ID, &mut stx, "structural lifecycle bounds apply to every network");
+                assert_eq!(
+                    stx.world.parameters.get().custom().get(ParliamentLifecycleParametersV1::parameter_id()),
+                    Some(&installed),
+                );
+                let mut invalid_policies = Vec::new();
+                let mut invalid = policy.clone();
+                invalid.lifecycle.qualification_window_ms = 0;
+                invalid_policies.push(invalid);
+                let mut invalid = policy.clone();
+                invalid.sortition.minimum_citizenship_bond = Quantity::zero();
+                invalid_policies.push(invalid);
+                let mut invalid = policy.clone();
+                invalid.body_sizes.swap(0, 1);
+                invalid_policies.push(invalid);
+                let mut invalid = policy.clone();
+                invalid.body_sizes.pop();
+                invalid_policies.push(invalid);
+                let mut payloads = invalid_policies.iter()
+                    .map(|invalid| Json::try_new(invalid).expect("encode invalid policy"))
+                    .collect::<Vec<_>>();
+                payloads.push(Json::from_str_norito("{}").expect("JSON object"));
+                let mut extra: norito::json::Value = installed.payload().try_into_any_norito().unwrap();
+                extra.as_object_mut().unwrap().insert("unexpected".into(), 0_u64.into());
+                payloads.push(Json::try_new(extra).expect("canonical unknown field JSON"));
+                payloads.push(Json::try_new("x".repeat(ParliamentLifecycleParametersV1::MAX_PAYLOAD_BYTES))
+                    .expect("oversized JSON"));
+                for payload in payloads {
+                    let before = stx.world.parameters.get().clone();
+                    let internal_events = stx.world.internal_event_buf.len();
+                    let external_events = stx.world.external_event_buf.len();
+                    let error = SetParameter(Parameter::Custom(CustomParameter::new(
+                        ParliamentLifecycleParametersV1::parameter_id().clone(), payload,
+                    )))
+                        .execute(&ALICE_ID, &mut stx)
+                        .expect_err("invalid committed lifecycle policy must fail before publication");
+                    assert!(matches!(error, InstructionExecutionError::InvalidParameter(_)));
+                    assert_eq!(*stx.world.parameters.get(), before);
+                    assert_eq!(stx.world.internal_event_buf.len(), internal_events);
+                    assert_eq!(stx.world.external_event_buf.len(), external_events);
+                }
+            }
+        });
+        world_test!(set_parameter_parliament_lifecycle_codec_refusal_is_deferred_atomically {
+            use iroha_data_model::parameter::ParliamentLifecycleParametersV1;
+
+            let state = blank_state();
+            let block = new_dummy_block_at_height(NonZeroU64::new(2).unwrap());
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let custom = ParliamentLifecycleParametersV1::default().to_custom_parameter().unwrap();
+            let instruction = SetParameter(Parameter::Custom(custom.clone()));
+            let before = stx.world.parameters.get().clone();
+            let internal_events = stx.world.internal_event_buf.len();
+            let external_events = stx.world.external_event_buf.len();
+            let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+            let error = norito::with_decode_limits_scope(limits, || {
+                instruction.clone().execute(&ALICE_ID, &mut stx)
+            }).expect_err("local decoder refusal must leave the parameter uncommitted");
+            assert!(!matches!(error, InstructionExecutionError::InvalidParameter(_)));
+            assert!(stx.is_execution_deferred());
+            assert!(stx.borrow_execution_deferral().unwrap().decode_refusal().is_some());
+            assert_eq!(*stx.world.parameters.get(), before);
+            assert_eq!(stx.world.internal_event_buf.len(), internal_events);
+            assert_eq!(stx.world.external_event_buf.len(), external_events);
+            drop(stx);
+            let mut retry = state_block.transaction();
+            instruction.expect_execute(&ALICE_ID, &mut retry, "a fresh attempt admits the same valid policy");
+            assert!(!retry.is_execution_deferred());
+            assert_eq!(
+                retry.world.parameters.get().custom().get(ParliamentLifecycleParametersV1::parameter_id()),
+                Some(&custom),
+            );
+        });
+        world_test!(set_parameter_private_settlement_preserves_current_and_pending_authority {
+            use iroha_data_model::privacy::{PrivateSettlementPolicyV1, PrivateSettlementPolicyUpdateV1};
+            blank_state_transaction!(state, block, state_block, stx);
+            let original = PrivateSettlementPolicyV1::protocol_default();
+            let before = stx.world.parameters.get().clone();
+            let events = stx.world.internal_event_buf.len();
+            let mut forged = original;
+            forged.current_limits.max_participants = 16;
+            let instruction = SetParameter(Parameter::Custom(forged.to_custom_parameter().unwrap()));
+            assert!(matches!(instruction.execute(&ALICE_ID, &mut stx), Err(InstructionExecutionError::InvalidParameter(_))));
+            assert_eq!(*stx.world.parameters.get(), before);
+            assert_eq!(stx.world.internal_event_buf.len(), events);
+            let mut next = original.current_limits;
+            next.max_participants = 16;
+            let scheduled = PrivateSettlementPolicyV1 {
+                pending_update: Some(PrivateSettlementPolicyUpdateV1 {
+                    scheduled_at_height: 1, effective_at_height: 10_000, next_limits: next,
+                }), ..original
+            };
+            let instruction = SetParameter(Parameter::Custom(scheduled.to_custom_parameter().unwrap()));
+            instruction.clone().expect_execute(&ALICE_ID, &mut stx, "a future private policy is scheduled");
+            let retained = PrivateSettlementPolicyV1::from_parameters(stx.world.parameters.get()).unwrap();
+            assert_eq!(retained.current_limits, original.current_limits);
+            assert_eq!(retained.pending_update.unwrap().scheduled_at_height, stx.block_height());
+            let before_replacement = stx.world.parameters.get().clone();
+            let events_after = stx.world.internal_event_buf.len();
+            assert!(matches!(instruction.execute(&ALICE_ID, &mut stx), Err(InstructionExecutionError::InvalidParameter(_))));
+            assert_eq!(*stx.world.parameters.get(), before_replacement);
+            assert_eq!(stx.world.internal_event_buf.len(), events_after);
+        });
+        world_test!(set_parameter_private_settlement_codec_refusal_is_deferred_atomically {
+            use iroha_data_model::privacy::{PrivateSettlementPolicyV1, PrivateSettlementPolicyUpdateV1};
+            let state = blank_state();
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let original = PrivateSettlementPolicyV1::protocol_default();
+            let mut next = original.current_limits;
+            next.max_participants = 16;
+            let policy = PrivateSettlementPolicyV1 {
+                pending_update: Some(PrivateSettlementPolicyUpdateV1 {
+                    scheduled_at_height: 1, effective_at_height: 10_000, next_limits: next,
+                }), ..original
+            };
+            let instruction = SetParameter(Parameter::Custom(policy.to_custom_parameter().unwrap()));
+            let before = stx.world.parameters.get().clone();
+            let events = stx.world.internal_event_buf.len();
+            let external = stx.world.external_event_buf.len();
+            let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+            norito::with_decode_limits_scope(limits, || instruction.clone().execute(&ALICE_ID, &mut stx)).expect_err("original codec refusal");
+            assert!(stx.borrow_execution_deferral().unwrap().decode_refusal().is_some());
+            assert_eq!(*stx.world.parameters.get(), before);
+            assert_eq!(stx.world.internal_event_buf.len(), events);
+            assert_eq!(stx.world.external_event_buf.len(), external);
+            drop(stx);
+            let mut retry = state_block.transaction();
+            instruction.expect_execute(&ALICE_ID, &mut retry, "fresh local attempt admits the same schedule");
+            assert!(!retry.is_execution_deferred());
         });
         world_test!(set_parameter_rejects_heap_limits_outside_the_abi_window {
             assert_eq!(

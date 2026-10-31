@@ -32,13 +32,14 @@ fn blob() -> IvmBytecode {
 }
 
 fn register_call(tx: &mut SetTransaction<'_>, value: &str) {
-    let action = SpecializedAction::new(
+    let mut action = SpecializedAction::new(
         Executable::Ivm(blob()),
         Repeats::Exactly(3),
         ALICE_ID.clone(),
         ExecuteTriggerEventFilter::new(),
     )
     .unwrap();
+    capture_fixture_runtime_consent(&mut action);
     assert!(
         tx.add_by_call_trigger(SpecializedTrigger::new(id(value), action))
             .unwrap()
@@ -54,6 +55,7 @@ fn register_data(tx: &mut SetTransaction<'_>, value: &str) {
     )
     .unwrap();
     action.metadata = global_data_trigger_scope_metadata_for_testing(&ALICE_ID);
+    capture_fixture_runtime_consent(&mut action);
     assert!(
         tx.add_data_trigger(SpecializedTrigger::new(id(value), action))
             .unwrap()
@@ -65,13 +67,14 @@ fn seeded_set() -> Arc<Set> {
     let mut block = set.block();
     let mut tx = block.transaction();
     register_data(&mut tx, "data");
-    let action = SpecializedAction::new(
+    let mut action = SpecializedAction::new(
         Executable::Instructions(ConstVec::from(Vec::<InstructionBox>::new())),
         Repeats::Exactly(3),
         ALICE_ID.clone(),
         PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
     )
     .unwrap();
+    capture_fixture_runtime_consent(&mut action);
     assert!(
         tx.add_pipeline_trigger(SpecializedTrigger::new(id("pipeline"), action))
             .unwrap()
@@ -89,6 +92,7 @@ fn seeded_set() -> Arc<Set> {
         max_retries: std::num::NonZeroU32::new(3).unwrap(),
         retry_after_ms: NonZeroU64::new(10).unwrap(),
     });
+    capture_fixture_runtime_consent(&mut action);
     assert!(
         tx.add_time_trigger(SpecializedTrigger::new(id("time"), action))
             .unwrap()

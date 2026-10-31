@@ -3552,6 +3552,7 @@ struct NexusConsensusPolicyPreimageV1<'a> {
     uploaded_models: NexusConsensusUploadedModelsV1,
     endorsement: NexusConsensusEndorsementV1,
     axt: NexusConsensusAxtV1,
+    atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1,
     governance: NexusConsensusGovernanceV1,
     compliance_enabled: bool,
     compliance_audit_only: bool,
@@ -3612,6 +3613,52 @@ struct NexusConsensusAxtV1 {
     max_clock_skew_ms: u64,
     proof_cache_ttl_slots: u64,
     replay_retention_slots: u64,
+}
+/// Immutable slots in the original V1 signed commitment, in their original wire order.
+///
+/// These values identify the canonical first-release baseline; they are not local admission
+/// settings. Current private-payment validity comes from committed policy, and local sidecar
+/// capacity cannot change this signed contract. Other historical configurations cannot be
+/// reconstructed by substituting today's defaults for their authenticated original values.
+#[derive(Encode)]
+struct NexusConsensusAtomicPrivateSettlementV1 {
+    proof_profile_version: u16,
+    max_participants: u16,
+    max_expiry_blocks: u64,
+    audit_timeout_blocks: u64,
+    prepare_timeout_blocks: u64,
+    commit_timeout_blocks: u64,
+    capsule_padding_classes_bytes: Vec<u32>,
+    max_proof_bytes: u64,
+    max_capsule_bytes: u64,
+    max_carrier_bytes: u64,
+    sidecar_retention_blocks: u64,
+    sidecar_max_records: u32,
+    sidecar_max_total_bytes: u64,
+    default_min_auditor_approvals: u16,
+    permitted_policy_versions: Vec<u16>,
+}
+impl NexusConsensusAtomicPrivateSettlementV1 {
+    /// Exact signed V1 baseline, independent of mutable defaults and operational configuration.
+    fn frozen_v1() -> Self {
+        Self {
+            proof_profile_version: 1,
+            max_participants: 255,
+            max_expiry_blocks: 7_200,
+            audit_timeout_blocks: 1_200,
+            prepare_timeout_blocks: 1_200,
+            commit_timeout_blocks: 1_200,
+            capsule_padding_classes_bytes: vec![4_096, 16_384, 65_536, 262_144],
+            max_proof_bytes: 8_388_608,
+            max_capsule_bytes: 1_048_576,
+            max_carrier_bytes: 4_194_304,
+            sidecar_retention_blocks: 1_000_000,
+            sidecar_max_records: 256,
+            sidecar_max_total_bytes: 3_221_225_472,
+            default_min_auditor_approvals: 1,
+            permitted_policy_versions: vec![1],
+        }
+    }
 }
 #[derive(Encode)]
 struct NexusConsensusGovernanceV1 {
@@ -3899,6 +3946,7 @@ pub fn nexus_consensus_policy_preimage_with_runtime_policies(
             proof_cache_ttl_slots: nexus.axt.proof_cache_ttl_slots.get(),
             replay_retention_slots: nexus.axt.replay_retention_slots.get(),
         },
+        atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1::frozen_v1(),
         governance: NexusConsensusGovernanceV1 {
             default_module: nexus.governance.default_module.clone(),
             modules: governance_modules,
@@ -3985,6 +4033,22 @@ impl ExecutionPolicyFieldsV1 {
             name: name.to_owned(),
             value: value.encode(),
         });
+    }
+
+    /// Retain the signed V1 baseline slots after deleting their former node-local authority.
+    /// Current release provenance is governed by the committed runtime provenance policy.
+    fn push_frozen_runtime_provenance_v1(&mut self) {
+        self.push("governance.runtime_upgrade_provenance.mode", &1_u8);
+        self.push("governance.runtime_upgrade_provenance.require_sbom", &false);
+        self.push("governance.runtime_upgrade_provenance.require_slsa", &false);
+        self.push(
+            "governance.runtime_upgrade_provenance.trusted_signers",
+            &Vec::<Vec<u8>>::new(),
+        );
+        self.push(
+            "governance.runtime_upgrade_provenance.signature_threshold",
+            &0_u64,
+        );
     }
 }
 fn execution_policy_usize(value: usize) -> u64 {
@@ -4291,6 +4355,9 @@ pub fn execution_policy_digest_v1(
             .map(|scheme| scheme.scheme_id())
             .collect::<Vec<_>>(),
     );
+    // These original V1 fields remain in their signed position; deleting configuration does
+    // not delete slots from a genesis commitment (specs/live_runtime_upgrades.md §6).
+    policy.push_frozen_runtime_provenance_v1();
     let viral = &governance.viral_incentives;
     policy.push(
         "governance.viral.incentive_pool_account",

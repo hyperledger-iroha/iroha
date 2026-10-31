@@ -108,16 +108,19 @@ impl State {
         }
         let height = tip.height();
         self.with_native_world_state_snapshot_cut_v1(tip, None, budget, |snapshot, world| {
-            let privacy_policy = world.privacy_consensus_policy.get();
-            privacy_policy
+            let parameters: &iroha_data_model::parameter::Parameters = world.parameters.get();
+            let private_policy =
+                iroha_data_model::privacy::PrivateSettlementPolicyV1::from_parameters(parameters)
+                    .map_err(private_policy_snapshot_error)?;
+            private_policy
                 .validate_at_committed_height(height)
                 .map_err(|error| error.to_string())?;
             require_target(
                 snapshot,
-                "world.privacy_consensus_policy",
+                "world.parameters",
                 WorldStateElementKindV1::Cell,
                 None,
-                hash_value(privacy_policy)?,
+                hash_value(parameters)?,
             )?;
             let protocol_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
                 iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
@@ -134,6 +137,14 @@ impl State {
                     Some(hash_value(&protocol_key)?),
                     hash_value(policy)?,
                 )?;
+            }
+            if parameters
+                .custom()
+                .contains_key(iroha_data_model::privacy::PrivateSettlementPolicyV1::parameter_id())
+            {
+                private_policy
+                    .validate_protocol_policy(protocol_policy)
+                    .map_err(private_policy_snapshot_error)?;
             }
             let lanes = world.sumeragi_lanes();
             require_target(
@@ -205,7 +216,7 @@ impl State {
 
                 contexts.push(PrivateSettlementContextProofRefV1::new(
                     PrivateSettlementPoolCutProofRefV1::new(snapshot, governance, pool),
-                    privacy_policy,
+                    parameters,
                     protocol_policy,
                     lanes,
                     keys,
@@ -278,4 +289,15 @@ fn private_context_key_original<'a>(
     Ok(PrivateSettlementCommitteeKeyProofRefV1::new(
         index, original.1,
     ))
+}
+
+fn private_policy_snapshot_error(
+    error: iroha_data_model::privacy::PrivateSettlementPolicyParameterErrorV1,
+) -> WorldStateSnapshotError {
+    match error {
+        iroha_data_model::privacy::PrivateSettlementPolicyParameterErrorV1::Codec(original) => {
+            WorldStateSnapshotError::Encoding(original)
+        }
+        error => WorldStateSnapshotError::Invalid(error.to_string()),
+    }
 }

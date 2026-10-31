@@ -8,14 +8,18 @@ use crate::{
         PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1, PrivateSettlementAuditPolicyV1,
         PrivateSettlementCommitteeAuthorityV1, PrivateSettlementPoolGovernanceV1,
     },
+    parameter::Parameters,
     privacy::{
-        PrivacyConsensusPolicyV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
-        PrivacyProtocolPolicyKeyV1, PrivacyProtocolPolicyV1, PrivateSettlementValidityLimitsV1,
+        PrivacyProtocolIdV1, PrivacyProtocolLimitsV1, PrivacyProtocolPolicyKeyV1,
+        PrivacyProtocolPolicyV1, PrivateSettlementPolicyParameterErrorV1,
+        PrivateSettlementPolicyV1, PrivateSettlementValidityLimitsV1,
         private_settlement_admission_deadline_v1, private_settlement_protocol_admission_open_v1,
         validate_private_settlement_sponsor_v1,
     },
     sorafs::stream_token_custody::proof::borrowed,
-    sumeragi_finality::{FinalityError, MAX_WORLD_STATE_SNAPSHOT_BYTES_V1, VerifiedSumeragiBlock},
+    sumeragi_finality::{
+        FinalityError, FinalityReadError, MAX_WORLD_STATE_SNAPSHOT_BYTES_V1, VerifiedSumeragiBlock,
+    },
     sumeragi_lanes::SumeragiLaneState,
 };
 use iroha_crypto::HashOf;
@@ -133,22 +137,29 @@ impl PrivateSettlementContextsProofV1 {
         schema: Hash,
         request: &PrivateSettlementContextRequestV1,
         block: &VerifiedSumeragiBlock,
-    ) -> Result<(), FinalityError> {
+    ) -> Result<(), FinalityReadError> {
         request.validate()?;
         if self.contexts.len() != request.pools.len()
-            || norito::canonical_frame_len(self).map_err(|_| invalid())?
+            || norito::core::classify_decode_attempt(|| norito::canonical_frame_len(self))?
                 > MAX_WORLD_STATE_SNAPSHOT_BYTES_V1
         {
-            return Err(invalid());
+            return Err(invalid().into());
         }
         let first = &self.contexts[0];
         for (proof, key) in self.contexts.iter().zip(&request.pools) {
             if proof.pool.world != first.pool.world || proof.lanes != first.lanes {
-                return Err(invalid());
+                return Err(invalid().into());
             }
             proof.verify(network, schema, *key, block)?;
         }
         Ok(())
+    }
+}
+
+fn private_policy_error(error: PrivateSettlementPolicyParameterErrorV1) -> FinalityReadError {
+    match error {
+        PrivateSettlementPolicyParameterErrorV1::Codec(original) => original.into(),
+        _ => invalid().into(),
     }
 }
 
@@ -225,8 +236,8 @@ impl<'a> PrivateSettlementCommitteeKeyProofRefV1<'a> {
 pub struct PrivateSettlementContextProofV1 {
     /// Sole complete World proof and selected public governance/frontier rows.
     pub pool: PrivateSettlementPoolCutProofV1,
-    /// Exact committed current and pending privacy admission policy from the selected cut.
-    pub privacy_policy: PrivacyConsensusPolicyV1,
+    /// Exact complete parameters cell authenticating the private admission extension or absence.
+    pub parameters: Parameters,
     /// Exact native protocol policy row, or authenticated absence selecting canonical limits.
     pub protocol_policy: Option<PrivacyProtocolPolicyV1>,
     /// Exact original canonical native lane cell from that same cut.
@@ -241,7 +252,7 @@ pub struct PrivateSettlementContextProofV1 {
 #[derive(norito::derive::NoritoSerialize, norito::derive::JsonSerialize)]
 pub struct PrivateSettlementContextProofRefV1<'a> {
     pool: PrivateSettlementPoolCutProofRefV1<'a>,
-    privacy_policy: borrowed::Value<'a, PrivacyConsensusPolicyV1>,
+    parameters: borrowed::Value<'a, Parameters>,
     protocol_policy: Option<borrowed::Value<'a, PrivacyProtocolPolicyV1>>,
     lanes: borrowed::Value<'a, SumeragiLaneState>,
     #[norito(json = "committee_keys_json")]
@@ -261,7 +272,7 @@ impl<'a> PrivateSettlementContextProofRefV1<'a> {
     #[must_use]
     pub fn new(
         pool: PrivateSettlementPoolCutProofRefV1<'a>,
-        privacy_policy: &'a PrivacyConsensusPolicyV1,
+        parameters: &'a Parameters,
         protocol_policy: Option<&'a PrivacyProtocolPolicyV1>,
         lanes: &'a SumeragiLaneState,
         committee_keys: [PrivateSettlementCommitteeKeyProofRefV1<'a>;
@@ -269,7 +280,7 @@ impl<'a> PrivateSettlementContextProofRefV1<'a> {
     ) -> Self {
         Self {
             pool,
-            privacy_policy: borrowed::Value(privacy_policy),
+            parameters: borrowed::Value(parameters),
             protocol_policy: protocol_policy.map(borrowed::Value),
             lanes: borrowed::Value(lanes),
             committee_keys,
@@ -351,7 +362,7 @@ mod committee_keys_json {
 pub struct VerifiedPrivateSettlementContextV1<'a> {
     pool: VerifiedPrivateSettlementPoolCutV1<'a>,
     authority: PrivateSettlementCommitteeAuthorityV1,
-    admission_limits: &'a PrivateSettlementValidityLimitsV1,
+    admission_limits: PrivateSettlementValidityLimitsV1,
     admission_deadline: Option<u64>,
 }
 impl PrivateSettlementContextProofV1 {
@@ -385,24 +396,36 @@ impl PrivateSettlementContextProofV1 {
         schema: Hash,
         key: PrivateSettlementPoolKeyV1,
         block: &VerifiedSumeragiBlock,
-    ) -> Result<VerifiedPrivateSettlementContextV1<'_>, FinalityError> {
-        if norito::canonical_frame_len(self).map_err(|_| invalid())?
+    ) -> Result<VerifiedPrivateSettlementContextV1<'_>, FinalityReadError> {
+        if norito::core::classify_decode_attempt(|| norito::canonical_frame_len(self))?
             > MAX_WORLD_STATE_SNAPSHOT_BYTES_V1
         {
-            return Err(invalid());
+            return Err(invalid().into());
         }
         let pool = self.pool.verify(network, schema, key, block)?;
         let world = pool.verified_world();
-        world.verify_cell_value("world.privacy_consensus_policy", &self.privacy_policy)?;
-        self.privacy_policy
+        world.verify_cell_value("world.parameters", &self.parameters)?;
+        let private_policy = PrivateSettlementPolicyV1::from_parameters(&self.parameters)
+            .map_err(private_policy_error)?;
+        private_policy
             .validate_at_committed_height(block.height())
             .map_err(|_| invalid())?;
+        if self
+            .parameters
+            .custom()
+            .get(PrivateSettlementPolicyV1::parameter_id())
+            .is_some()
+        {
+            private_policy
+                .validate_protocol_policy(self.protocol_policy.as_ref())
+                .map_err(private_policy_error)?;
+        }
         let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
         let protocol_key = PrivacyProtocolPolicyKeyV1::new(protocol);
         let limits = if let Some(policy) = &self.protocol_policy {
             world.verify_table_value("world.privacy_protocol_policies", &protocol_key, policy)?;
             if policy.protocol_id != protocol {
-                return Err(invalid());
+                return Err(invalid().into());
             }
             policy
                 .validate_at_committed_height(block.height())
@@ -413,13 +436,13 @@ impl PrivateSettlementContextProofV1 {
             PrivacyProtocolLimitsV1::canonical_default_v1(protocol)
         };
         if !private_settlement_protocol_admission_open_v1(&limits) {
-            return Err(invalid());
+            return Err(invalid().into());
         }
         world.verify_cell_value("world.sumeragi_lanes", &self.lanes)?;
         let record = private_settlement_native_route_v1(&self.lanes, key.route, block.height())
             .map_err(|_| invalid())?;
         if record.committee.len() != PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1 {
-            return Err(invalid());
+            return Err(invalid().into());
         }
         let validators: Vec<_> = record
             .committee
@@ -455,7 +478,7 @@ impl PrivateSettlementContextProofV1 {
                 || !original.record.is_live_at(block.height(), 0, 0)
                 || &original.record.public_key != member.peer.public_key()
             {
-                return Err(invalid());
+                return Err(invalid().into());
             }
         }
         pool.governance()
@@ -464,9 +487,9 @@ impl PrivateSettlementContextProofV1 {
         Ok(VerifiedPrivateSettlementContextV1 {
             pool,
             authority,
-            admission_limits: &self.privacy_policy.current_limits.private_settlement,
+            admission_limits: private_policy.current_limits,
             admission_deadline: private_settlement_admission_deadline_v1(
-                &self.privacy_policy,
+                &private_policy,
                 self.protocol_policy.as_ref(),
             ),
         })
@@ -476,7 +499,7 @@ impl<'a> VerifiedPrivateSettlementContextV1<'a> {
     /// Native private-payment limits authenticated at this independently selected World cut.
     #[must_use]
     pub const fn admission_limits(&self) -> &PrivateSettlementValidityLimitsV1 {
-        self.admission_limits
+        &self.admission_limits
     }
     /// Earliest exclusive expiry boundary imposed by an already committed policy change.
     #[must_use]

@@ -4,6 +4,9 @@ use super::PrivacyProtocolIdV1;
 use norito::{Decode, Encode};
 
 /// Canonical key of an optional committed per-protocol resource policy.
+///
+/// Its original wire identity is independent of the Rust crate that owns this type.
+/// Moving the implementation must preserve the installed storage definition and key bytes.
 #[derive(
     Clone,
     Copy,
@@ -17,7 +20,7 @@ use norito::{Decode, Encode};
     iroha_schema::IntoSchema,
     norito::NoritoSchema,
 )]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1")]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyProtocolPolicyKeyV1")]
 pub struct PrivacyProtocolPolicyKeyV1 {
     protocol_id: PrivacyProtocolIdV1,
 }
@@ -98,6 +101,29 @@ mod tests {
     use super::*;
     use norito::json::JsonKeyCodec as _;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn model_owner_preserves_original_policy_key_identity_and_frame() {
+        assert_eq!(
+            norito::schema::identity::nominal_name::<PrivacyProtocolPolicyKeyV1>(),
+            "iroha_core::privacy_state::PrivacyProtocolPolicyKeyV1"
+        );
+        // The original one-field key: canonical header, a four-byte enum field,
+        // and the IVM private-note protocol's unchanged discriminant (10).
+        const ORIGINAL_FRAME: &str = "4E5254300000B6E07A5A4519921C50F7C32D5AFE2A30000500000000000000903261DB39E620FD02040A000000";
+        let expected = hex::decode(ORIGINAL_FRAME).unwrap();
+        let key = PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+        assert_eq!(norito::encode_canonical(&key).unwrap(), expected);
+        assert_eq!(
+            norito::decode_canonical::<PrivacyProtocolPolicyKeyV1>(&expected).unwrap(),
+            key
+        );
+        assert_eq!(key.canonical_json_key(), ORIGINAL_FRAME);
+        assert_eq!(
+            PrivacyProtocolPolicyKeyV1::decode_json_key(ORIGINAL_FRAME).unwrap(),
+            key
+        );
+    }
 
     #[test]
     fn policy_key_roundtrip_is_bounded_and_canonical() {

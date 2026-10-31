@@ -1472,6 +1472,9 @@ pub enum ExecutorMigrationError {
     /// A completed migration error retains its original VM fields.
     #[error("executor migration rejected: {0}")]
     Rejected(#[source] VMError),
+    /// Live escrow or lock custody still depends on the installed executor's authorization.
+    #[error("executor migration would strand live escrow or lock obligations")]
+    LiveCustody,
     /// The transaction retains the first local refusal. This notice owns no cause and cannot
     /// become a completed rejection; the outer State terminal must export the original once.
     #[error("local executor migration did not complete; original refusal retained in State")]
@@ -5395,6 +5398,22 @@ fn is_reserved_multisig_role_id(role_id: &RoleId) -> bool {
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 impl Executor {
+    /// Identity of the exact installed executor code captured by deferred runtime consent.
+    /// Loaded instances, compilation caches and runtime-pool history do not affect execution
+    /// semantics and never enter this commitment. The executor data model is installed by
+    /// this same raw bytecode; later ordinary parameter and permission updates remain State.
+    pub(crate) fn runtime_consent_hash(&self) -> iroha_crypto::Hash {
+        const DOMAIN: &[u8] = b"iroha:runtime:executor-consent:v1\0";
+        match self {
+            Self::Initial => iroha_crypto::Hash::new_from_chunks(&[DOMAIN, &[0]]),
+            Self::UserProvided(loaded) => iroha_crypto::Hash::new_from_chunks(&[
+                DOMAIN,
+                &[1],
+                loaded.raw_executor.bytecode().as_ref(),
+            ]),
+        }
+    }
+
     fn resolve_pipeline_gas_asset_definition(
         state_transaction: &StateTransaction<'_, '_>,
         gas_asset_id_str: &str,
@@ -9222,6 +9241,7 @@ impl Executor {
     /// # Errors
     ///
     /// - The caller is outside initial genesis and does not hold `CanUpgradeExecutor`;
+    /// - A live escrow or lock still needs the installed executor's settlement authority;
     /// - Failed to load `raw_executor`;
     /// - Failed to prepare the IVM runtime;
     /// - Failed to execute the entrypoint of the IVM bytecode.
@@ -9241,6 +9261,18 @@ impl Executor {
                 .map_err(|_| ExecutorMigrationError::Rejected(VMError::PermissionDenied))?
         {
             return Err(ExecutorMigrationError::Rejected(VMError::PermissionDenied));
+        }
+        // A replacement can deny the original completion instructions or delete their
+        // permissions when its data model is installed. Even identical bytecode reruns
+        // migration and can change those permissions. TODO(§7.2): permit replacement only
+        // through captured completion executor authority or a certified obligation transfer.
+        if state_transaction
+            .world
+            .asset_escrows
+            .iter()
+            .any(|(_, escrow)| crate::runtime::obligations::is_live(escrow.status))
+        {
+            return Err(ExecutorMigrationError::LiveCustody);
         }
         // Load new executor bytecode
         let loaded_executor = LoadedExecutor::load(raw_executor).map_err(|error| {
@@ -10579,6 +10611,31 @@ pub mod executor_norito {
                 Executor::Initial => {}
                 _ => panic!("expected Initial variant"),
             }
+        }
+        #[test]
+        fn runtime_consent_hash_binds_installed_code_without_runtime_cache_identity() {
+            let first = denying_executor_for_testing("consent one");
+            let same = denying_executor_for_testing("consent one");
+            let other = denying_executor_for_testing("consent two");
+            assert_eq!(first.runtime_consent_hash(), same.runtime_consent_hash());
+            assert_ne!(first.runtime_consent_hash(), other.runtime_consent_hash());
+            assert_ne!(
+                first.runtime_consent_hash(),
+                Executor::Initial.runtime_consent_hash()
+            );
+            let Executor::UserProvided(loaded) = &first else {
+                panic!("user executor")
+            };
+            let expected = first.runtime_consent_hash();
+            let parameters = iroha_data_model::parameter::SmartContractParameters::default();
+            let _lease = loaded
+                .checkout_runtime_for_gas_limit(
+                    parameters.fuel().get(),
+                    parameters.memory().get(),
+                    &executor_test_budget(),
+                )
+                .unwrap();
+            assert_eq!(first.runtime_consent_hash(), expected);
         }
         #[test]
         fn net_state_hash_binds_raw_executor_and_ignores_loaded_runtime_cache() {

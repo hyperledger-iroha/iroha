@@ -18,9 +18,12 @@
 //! defaults: [`ParliamentLifecycleParametersV1::from_custom_parameter`] refuses another
 //! identity, an oversized, malformed, non-canonical or invalid payload.
 //!
-//! TODO: the Core integration requires this parameter in Parliament-enabled genesis,
-//! validates committed updates with [`ParliamentLifecycleParametersV1::from_custom_parameter`],
-//! freezes it at admission with [`FrozenParliamentAttemptPolicyV1::freeze_v1`], and deletes
+//! Core validates every `SetParameter` write to this identity with
+//! [`ParliamentLifecycleParametersV1::from_custom_parameter`] before publishing it or its
+//! configuration event, including during genesis execution.
+//!
+//! TODO: the anonymous-ballot Core integration requires this parameter in Parliament-enabled
+//! genesis, freezes it at admission with [`FrozenParliamentAttemptPolicyV1::freeze_v1`], and deletes
 //! the node-local Parliament lifecycle and sizing configuration with its
 //! execution-policy-digest contributions, Parliament's use of `min_enactment_delay` and the
 //! live `[gov].citizenship_bond_amount` in Parliament eligibility.
@@ -54,15 +57,18 @@ pub const MIN_PUBLIC_BODY_TARGET_SEATS_V1: u16 = 1;
 pub const MAX_PARLIAMENT_BODY_ALTERNATES_V1: u16 = 1_000;
 
 /// Why a committed `gov.parliament_lifecycle` parameter cannot be read or written.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum ParliamentLifecycleParameterErrorV1 {
     /// The decoded value violates a structural range or the body table.
     #[error(transparent)]
     Invalid(#[from] FrozenBallotPolicyErrorV1),
-    /// The custom parameter has another identity, is oversized or malformed, or its payload
+    /// The custom parameter has another identity, is oversized, or its payload
     /// is not the canonical JSON of its value.
     #[error("invalid Parliament lifecycle parameter: {0}")]
     CustomParameter(&'static str),
+    /// Original JSON decoding or canonical encoding error, including its local refusal owner.
+    #[error(transparent)]
+    Codec(#[from] norito::core::DecodeAttemptError),
 }
 
 /// Check the five committed sortition fields against their structural ranges.
@@ -332,10 +338,10 @@ impl ParliamentLifecycleParametersV1 {
     ///
     /// # Errors
     /// [`ParliamentLifecycleParameterErrorV1::CustomParameter`] for another identity, more
-    /// than [`Self::MAX_PAYLOAD_BYTES`] of JSON, a malformed payload (including a missing or
-    /// unknown field or role) or a payload that is not the canonical JSON of its value, and
-    /// [`ParliamentLifecycleParameterErrorV1::Invalid`] for a value that fails
-    /// [`Self::validate`].
+    /// than [`Self::MAX_PAYLOAD_BYTES`] of JSON or a payload that is not the canonical JSON
+    /// of its value; [`ParliamentLifecycleParameterErrorV1::Codec`] preserves original
+    /// decoding and encoding errors, including local resource refusals; and
+    /// [`ParliamentLifecycleParameterErrorV1::Invalid`] reports a failed [`Self::validate`].
     pub fn from_custom_parameter(
         parameter: &CustomParameter,
     ) -> Result<Self, ParliamentLifecycleParameterErrorV1> {
@@ -350,10 +356,11 @@ impl ParliamentLifecycleParametersV1 {
                 "payload exceeds 4096 bytes",
             ));
         }
-        let value: Self = norito::json::from_str(payload.get()).map_err(|_| {
-            ParliamentLifecycleParameterErrorV1::CustomParameter("malformed payload")
+        let value: Self = norito::core::classify_decode_attempt(|| {
+            norito::json::from_str(payload.get()).map_err(norito::json::Error::into_core_error)
         })?;
-        if Json::try_new(&value).ok().as_ref() != Some(payload) {
+        let canonical = norito::core::classify_decode_attempt(|| Json::try_new(&value))?;
+        if &canonical != payload {
             return Err(ParliamentLifecycleParameterErrorV1::CustomParameter(
                 "payload is not the canonical JSON of its value",
             ));
@@ -367,15 +374,14 @@ impl ParliamentLifecycleParametersV1 {
     ///
     /// # Errors
     /// [`ParliamentLifecycleParameterErrorV1::Invalid`] for a value that fails
-    /// [`Self::validate`], and [`ParliamentLifecycleParameterErrorV1::CustomParameter`] if the
-    /// canonical payload cannot be produced or exceeds [`Self::MAX_PAYLOAD_BYTES`].
+    /// [`Self::validate`], [`ParliamentLifecycleParameterErrorV1::CustomParameter`] if the
+    /// canonical payload exceeds [`Self::MAX_PAYLOAD_BYTES`], or
+    /// [`ParliamentLifecycleParameterErrorV1::Codec`] with the original encoding refusal.
     pub fn to_custom_parameter(
         &self,
     ) -> Result<CustomParameter, ParliamentLifecycleParameterErrorV1> {
         self.validate()?;
-        let payload = Json::try_new(self).map_err(|_| {
-            ParliamentLifecycleParameterErrorV1::CustomParameter("payload cannot be serialized")
-        })?;
+        let payload = norito::core::classify_decode_attempt(|| Json::try_new(self))?;
         if payload.get().len() > Self::MAX_PAYLOAD_BYTES {
             return Err(ParliamentLifecycleParameterErrorV1::CustomParameter(
                 "payload exceeds 4096 bytes",
@@ -635,8 +641,8 @@ mod tests {
         assert_eq!(parameter.id().to_string(), "parliament_lifecycle_v1");
         assert_eq!(parameter.payload(), &Json::new(&parameters));
         assert_eq!(
-            ParliamentLifecycleParametersV1::from_custom_parameter(&parameter),
-            Ok(parameters.clone())
+            ParliamentLifecycleParametersV1::from_custom_parameter(&parameter).expect("valid"),
+            parameters
         );
         // The payload is canonical key-ordered JSON and the bond a canonical decimal string.
         let payload = parameter.payload().get();
@@ -680,8 +686,61 @@ mod tests {
                 <= ParliamentLifecycleParametersV1::MAX_PAYLOAD_BYTES / 2
         );
         assert_eq!(
-            ParliamentLifecycleParametersV1::from_custom_parameter(&largest_parameter),
-            Ok(largest)
+            ParliamentLifecycleParametersV1::from_custom_parameter(&largest_parameter)
+                .expect("valid"),
+            largest
+        );
+    }
+
+    #[test]
+    fn custom_parameter_codec_refusals_retain_original_owners() {
+        let policy = ParliamentLifecycleParametersV1::default();
+        let parameter = policy.to_custom_parameter().expect("valid");
+        let limits = |allocated| {
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocated, usize::MAX)
+        };
+        let (decoded, usage) =
+            norito::core::with_decode_limits_measured(limits(usize::MAX), || {
+                norito::json::from_str::<ParliamentLifecycleParametersV1>(parameter.payload().get())
+            });
+        assert_eq!(decoded.expect("valid JSON"), policy);
+        let decode_demand = usage.total_allocated_bytes();
+        assert!(decode_demand > 0);
+        // The second quota admits the complete decoder, then refuses canonical re-encoding.
+        assert_eq!(
+            norito::with_decode_limits_scope(limits(decode_demand), || {
+                norito::json::from_str::<ParliamentLifecycleParametersV1>(parameter.payload().get())
+            })
+            .expect("the measured decoder quota fits"),
+            policy,
+        );
+        for allocated in [0, decode_demand] {
+            let error = norito::with_decode_limits_scope(limits(allocated), || {
+                ParliamentLifecycleParametersV1::from_custom_parameter(&parameter)
+            })
+            .expect_err("local codec quota must refuse");
+            let ParliamentLifecycleParameterErrorV1::Codec(original) = error else {
+                panic!("local refusal became parameter invalidity: {error:?}");
+            };
+            assert_eq!(
+                original.kind(),
+                norito::core::DecodeAttemptErrorKind::EnclosingLimit
+            );
+            assert!(original.local_refusal().is_some());
+        }
+        let error = norito::with_decode_limits_scope(limits(0), || policy.to_custom_parameter())
+            .expect_err("authoring retains its original encoder refusal");
+        let ParliamentLifecycleParameterErrorV1::Codec(original) = error else {
+            panic!("authoring refusal became parameter invalidity: {error:?}");
+        };
+        assert_eq!(
+            original.kind(),
+            norito::core::DecodeAttemptErrorKind::EnclosingLimit
+        );
+        assert!(original.local_refusal().is_some());
+        assert_eq!(
+            ParliamentLifecycleParametersV1::from_custom_parameter(&parameter).expect("retry"),
+            policy,
         );
     }
 
@@ -701,35 +760,32 @@ mod tests {
         };
         let foreign =
             CustomParameter::new("other".parse().expect("name"), parameter.payload().clone());
-        assert_eq!(
+        assert!(matches!(
             refused(&foreign),
             Err(ParliamentLifecycleParameterErrorV1::CustomParameter(
                 "another parameter identity"
             ))
-        );
+        ));
         // A missing field never selects a default.
-        assert_eq!(
+        assert!(matches!(
             refused(&custom("{}")),
-            Err(ParliamentLifecycleParameterErrorV1::CustomParameter(
-                "malformed payload"
-            ))
-        );
+            Err(ParliamentLifecycleParameterErrorV1::Codec(error))
+                if error.kind() == norito::core::DecodeAttemptErrorKind::Invalid
+        ));
         let text = parameter.payload().get();
         // An unknown field and an unknown role.
         let unknown_field = text.replacen(r#"{"body_sizes""#, r#"{"a":0,"body_sizes""#, 1);
-        assert_eq!(
+        assert!(matches!(
             refused(&custom(&unknown_field)),
-            Err(ParliamentLifecycleParameterErrorV1::CustomParameter(
-                "malformed payload"
-            ))
-        );
+            Err(ParliamentLifecycleParameterErrorV1::Codec(error))
+                if error.kind() == norito::core::DecodeAttemptErrorKind::Invalid
+        ));
         let unknown_role = text.replacen("rules-committee", "rules-council", 1);
-        assert_eq!(
+        assert!(matches!(
             refused(&custom(&unknown_role)),
-            Err(ParliamentLifecycleParameterErrorV1::CustomParameter(
-                "malformed payload"
-            ))
-        );
+            Err(ParliamentLifecycleParameterErrorV1::Codec(error))
+                if error.kind() == norito::core::DecodeAttemptErrorKind::Invalid
+        ));
         // A bond spelled as a number rather than its canonical decimal string.
         let numeric_bond = text.replacen(
             r#""minimum_citizenship_bond":"150""#,
@@ -739,17 +795,17 @@ mod tests {
         assert!(refused(&custom(&numeric_bond)).is_err());
         // A valid shape with an invalid value.
         let invalid = text.replacen(r#""pulse_delay_blocks":4"#, r#""pulse_delay_blocks":0"#, 1);
-        assert_eq!(
+        assert!(matches!(
             refused(&custom(&invalid)),
             Err(ParliamentLifecycleParameterErrorV1::Invalid(
                 FrozenBallotPolicyErrorV1::Sortition {
                     field: "pulse_delay_blocks"
                 }
             ))
-        );
+        ));
         let mut reordered = ParliamentLifecycleParametersV1::default();
         reordered.body_sizes.swap(0, 1);
-        assert_eq!(
+        assert!(matches!(
             reordered.to_custom_parameter(),
             Err(ParliamentLifecycleParameterErrorV1::Invalid(
                 FrozenBallotPolicyErrorV1::BodyTableRole {
@@ -758,16 +814,16 @@ mod tests {
                     found: ParliamentBody::AgendaCouncil,
                 }
             ))
-        );
+        ));
         let oversized = format!(
             r#"{{"padding":"{}"}}"#,
             "x".repeat(ParliamentLifecycleParametersV1::MAX_PAYLOAD_BYTES)
         );
-        assert_eq!(
+        assert!(matches!(
             refused(&custom(&oversized)),
             Err(ParliamentLifecycleParameterErrorV1::CustomParameter(
                 "payload exceeds 4096 bytes"
             ))
-        );
+        ));
     }
 }

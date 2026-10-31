@@ -1,4 +1,6 @@
 //! Immutable compiler-captured identities for this source owner’s existing codecs.
+//! Policy types introduced after the September capture use their retained paired owner capture;
+//! both original evidence files remain unchanged.
 
 const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::PrivacyP256PointV1>(
@@ -85,7 +87,7 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::PrivacyConsensusLimitsV1>(
         "iroha_data_model::privacy::PrivacyConsensusLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyConsensusPolicyUpdateV1>(
+    crate::captured_schema_tests::Case::paired_bidirectional::<super::PrivacyConsensusPolicyUpdateV1>(
         "iroha_data_model::privacy::PrivacyConsensusPolicyUpdateV1",
     ),
     crate::captured_schema_tests::Case::bidirectional::<super::PrivacyConsensusPolicyV1>(
@@ -94,37 +96,37 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::PrivacySecurityClaimV1>(
         "iroha_data_model::privacy::PrivacySecurityClaimV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::AnonymousPgcLimitsV1>(
+    crate::captured_schema_tests::Case::paired_bidirectional::<super::AnonymousPgcLimitsV1>(
         "iroha_data_model::privacy::AnonymousPgcLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::VeRangeLimitsV1>(
+    crate::captured_schema_tests::Case::paired_bidirectional::<super::VeRangeLimitsV1>(
         "iroha_data_model::privacy::VeRangeLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::ZkAmsLimitsV1>(
+    crate::captured_schema_tests::Case::paired_bidirectional::<super::ZkAmsLimitsV1>(
         "iroha_data_model::privacy::ZkAmsLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::JindoLimitsV1>(
+    crate::captured_schema_tests::Case::paired_bidirectional::<super::JindoLimitsV1>(
         "iroha_data_model::privacy::JindoLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::OrchardLimitsV1>(
+    crate::captured_schema_tests::Case::paired_bidirectional::<super::OrchardLimitsV1>(
         "iroha_data_model::privacy::OrchardLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::FcmpLimitsV1>(
+    crate::captured_schema_tests::Case::paired_bidirectional::<super::FcmpLimitsV1>(
         "iroha_data_model::privacy::FcmpLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::IvmPrivateNoteLimitsV1>(
+    crate::captured_schema_tests::Case::paired_bidirectional::<super::IvmPrivateNoteLimitsV1>(
         "iroha_data_model::privacy::IvmPrivateNoteLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::PqMaspLimitsV1>(
+    crate::captured_schema_tests::Case::paired_bidirectional::<super::PqMaspLimitsV1>(
         "iroha_data_model::privacy::PqMaspLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyProtocolLimitsV1>(
+    crate::captured_schema_tests::Case::paired_bidirectional::<super::PrivacyProtocolLimitsV1>(
         "iroha_data_model::privacy::PrivacyProtocolLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyProtocolLimitsUpdateV1>(
+    crate::captured_schema_tests::Case::paired_bidirectional::<super::PrivacyProtocolLimitsUpdateV1>(
         "iroha_data_model::privacy::PrivacyProtocolLimitsUpdateV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyProtocolPolicyV1>(
+    crate::captured_schema_tests::Case::paired_bidirectional::<super::PrivacyProtocolPolicyV1>(
         "iroha_data_model::privacy::PrivacyProtocolPolicyV1",
     ),
     crate::captured_schema_tests::Case::bidirectional::<super::PrivacyCompiledProfileSnapshotV1>(

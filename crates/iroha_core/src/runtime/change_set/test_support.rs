@@ -11,8 +11,9 @@ use iroha_data_model::{
     runtime::{
         definition::{
             BindingV1, DefinitionDescriptorV1, EntrypointV1, ImplementationCodeV1,
-            ImplementationDescriptorV1, InterfaceDescriptorV1, RestrictionEntryV1, SchemaV1,
-            SelectionId,
+            ImplementationDescriptorV1, InterfaceDescriptorV1, MigrationDescriptorV1, ProjectionV1,
+            ResourceLimitsV1, RestrictionEntryV1, SchemaV1, SelectionId, StorageDescriptorV1,
+            StorageShapeV1,
         },
         lifecycle::{
             ChangeSetEndorsementV1, ChangeSetId, ChangeSetV1, RestrictionKindV1, RootScopeV1,
@@ -25,6 +26,126 @@ use crate::runtime::release_catalog;
 
 /// Wire identity of the instruction [`add_instruction`] adds.
 pub(crate) const ADDED_WIRE_ID: &str = "iroha.test.added.v1";
+
+/// A structurally closed retirement that the current lifecycle engine cannot execute: every
+/// instruction and its conservative bundle are retired before one baseline table leaves.
+pub(crate) fn retire_baseline_storage(network: NetworkId, effective_height: u64) -> ChangeSetV1 {
+    let catalog = release_catalog().expect("release catalog");
+    let predecessor = &catalog.baseline;
+    let bundle = predecessor.bindings[0].implementation;
+    let storage = catalog.world_storage["world.asset_escrows"];
+    let mut successor = predecessor.clone();
+    let mut transitions = Vec::new();
+    for binding in &predecessor.bindings {
+        transitions.extend([
+            SelectionTransitionV1::Restrict {
+                definition: binding.interface,
+                restriction: RestrictionKindV1::Disabled,
+            },
+            SelectionTransitionV1::Unbind(binding.wire_id.clone()),
+            SelectionTransitionV1::Deactivate(binding.interface),
+        ]);
+        successor.active.retain(|id| *id != binding.interface);
+    }
+    transitions.extend([
+        SelectionTransitionV1::Restrict {
+            definition: bundle,
+            restriction: RestrictionKindV1::Disabled,
+        },
+        SelectionTransitionV1::Deactivate(bundle),
+        SelectionTransitionV1::RetireStorage(storage),
+    ]);
+    successor.active.retain(|id| *id != bundle);
+    successor.bindings.clear();
+    successor.installed_storage.retain(|id| *id != storage);
+    successor
+        .check_closure(&catalog.definitions)
+        .expect("closed retirement");
+    ChangeSetV1 {
+        network,
+        root: RootScopeV1::Universal,
+        predecessor: predecessor.id().expect("predecessor"),
+        successor: successor.id().expect("successor"),
+        effective_height,
+        publish: Vec::new(),
+        transitions,
+        qualification: [0x34; 32],
+    }
+}
+
+/// Install either an empty table or a cell whose initial bytes require lifecycle support.
+pub(crate) fn install_storage(
+    network: NetworkId,
+    effective_height: u64,
+    cell: bool,
+) -> ChangeSetV1 {
+    let catalog = release_catalog().expect("release catalog");
+    let predecessor = &catalog.baseline;
+    let storage = DefinitionDescriptorV1::Storage(StorageDescriptorV1 {
+        namespace: "world.test.added".into(),
+        shape: if cell {
+            StorageShapeV1::Cell
+        } else {
+            StorageShapeV1::Table {
+                key: SchemaV1::Codec("norito:u64@0.0.0".into()),
+            }
+        },
+        value: SchemaV1::Codec("norito:u64@0.0.0".into()),
+        initial: cell.then(|| norito::encode_canonical(&7_u64).expect("initial cell bytes")),
+        invariants: [0x35; 32],
+        projection: ProjectionV1::BareNorito,
+    });
+    let id = storage.id().expect("storage identity");
+    let mut successor = predecessor.clone();
+    successor.installed_storage.push(id);
+    successor.installed_storage.sort_unstable();
+    ChangeSetV1 {
+        network,
+        root: RootScopeV1::Universal,
+        predecessor: predecessor.id().expect("predecessor"),
+        successor: successor.id().expect("successor"),
+        effective_height,
+        publish: vec![storage],
+        transitions: vec![SelectionTransitionV1::InstallStorage(id)],
+        qualification: [0x36; 32],
+    }
+}
+
+/// A closed migration activation whose cursor and barrier engine is not implemented.
+pub(crate) fn activate_migration(network: NetworkId, effective_height: u64) -> ChangeSetV1 {
+    let catalog = release_catalog().expect("release catalog");
+    let predecessor = &catalog.baseline;
+    let migration = DefinitionDescriptorV1::Migration(MigrationDescriptorV1 {
+        code: ImplementationCodeV1::Native {
+            module: "iroha.test.migration".into(),
+            reference_closure: [0x37; 32],
+        },
+        from: vec![predecessor.installed_storage[0]],
+        to: vec![predecessor.installed_storage[1]],
+        cursor: SchemaV1::Codec("norito:u64@0.0.0".into()),
+        host_profile: None,
+        services_profile: predecessor.services_profile,
+        limits: ResourceLimitsV1 {
+            max_gas: 100,
+            max_effects: 1,
+            max_call_depth: 1,
+        },
+    });
+    let id = migration.id().expect("migration identity");
+    let mut successor = predecessor.clone();
+    successor.active.push(id);
+    successor.active.sort_unstable();
+    ChangeSetV1 {
+        network,
+        root: RootScopeV1::Universal,
+        predecessor: predecessor.id().expect("predecessor"),
+        successor: successor.id().expect("successor"),
+        effective_height,
+        publish: vec![migration],
+        transitions: vec![SelectionTransitionV1::Activate(id)],
+        qualification: [0x38; 32],
+    }
+}
 
 /// A change set of `network`'s universal root, effective at `effective_height`, that adds one
 /// instruction answered by a new native implementation to the baseline selection.

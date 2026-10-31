@@ -20,6 +20,8 @@ pub(crate) mod coordinator;
 pub(crate) mod global_state;
 /// Bounded operational Prepare/Commit voting and durable QC handoff.
 pub mod phase;
+/// Committed private-settlement extension policy and original local refusal ownership.
+pub(crate) mod policy;
 /// Purpose-separated participant votes, quorum certificates, and receipts.
 pub(crate) mod protocol;
 /// Durable access-controlled restricted sidecar storage.

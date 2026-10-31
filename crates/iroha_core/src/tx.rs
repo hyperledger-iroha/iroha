@@ -3447,7 +3447,11 @@ impl StateBlock<'_> {
                 &state_transaction.world,
                 state_transaction.block_height(),
             )
-            .map_err(crate::resource_coherence::PolicyCoherenceError::into_transaction_rejection)?;
+            .map_err(|error| {
+                error.map_rejection(
+                    crate::resource_coherence::PolicyCoherenceError::into_transaction_rejection,
+                )
+            })?;
         }
         if let Some(seq) = admission.sequence_to_commit {
             state_transaction
