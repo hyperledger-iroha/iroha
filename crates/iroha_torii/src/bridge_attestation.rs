@@ -49,7 +49,10 @@ pub fn build_failure(error: BuildError, status_committed_height: u64) -> Reason 
             | ProofError::NativeExecution(QueryExecutionFail::CanonicalHistory(
                 CanonicalHistoryError::BodyUnavailable { .. }
                 | CanonicalHistoryError::HeightOutsideSnapshot { .. },
-            )) => Reason::FinalityUnavailable,
+            ))
+            // An attached retained authority that is warming up, lagging, expired or
+            // withdrawn recovers on its own; only its poison is a conflict.
+            | ProofError::RetainedUnavailable(_) => Reason::FinalityUnavailable,
             // The original execution owner has rejected the captured history or its
             // selected certificate. No diagnostic string grants startup progress.
             _ => Reason::ConflictingState,
@@ -599,6 +602,47 @@ mod tests {
                 Reason::ConflictingState,
             );
         }
+    }
+
+    #[test]
+    fn temporary_retained_authority_refusals_are_unavailable_and_poison_conflicts() {
+        use iroha_core::sumeragi::finality::RetainedUnavailable;
+        for refusal in [
+            RetainedUnavailable::NotMinted,
+            RetainedUnavailable::CoverageExpired,
+            RetainedUnavailable::NotCovered,
+            RetainedUnavailable::Changed,
+        ] {
+            let reason = build_failure(BuildError::FinalityProof(refusal.into()), 12);
+            assert_eq!(reason, Reason::FinalityUnavailable, "{refusal}");
+            let response = failure_response(
+                reason,
+                [0x5A; 32],
+                12,
+                None,
+                crate::utils::ResponseFormat::Norito,
+            );
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::SERVICE_UNAVAILABLE
+            );
+        }
+        let poisoned = ProofError::NativeExecution(QueryExecutionFail::Conversion(
+            "retained attestation authority is poisoned".into(),
+        ));
+        let reason = build_failure(BuildError::FinalityProof(poisoned), 12);
+        assert_eq!(reason, Reason::ConflictingState);
+        assert_eq!(
+            failure_response(
+                reason,
+                [0x5A; 32],
+                12,
+                None,
+                crate::utils::ResponseFormat::Norito
+            )
+            .status(),
+            axum::http::StatusCode::CONFLICT
+        );
     }
 
     #[tokio::test]

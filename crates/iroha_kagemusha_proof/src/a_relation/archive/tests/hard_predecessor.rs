@@ -151,14 +151,10 @@ impl Circuit<Fp> for HardBoundary {
                 )?;
                 let messages = self
                     .proof
-                    .chunks_exact(32)
-                    .map(|bytes| {
-                        LeElement::assign(
-                            &mut chip.uint(),
-                            &mut r,
-                            self.value(bytes.try_into().map_err(|_| Error::Synthesis)?),
-                        )
-                    })
+                    .as_chunks::<32>()
+                    .0
+                    .iter()
+                    .map(|bytes| LeElement::assign(&mut chip.uint(), &mut r, self.value(*bytes)))
                     .collect::<Result<Vec<_>, _>>()?;
                 let length = chip
                     .uint()
@@ -229,8 +225,10 @@ fn actual_omega_hard_predecessor_matches_native_and_witnessless_layout() {
         std::env::var_os("KAGEMUSHA_HARD_PREDECESSOR_OUTPUT").expect("fresh output path"),
     );
     let public: [Fp; 18] = originals[3]
-        .chunks_exact(32)
-        .map(|v| Option::<Fp>::from(Fp::from_repr(v.try_into().unwrap())).unwrap())
+        .as_chunks::<32>()
+        .0
+        .iter()
+        .map(|v| Option::<Fp>::from(Fp::from_repr(*v)).unwrap())
         .collect::<Vec<_>>()
         .try_into()
         .unwrap();

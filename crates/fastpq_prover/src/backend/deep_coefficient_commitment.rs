@@ -357,8 +357,8 @@ pub(super) fn open_cached(
     })?;
     let mut selected = SecretPolynomial::zeroed(queries.len() * fields)?;
     for (bytes, values) in opened.values().zip(selected.chunks_exact_mut(fields)) {
-        for (encoded, value) in bytes.chunks_exact(F::BYTES).zip(values) {
-            *value = F::from_le_bytes(encoded.try_into().expect("exact Fp4 bytes"))
+        for (encoded, value) in bytes.as_chunks::<{ F::BYTES }>().0.iter().zip(values) {
+            *value = F::from_le_bytes(*encoded)
                 .ok_or_else(|| invalid("cached coefficient opening is noncanonical"))?;
         }
     }

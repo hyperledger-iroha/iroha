@@ -39,6 +39,7 @@ iroha_private_settlement = { path = "crates/iroha_private_settlement" }
 iroha_contract_deploy = { path = "crates/iroha_contract_deploy" }
 iroha_deploy = { path = "crates/iroha_deploy" }
 iroha_fs = { path = "crates/iroha_fs" }
+iroha_release_bundle = { path = "crates/iroha_release_bundle" }
 iroha_operation_journal = { path = "crates/iroha_operation_journal" }
 iroha_wallet = { path = "crates/iroha_wallet" }
 iroha_storage_client = { path = "crates/iroha_storage_client" }
@@ -157,7 +158,7 @@ clap = "4.5.51"
 owo-colors = "4.2.3"
 supports-color = "3.0.2"
 humantime = "2.3.0"
-criterion = "0.8.0"
+criterion = { version = "0.8.0", features = ["csv_output"] }
 expect-test = "1.5.1"
 assertables = "10.1.0"
 
@@ -297,6 +298,19 @@ clippy.enum_glob_use = "allow"
 clippy.module_name_repetitions = "allow"
 clippy.must_use_candidate = "allow"
 clippy.missing_panics_doc = "allow"
+# Its suggestion for collections without an inferable element type is
+# `assert_eq!(value, [] as [T; 0])`, which `rust.trivial_casts` denies.
+clippy.assert_is_empty = "allow"
+
+# style
+# `rustfmt.toml` enforces field-init shorthand. derive_more's `Constructor`
+# expansion reuses the input field idents, which clippy reports on every field.
+clippy.redundant_field_names = "allow"
+
+# perf
+# Custody and admission failures hand their owned input back inside the error so
+# rejection never allocates; boxing those errors would allocate on failure paths.
+clippy.result_large_err = "allow"
 
 # restriction
 clippy.dbg_macro = "deny"
@@ -353,6 +367,7 @@ default-members = [
     "crates/iroha",
     "crates/irohad",
     "crates/iroha_cli",
+    "crates/iroha_kagami",
     "crates/ivm",
     "crates/ivm_abi",
     "crates/kotodama_lang",
@@ -386,6 +401,7 @@ members = [
     "tools/sora-vpn-backend",
     "tools/soranet-relay",
     "tools/norito_codegen_exporter",
+    "tools/iroha_native_source_delivery",
     "tools/soradns-resolver",
     "tools/telemetry-schema-diff",
     "tools/kotlin-fixture-gen"

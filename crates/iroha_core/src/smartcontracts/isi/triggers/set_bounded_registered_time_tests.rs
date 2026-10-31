@@ -57,6 +57,7 @@ fn registered_time_set(id: &str, invocation: ContractInvocation, metadata: Metad
     )
     .unwrap();
     action.metadata = metadata;
+    capture_fixture_runtime_consent(&mut action);
     action.retry_policy = Some(dm::TimeTriggerRetryPolicy {
         max_retries: std::num::NonZeroU32::new(3).unwrap(),
         retry_after_ms: NonZeroU64::new(5_000).unwrap(),
@@ -166,6 +167,40 @@ fn registered_metadata_rejects_quoted_negative_fractional_and_extra_values_befor
 }
 
 #[test]
+fn bounded_registration_metadata_checks_runtime_digest_before_payload() {
+    let set = registered_time_set(
+        "runtime_digest",
+        scheduled_invocation("execute_scheduled_payment"),
+        registration_metadata(1, 2),
+    );
+    let view = set.view();
+    view.visit_borrowed_trigger_sources(|source| {
+        let source = source.unwrap();
+        let key = super::super::runtime_expectation::metadata_key();
+        let original = source.metadata().get(key).unwrap();
+        let literal = &original.get()[1..original.get().len() - 1];
+        let mut wrong_checksum = literal.as_bytes().to_vec();
+        let last = wrong_checksum.last_mut().unwrap();
+        *last = if *last == b'0' { b'1' } else { b'0' };
+        for invalid in [
+            dm::Json::new(false),
+            dm::Json::new("missing literal"),
+            dm::Json::new(literal.to_ascii_lowercase()),
+            dm::Json::new(String::from_utf8(wrong_checksum).unwrap()),
+            dm::Json::new("A".repeat(1024)),
+        ] {
+            let mut metadata = source.metadata().clone();
+            metadata.insert(key.clone(), invalid);
+            let mut probe = source_with_probe(source);
+            probe.metadata = &metadata;
+            assert_source_frame_refuses(&probe);
+        }
+        Ok(core::ops::ControlFlow::Continue(()))
+    })
+    .unwrap();
+}
+
+#[test]
 fn scheduled_batch_refuses_multiple_calls_absent_empty_arguments_and_bad_entrypoints() {
     use iroha_data_model::transaction::executable::ContractArgumentRecord;
     let base = scheduled_invocation("execute_scheduled_payment");
@@ -181,7 +216,7 @@ fn scheduled_batch_refuses_multiple_calls_absent_empty_arguments_and_bad_entrypo
         ])));
     }
     for entrypoint in [
-        "".to_owned(),
+        String::new(),
         " padded".to_owned(),
         "padded ".to_owned(),
         "a".repeat(256),

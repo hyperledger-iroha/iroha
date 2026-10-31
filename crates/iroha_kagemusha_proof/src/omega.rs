@@ -248,9 +248,11 @@ impl OmegaCircuit {
             .uint()
             .assign::<32>(region, self.value(u128::from(length)))?;
         let messages = raw
-            .chunks_exact(32)
+            .as_chunks::<32>()
+            .0
+            .iter()
             .map(|chunk| {
-                let message = chunk.try_into().map_err(|_| Error::Synthesis)?;
+                let message = *chunk;
                 LeElement::assign(&mut chip.uint(), region, self.value(message))
             })
             .collect::<Result<Vec<_>, _>>()?;

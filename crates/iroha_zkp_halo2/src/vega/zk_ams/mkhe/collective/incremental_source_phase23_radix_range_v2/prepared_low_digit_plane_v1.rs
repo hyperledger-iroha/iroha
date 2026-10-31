@@ -354,7 +354,7 @@ fn append_canonical_group_block_v1(
     {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
-    for encoded in chunk.as_mut_bytes_v1().chunks_exact(32) {
+    for encoded in chunk.as_mut_bytes_v1().as_chunks::<32>().0 {
         let encoded: &[u8; 32] = encoded
             .try_into()
             .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;

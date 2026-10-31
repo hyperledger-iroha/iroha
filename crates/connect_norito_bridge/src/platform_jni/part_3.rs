@@ -5,8 +5,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     algorithm_code: jni::sys::jint,
     private_key: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        java_native_public_key_from_private(&mut env, algorithm_code, private_key)
+    crate::platform_jni::with_java_env(env, |env| {
+        java_native_public_key_from_private(env, algorithm_code, private_key)
     })
 }
 #[unsafe(no_mangle)]
@@ -30,8 +30,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     algorithm_code: jni::sys::jint,
     seed: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        java_native_keypair_from_seed(&mut env, algorithm_code, seed)
+    crate::platform_jni::with_java_env(env, |env| {
+        java_native_keypair_from_seed(env, algorithm_code, seed)
     })
 }
 #[unsafe(no_mangle)]
@@ -42,8 +42,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     private_key: jni::objects::JByteArray<'_>,
     message: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        java_native_sign_detached(&mut env, algorithm_code, private_key, message)
+    crate::platform_jni::with_java_env(env, |env| {
+        java_native_sign_detached(env, algorithm_code, private_key, message)
     })
 }
 #[unsafe(no_mangle)]
@@ -55,8 +55,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     message: jni::objects::JByteArray<'_>,
     signature: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jboolean {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        java_native_verify_detached(&mut env, algorithm_code, public_key, message, signature)
+    crate::platform_jni::with_java_env(env, |env| {
+        java_native_verify_detached(env, algorithm_code, public_key, message, signature)
     })
 }
 #[unsafe(no_mangle)]
@@ -70,9 +70,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     creation_time_ms: jni::sys::jlong,
     fee_payment_json: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_native_account_read_permission_multisig_payload_hash(
-            &mut env,
+            env,
             network_id,
             authority,
             reporting_account,
@@ -94,9 +94,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     fee_payment_json: jni::objects::JByteArray<'_>,
     signature: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_native_finalize_account_read_permission_multisig(
-            &mut env,
+            env,
             network_id,
             authority,
             reporting_account,
@@ -125,9 +125,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     private_key: jni::objects::JByteArray<'_>,
     fee_payment_json: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_native_encode_register_zk_asset_signed_transaction(
-            &mut env,
+            env,
             algorithm_code,
             network_id,
             chain_discriminant,
@@ -191,9 +191,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     label: jni::objects::JByteArray<'_>,
     generated_at: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_sorafs_reference_validate_orderbook_payload_json(
-            &mut env,
+            env,
             kind,
             payload,
             label,
@@ -210,14 +210,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     label: jni::objects::JByteArray<'_>,
     generated_at: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        java_sorafs_reference_validate_pop_payload_json(
-            &mut env,
-            kind,
-            payload,
-            label,
-            generated_at,
-        )
+    crate::platform_jni::with_java_env(env, |env| {
+        java_sorafs_reference_validate_pop_payload_json(env, kind, payload, label, generated_at)
     })
 }
 #[unsafe(no_mangle)]
@@ -229,14 +223,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     label: jni::objects::JByteArray<'_>,
     generated_at: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        java_sorafs_reference_validate_hedging_payload_json(
-            &mut env,
-            kind,
-            payload,
-            label,
-            generated_at,
-        )
+    crate::platform_jni::with_java_env(env, |env| {
+        java_sorafs_reference_validate_hedging_payload_json(env, kind, payload, label, generated_at)
     })
 }
 /// JNI entrypoint for Kotlin/JVM appeal-finance `CancelAssetLock` validation.
@@ -251,9 +239,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     label: jni::objects::JByteArray<'_>,
     generated_at: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
-            &mut env,
+            env,
             payload,
             label,
             generated_at,
@@ -270,9 +258,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     now: jni::sys::jlong,
     generated_at: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_sorafs_reference_validate_fixture_bundle_json(
-            &mut env,
+            env,
             kinds,
             payloads,
             labels,
@@ -290,9 +278,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     expected_node_cid: jni::objects::JByteArray<'_>,
     generated_at: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_sorafs_reference_validate_governance_log_node_json(
-            &mut env,
+            env,
             payload,
             label,
             expected_node_cid,
@@ -309,9 +297,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     expected_block_cid: jni::objects::JByteArray<'_>,
     generated_at: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_sorafs_reference_validate_governance_dag_block_json(
-            &mut env,
+            env,
             payload,
             label,
             expected_block_cid,
@@ -329,9 +317,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     block_labels: jni::objects::JObjectArray<'_>,
     generated_at: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_sorafs_reference_validate_governance_dag_head_chain_json(
-            &mut env,
+            env,
             head,
             head_label,
             blocks,
@@ -348,8 +336,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     payload: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        java_sorafs_reference_sign_orderbook_payload(&mut env, kind, payload, private_key)
+    crate::platform_jni::with_java_env(env, |env| {
+        java_sorafs_reference_sign_orderbook_payload(env, kind, payload, private_key)
     })
 }
 #[unsafe(no_mangle)]
@@ -359,8 +347,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     owner_account: jni::objects::JByteArray<'_>,
     nonce: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        java_sorafs_reference_derive_orderbook_order_id(&mut env, owner_account, nonce)
+    crate::platform_jni::with_java_env(env, |env| {
+        java_sorafs_reference_derive_orderbook_order_id(env, owner_account, nonce)
     })
 }
 #[unsafe(no_mangle)]
@@ -381,9 +369,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     taker_fee_bps: jni::sys::jint,
     private_key: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_sorafs_reference_build_signed_orderbook_order_request(
-            &mut env,
+            env,
             JavaSorafsOrderbookOrderRequestArrays {
                 order_id,
                 side,
@@ -412,9 +400,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     nonce: jni::sys::jlong,
     private_key: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_sorafs_reference_build_signed_orderbook_order_cancel(
-            &mut env,
+            env,
             order_id,
             owner_account,
             reason,
@@ -440,9 +428,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     issued_at_unix: jni::sys::jlong,
     private_key: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_sorafs_reference_build_signed_orderbook_settlement_receipt(
-            &mut env,
+            env,
             JavaSorafsOrderbookSettlementReceiptArrays {
                 receipt_id,
                 channel_id,
@@ -469,14 +457,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     label: jni::objects::JByteArray<'_>,
     generated_at: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        java_sorafs_reference_validate_pdp_payload_json(
-            &mut env,
-            kind,
-            payload,
-            label,
-            generated_at,
-        )
+    crate::platform_jni::with_java_env(env, |env| {
+        java_sorafs_reference_validate_pdp_payload_json(env, kind, payload, label, generated_at)
     })
 }
 #[unsafe(no_mangle)]
@@ -489,9 +471,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     challenge_label: jni::objects::JByteArray<'_>,
     generated_at: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_sorafs_reference_validate_pdp_commitment_challenge_json(
-            &mut env,
+            env,
             commitment,
             commitment_label,
             challenge,
@@ -510,9 +492,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     proof_label: jni::objects::JByteArray<'_>,
     generated_at: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_sorafs_reference_validate_pdp_challenge_proof_json(
-            &mut env,
+            env,
             challenge,
             challenge_label,
             proof,
@@ -533,9 +515,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     proof_label: jni::objects::JByteArray<'_>,
     generated_at: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_sorafs_reference_validate_pdp_bundle_json(
-            &mut env,
+            env,
             JavaSorafsPdpBundleArrays {
                 commitment,
                 commitment_label,
@@ -564,9 +546,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
     env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        java_native_privacy_compiled_profile_catalog(&mut env)
-    })
+    crate::platform_jni::with_java_env(env, java_native_privacy_compiled_profile_catalog)
 }
 /// Validate a canonical compiled privacy profile catalog for Kotlin/JVM callers.
 #[unsafe(no_mangle)]
@@ -575,8 +555,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
     _class: jni::objects::JClass<'_>,
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        java_native_privacy_validate_compiled_profile_catalog(&mut env, archive)
+    crate::platform_jni::with_java_env(env, |env| {
+        java_native_privacy_validate_compiled_profile_catalog(env, archive)
     })
 }
 /// Validate a Torii Exact12 capability manifest for the Kotlin/JVM SDK.
@@ -587,12 +567,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
     archive: jni::objects::JByteArray<'_>,
     expected_network: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        java_native_privacy_validate_exact12_capability_manifest(
-            &mut env,
-            archive,
-            expected_network,
-        )
+    crate::platform_jni::with_java_env(env, |env| {
+        java_native_privacy_validate_exact12_capability_manifest(env, archive, expected_network)
     })
 }
 /// Inspect one validated Torii Exact12 manifest and compare all local profile tuples.
@@ -602,8 +578,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
     _class: jni::objects::JClass<'_>,
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        java_native_privacy_inspect_exact12_capability_manifest(&mut env, archive)
+    crate::platform_jni::with_java_env(env, |env| {
+        java_native_privacy_inspect_exact12_capability_manifest(env, archive)
     })
 }
 /// Require current network policy and exact local canonical-profile equality for Kotlin/JVM.
@@ -615,9 +591,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
     protocol_index: jni::sys::jint,
     expected_network: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jboolean {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_native_privacy_require_exact12_capability_tuple(
-            &mut env,
+            env,
             archive,
             protocol_index,
             expected_network,
@@ -634,9 +610,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
     instruction_archive: jni::objects::JByteArray<'_>,
     expected_network: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jboolean {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_native_privacy_validate_exact12_submit_proof_construction(
-            &mut env,
+            env,
             manifest_archive,
             protocol_index,
             instruction_archive,
@@ -651,8 +627,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
     _class: jni::objects::JClass<'_>,
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        privacy_intent::java_native_submit_proof_intent_projection(&mut env, archive)
+    crate::platform_jni::with_java_env(env, |env| {
+        privacy_intent::java_native_submit_proof_intent_projection(env, archive)
     })
 }
 /// Create a proof-free X509 request from independent inputs and an attachment ordinal.
@@ -697,9 +673,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
     env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        java_native_privacy_exact12_fixture_bundle(&mut env)
-    })
+    crate::platform_jni::with_java_env(env, java_native_privacy_exact12_fixture_bundle)
 }
 /// Validate an exact-12 privacy fixture bundle for the Kotlin/JVM SDK.
 #[unsafe(no_mangle)]
@@ -708,7 +682,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
     _class: jni::objects::JClass<'_>,
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        java_native_privacy_validate_exact12_fixture_bundle(&mut env, archive)
+    crate::platform_jni::with_java_env(env, |env| {
+        java_native_privacy_validate_exact12_fixture_bundle(env, archive)
     })
 }

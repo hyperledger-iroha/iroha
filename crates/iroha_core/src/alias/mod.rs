@@ -155,7 +155,8 @@ fn authority_has_permission(
         .map(std::string::ToString::to_string)
         .collect();
     let account_present = world.accounts().get(authority).is_some();
-    iroha_logger::warn!(
+    // An account without this permission is an ordinary answer, not a node problem.
+    iroha_logger::debug!(
         authority = %authority,
         account_present,
         target_name = %target.name(),
@@ -481,8 +482,8 @@ pub struct AliasStorage {
 }
 impl fmt::Debug for AliasStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let alias_count = self.inner.read().map(|map| map.len()).unwrap_or(0);
-        let index_count = self.index.read().map(|map| map.len()).unwrap_or(0);
+        let alias_count = self.inner.read().map_or(0, |map| map.len());
+        let index_count = self.index.read().map_or(0, |map| map.len());
         f.debug_struct("AliasStorage")
             .field("alias_count", &alias_count)
             .field("index_count", &index_count)

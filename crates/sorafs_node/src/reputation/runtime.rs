@@ -7223,6 +7223,18 @@ mod tests {
     use sorafs_manifest::{GOVERNANCE_DAG_HEAD_VERSION_V1, GovernanceSignatureAlgorithm};
     use std::{collections::VecDeque, fs, path::Path};
     use tempfile::TempDir;
+    fn private_state_tempdir() -> std::io::Result<TempDir> {
+        let temporary = TempDir::new()?;
+        #[cfg(windows)]
+        {
+            // Create only this fresh empty fixture through the canonical private owner.
+            std::fs::remove_dir(temporary.path())?;
+            drop(iroha_fs::PrivateDirectory::open_or_create(
+                temporary.path(),
+            )?);
+        }
+        Ok(temporary)
+    }
     include!("runtime/canonical_boundary_tests.rs");
     const FINALIZED_AT_MS: u64 = 1_800_000_010_000;
     fn test_network_id() -> NetworkId {
@@ -7545,7 +7557,7 @@ mod tests {
     fn initialized_outbox(
         policy: ReputationJournalProducerPolicyV1,
     ) -> (TempDir, Arc<ReputationJournalProducerOutboxV1>) {
-        let temp = TempDir::new().expect("tempdir");
+        let temp = private_state_tempdir().expect("tempdir");
         let outbox = Arc::new(open_initialized_producer_outbox(temp.path(), policy));
         (temp, outbox)
     }
@@ -7553,7 +7565,7 @@ mod tests {
         policy: ReputationJournalProducerPolicyV1,
         runtime: Arc<TestJournalCheckpointRuntime>,
     ) -> (TempDir, Arc<ReputationJournalProducerOutboxV1>) {
-        let temp = TempDir::new().expect("tempdir");
+        let temp = private_state_tempdir().expect("tempdir");
         let outbox = open_sealed_outbox(temp.path(), policy, runtime);
         (temp, Arc::new(outbox))
     }
@@ -8693,7 +8705,7 @@ mod tests {
     }
     #[test]
     fn strict_construction_rejects_query_handle_substitution() {
-        let temp = TempDir::new().expect("tempdir");
+        let temp = private_state_tempdir().expect("tempdir");
         let trust = trust_policy();
         let ingest = ingest_policy(&trust);
         let projector = Arc::new(
@@ -8739,7 +8751,7 @@ mod tests {
     }
     #[test]
     fn finalized_query_result_is_discarded_when_qualification_drifts() {
-        let temp = TempDir::new().expect("tempdir");
+        let temp = private_state_tempdir().expect("tempdir");
         let trust = trust_policy();
         let ingest = ingest_policy(&trust);
         let projector = Arc::new(
@@ -8983,7 +8995,7 @@ mod tests {
     }
     #[test]
     fn producer_rejects_first_seen_material_before_policy_record_initialization() {
-        let temp = TempDir::new().expect("tempdir");
+        let temp = private_state_tempdir().expect("tempdir");
         let outbox = Arc::new(
             ReputationJournalProducerOutboxV1::open(temp.path(), producer_policy())
                 .expect("producer outbox"),
@@ -10201,9 +10213,9 @@ mod tests {
         let second_record = authority_record(second_policy.clone(), FINALIZED_AT_MS + 100);
         let third_record = authority_record(third_policy.clone(), FINALIZED_AT_MS + 200);
         let finalized = finalized_cursor(12, [0xC8; 32], FINALIZED_AT_MS + 300);
-        let strict_missed = TempDir::new().expect("strict-missed tempdir");
+        let strict_missed = private_state_tempdir().expect("strict-missed tempdir");
         assert_bad_reopen(strict_missed.path(), second_policy.clone(), "second policy");
-        let one_missed = TempDir::new().expect("one-missed tempdir");
+        let one_missed = private_state_tempdir().expect("one-missed tempdir");
         initialize_policy_history(
             one_missed.path(),
             first_policy.clone(),
@@ -10233,7 +10245,7 @@ mod tests {
             strict_policy(second_policy, "strict second policy"),
         )
         .expect("ordinary strict open accepts the recovered terminal policy");
-        let multiple_missed = TempDir::new().expect("multiple-missed tempdir");
+        let multiple_missed = private_state_tempdir().expect("multiple-missed tempdir");
         initialize_policy_history(
             multiple_missed.path(),
             first_policy,
@@ -10277,7 +10289,7 @@ mod tests {
         let second_record = authority_record(second_policy.clone(), FINALIZED_AT_MS + 100);
         let third_record = authority_record(third_policy.clone(), FINALIZED_AT_MS + 200);
         let finalized = finalized_cursor(12, [0xC9; 32], FINALIZED_AT_MS + 300);
-        let temp = TempDir::new().expect("tempdir");
+        let temp = private_state_tempdir().expect("tempdir");
         initialize_policy_history(
             temp.path(),
             first_policy,
@@ -10347,7 +10359,7 @@ mod tests {
     include!("runtime/policy_rotation_tests.rs");
     #[test]
     fn durable_journal_scan_rejects_same_height_fork() {
-        let temp = TempDir::new().expect("tempdir");
+        let temp = private_state_tempdir().expect("tempdir");
         let outbox = ReputationJournalProducerOutboxV1::open(temp.path(), producer_policy())
             .expect("outbox");
         let first = terminal_page(10, [0xD1; 32], FINALIZED_AT_MS, Vec::new());
@@ -10470,8 +10482,8 @@ mod tests {
     mod publication_admission;
     #[test]
     fn publication_reconciler_retains_exact_successor_snapshots_across_restart() {
-        let projector_root = TempDir::new().expect("projector root");
-        let publication_root = TempDir::new().expect("publication root");
+        let projector_root = private_state_tempdir().expect("projector root");
+        let publication_root = private_state_tempdir().expect("publication root");
         let trust = trust_policy();
         let projector = Arc::new(
             ReputationIngestService::open(projector_root.path(), ingest_policy(&trust))

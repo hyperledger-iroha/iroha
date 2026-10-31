@@ -76,8 +76,8 @@ impl Decode {
     }
     fn instances(&self) -> Vec<Fp> {
         let mut out = vec![Fp::from(u64::from(self.length))];
-        for chunk in self.bytes.chunks_exact(32) {
-            out.extend(bytes_to_limbs(&chunk.try_into().unwrap()).map(Fp::from_u128));
+        for chunk in self.bytes.as_chunks::<32>().0 {
+            out.extend(bytes_to_limbs(&*chunk).map(Fp::from_u128));
         }
         let (valid, xy, u) = self.native();
         out.push(Fp::from(u64::from(valid)));
@@ -384,7 +384,7 @@ fn foreign_native_oracle_accepts_only_canonical_generator_identity() {
         accumulator: true,
         known: true,
     };
-    for scalar in accumulator.bytes[32..].chunks_exact_mut(32) {
+    for scalar in accumulator.bytes[32..].as_chunks_mut::<32>().0 {
         scalar.copy_from_slice(&Fp::ONE.to_repr());
     }
     assert_eq!(accumulator.native(), (true, [Fq::ZERO; 2], [Fp::ONE; K]));

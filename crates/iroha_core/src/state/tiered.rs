@@ -1727,9 +1727,9 @@ impl TieredStateBackend {
             world.verifying_keys
         );
         collect_map!(
-            TieredSegment::RuntimeUpgrades,
-            RuntimeUpgrade,
-            world.runtime_upgrades
+            TieredSegment::RuntimeChangeSets,
+            RuntimeChangeSet,
+            world.runtime_change_sets
         );
         collect_map!(
             TieredSegment::PrivacyProtocolPolicies,
@@ -2359,12 +2359,17 @@ impl TieredStateBackend {
         }
         match fs::hard_link(source, dest) {
             Ok(()) => {
-                let file = fs::File::open(dest).wrap_err_with(|| {
-                    format!(
-                        "failed to open hard-linked cold shard {path} for syncing",
-                        path = dest.display()
-                    )
-                })?;
+                // Windows FlushFileBuffers requires a writable file handle.
+                let file = fs::OpenOptions::new()
+                    .read(true)
+                    .write(cfg!(windows))
+                    .open(dest)
+                    .wrap_err_with(|| {
+                        format!(
+                            "failed to open hard-linked cold shard {path} for syncing",
+                            path = dest.display()
+                        )
+                    })?;
                 file.sync_all().wrap_err_with(|| {
                     format!(
                         "failed to sync hard-linked cold shard {path}",
@@ -2387,12 +2392,16 @@ impl TieredStateBackend {
                         dest = dest.display()
                     )
                 })?;
-                let file = fs::File::open(dest).wrap_err_with(|| {
-                    format!(
-                        "failed to open copied cold shard {path} for syncing",
-                        path = dest.display()
-                    )
-                })?;
+                let file = fs::OpenOptions::new()
+                    .read(true)
+                    .write(cfg!(windows))
+                    .open(dest)
+                    .wrap_err_with(|| {
+                        format!(
+                            "failed to open copied cold shard {path} for syncing",
+                            path = dest.display()
+                        )
+                    })?;
                 file.sync_all().wrap_err_with(|| {
                     format!(
                         "failed to sync copied cold shard {path}",
@@ -2411,14 +2420,29 @@ impl TieredStateBackend {
         name.parse::<u64>().ok()
     }
     fn sync_dir(path: &Path) -> Result<()> {
-        let file = fs::File::open(path).wrap_err_with(|| {
-            format!(
-                "failed to open directory {path} for syncing",
-                path = path.display()
-            )
-        })?;
-        file.sync_all()
-            .wrap_err_with(|| format!("failed to sync directory {path}", path = path.display()))
+        #[cfg(windows)]
+        {
+            let directory = iroha_fs::OwnerDirectory::open(path).wrap_err_with(|| {
+                format!("failed to open directory {} for syncing", path.display())
+            })?;
+            directory
+                .sync()
+                .wrap_err_with(|| format!("failed to sync directory {}", path.display()))?;
+            directory
+                .revalidate()
+                .wrap_err_with(|| format!("directory changed while syncing {}", path.display()))
+        }
+        #[cfg(not(windows))]
+        {
+            let file = fs::File::open(path).wrap_err_with(|| {
+                format!(
+                    "failed to open directory {path} for syncing",
+                    path = path.display()
+                )
+            })?;
+            file.sync_all()
+                .wrap_err_with(|| format!("failed to sync directory {path}", path = path.display()))
+        }
     }
 }
 fn sha256(bytes: &[u8]) -> [u8; 32] {
@@ -2525,10 +2549,7 @@ mod measured_bytes_impls {
             VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
         },
         role::{Role, RoleId},
-        runtime::{
-            RuntimeUpgradeId, RuntimeUpgradeManifest, RuntimeUpgradeRecord,
-            RuntimeUpgradeSbomDigest, RuntimeUpgradeStatus,
-        },
+        runtime::lifecycle::{ChangeSetId, ChangeSetRecordV1},
         rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
         smart_contract::ContractAddress,
         smart_contract::manifest::{
@@ -2614,8 +2635,7 @@ mod measured_bytes_impls {
         ParliamentBody,
         ProofStatus,
         Repeats,
-        RuntimeUpgradeId,
-        RuntimeUpgradeStatus,
+        ChangeSetId,
         TleKeySessionId,
         TleKeySessionLifecycleV1,
         PrivacyProtocolPolicyV1,
@@ -3440,39 +3460,11 @@ mod measured_bytes_impls {
             total
         }
     }
-    impl MeasuredBytes for RuntimeUpgradeSbomDigest {
+    impl MeasuredBytes for ChangeSetRecordV1 {
         fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<RuntimeUpgradeSbomDigest>();
-            total = total.saturating_add(self.algorithm.measured_bytes_extra());
-            total = total.saturating_add(self.digest.measured_bytes_extra());
-            total
-        }
-    }
-    impl MeasuredBytes for RuntimeUpgradeManifest {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<RuntimeUpgradeManifest>();
-            total = total.saturating_add(self.name.measured_bytes_extra());
-            total = total.saturating_add(self.description.measured_bytes_extra());
-            total = total.saturating_add(self.abi_version.measured_bytes_extra());
-            total = total.saturating_add(self.abi_hash.measured_bytes_extra());
-            total = total.saturating_add(self.added_syscalls.measured_bytes_extra());
-            total = total.saturating_add(self.added_pointer_types.measured_bytes_extra());
-            total = total.saturating_add(self.start_height.measured_bytes_extra());
-            total = total.saturating_add(self.end_height.measured_bytes_extra());
-            total = total.saturating_add(self.sbom_digests.measured_bytes_extra());
-            total = total.saturating_add(self.slsa_attestation.measured_bytes_extra());
-            total = total.saturating_add(self.provenance.measured_bytes_extra());
-            total
-        }
-    }
-    impl MeasuredBytes for RuntimeUpgradeRecord {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<RuntimeUpgradeRecord>();
-            total = total.saturating_add(self.manifest.measured_bytes_extra());
-            total = total.saturating_add(self.status.measured_bytes_extra());
-            total = total.saturating_add(self.proposer.measured_bytes_extra());
-            total = total.saturating_add(self.created_height.measured_bytes_extra());
-            total
+            // A change-set record nests published descriptors and signed attestations; their
+            // canonical encoding bounds the retained heap.
+            size_of::<ChangeSetRecordV1>().saturating_add(norito::codec::Encode::encode(self).len())
         }
     }
     impl MeasuredBytes for AccessSetHints {
@@ -3703,7 +3695,7 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<RuntimeUpgradeProposal>();
             total = total.saturating_add(self.proposal_operator.measured_bytes_extra());
-            total = total.saturating_add(self.manifest.measured_bytes_extra());
+            total = total.saturating_add(norito::codec::Encode::encode(&self.action).len());
             total
         }
     }
@@ -4044,8 +4036,7 @@ fn lane_snapshot_dir(root: &Path, entry: &LaneConfigEntry) -> PathBuf {
 fn unique_retired_lane_path(base: &Path, stem: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|dur| dur.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |dur| dur.as_secs());
     let mut counter = 0u32;
     loop {
         let name = if counter == 0 {
@@ -4086,7 +4077,7 @@ enum TieredSegment {
     AccountRoles,
     TxSequences,
     VerifyingKeys,
-    RuntimeUpgrades,
+    RuntimeChangeSets,
     PrivacyProtocolPolicies,
     PrivacyPgcAccounts,
     PrivacyPgcPoolInvariants,
@@ -4164,7 +4155,7 @@ macro_rules! tiered_segment_table {
             AccountRoles, AccountRole, "account_roles", account_roles;
             TxSequences, TxSequence, "tx_sequences", tx_sequences;
             VerifyingKeys, VerifyingKey, "verifying_keys", verifying_keys;
-            RuntimeUpgrades, RuntimeUpgrade, "runtime_upgrades", runtime_upgrades;
+            RuntimeChangeSets, RuntimeChangeSet, "runtime_change_sets", runtime_change_sets;
             PrivacyProtocolPolicies, PrivacyProtocolPolicy, "privacy_protocol_policies", privacy_protocol_policies;
             PrivacyPgcAccounts, PrivacyPgcAccount, "privacy_pgc_accounts", privacy_pgc_accounts;
             PrivacyPgcPoolInvariants, PrivacyPgcPoolInvariant, "privacy_pgc_pool_invariants", privacy_pgc_pool_invariants;
@@ -4415,8 +4406,8 @@ pub enum TieredKeyHandle {
     AccountRole(crate::role::RoleIdWithOwner),
     TxSequence(iroha_data_model::account::AccountId),
     VerifyingKey(iroha_data_model::proof::VerifyingKeyId),
-    RuntimeUpgrade(iroha_data_model::runtime::RuntimeUpgradeId),
-    PrivacyProtocolPolicy(crate::privacy_state::PrivacyProtocolPolicyKeyV1),
+    RuntimeChangeSet(iroha_data_model::runtime::lifecycle::ChangeSetId),
+    PrivacyProtocolPolicy(iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1),
     PrivacyPgcAccount(crate::privacy_state::PrivacyPgcAccountKeyV1),
     PrivacyPgcPoolInvariant(crate::privacy_state::PrivacyPgcPoolInvariantKeyV1),
     PrivacyNullifier(crate::privacy_state::PrivacyNullifierKeyV1),
@@ -4508,7 +4499,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::AccountRole(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::VerifyingKey(key) => norito::codec::Encode::encode(key),
-            TieredKeyHandle::RuntimeUpgrade(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::RuntimeChangeSet(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::PrivacyProtocolPolicy(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::PrivacyPgcAccount(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::PrivacyPgcPoolInvariant(key) => norito::codec::Encode::encode(key),
@@ -4668,7 +4659,7 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::AccountRole(id) => write!(f, "account_role:{id}"),
             TieredKeyHandle::TxSequence(id) => write!(f, "tx_sequence:{id}"),
             TieredKeyHandle::VerifyingKey(id) => write!(f, "verifying_key:{id:?}"),
-            TieredKeyHandle::RuntimeUpgrade(id) => write!(f, "runtime_upgrade:{id:?}"),
+            TieredKeyHandle::RuntimeChangeSet(id) => write!(f, "runtime_change_set:{id:?}"),
             TieredKeyHandle::PrivacyProtocolPolicy(id) => {
                 write!(f, "privacy_protocol_policy:{id:?}")
             }
@@ -5223,8 +5214,8 @@ mod tests {
             changed_root
         );
         assert_ne!(
-            expected.root().expect("prior root"),
-            changed_root.root().expect("changed root")
+            expected.baseline_root().expect("prior root"),
+            changed_root.baseline_root().expect("changed root")
         );
         drop(block);
         let missing_history = tiered_x509_root_world();
@@ -5404,8 +5395,8 @@ mod tests {
                 cold
             );
             assert_ne!(
-                predecessor.root().expect("prior root"),
-                cold.root().expect("pool root")
+                predecessor.baseline_root().expect("prior root"),
+                cold.baseline_root().expect("pool root")
             );
             block.commit();
             cold
@@ -5470,8 +5461,8 @@ mod tests {
             changed_root
         );
         assert_ne!(
-            changed_root.root().expect("changed root"),
-            expected.root().expect("original root")
+            changed_root.baseline_root().expect("changed root"),
+            expected.baseline_root().expect("original root")
         );
     }
 
@@ -6803,6 +6794,30 @@ mod tests {
         let manifest2 = backend.last_manifest().expect("manifest recorded");
         assert_eq!(manifest2.cold_reused_entries, 1);
         assert!(manifest2.cold_reused_bytes > 0);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn native_cold_payload_reuse_and_directory_sync_preserve_bytes() {
+        let directory = tempdir().expect("native cold payload fixture");
+        let source = directory.path().join("source.norito");
+        let destination = directory.path().join("reused.norito");
+        let payload = b"unchanged cold payload";
+        fs::write(&source, payload).expect("write cold payload");
+        assert_eq!(
+            TieredStateBackend::try_reuse_cold_payload(&source, &destination)
+                .expect("flush reused native payload"),
+            Some(payload.len() as u64)
+        );
+        TieredStateBackend::sync_dir(directory.path())
+            .expect("synchronize native cold-store directory");
+        assert_eq!(fs::read(&source).expect("source bytes"), payload);
+        assert_eq!(fs::read(&destination).expect("reused bytes"), payload);
+        let _ = TieredStateBackend::sync_dir(&destination)
+            .expect_err("a regular payload must not be accepted as a directory");
+        assert_eq!(
+            fs::read(&destination).expect("bytes after refusal"),
+            payload
+        );
     }
     #[cfg(unix)]
     #[test]

@@ -1387,7 +1387,7 @@ mod tests {
     #[test]
     fn reduction_is_the_polynomial_remainder() {
         fn remainder(mut value: u32, modulus: u32) -> u32 {
-            let degree = 31 - modulus.leading_zeros();
+            let degree = modulus.ilog2();
             for position in (degree..32).rev() {
                 if (value >> position) & 1 == 1 {
                     value ^= modulus << (position - degree);

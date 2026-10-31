@@ -28,17 +28,23 @@ use super::archive_finality::{ArchiveFinalityError, CertifiedArchiveView};
 use super::archive_index::{
     ArchiveIndexLock, ArchiveIndexLockError, ArchiveIndexReadGuard, ArchiveIndexWriteGuard,
 };
+#[cfg(not(windows))]
+use super::finalized_archive_fs::STAGED_FILE_PREFIX;
+#[cfg(windows)]
+use super::finalized_archive_fs::windows::{
+    self as native_archive, NativeArchive, metadata as secure_file_metadata,
+};
 use super::finalized_archive_fs::{
-    STAGED_FILE_PREFIX, bounded_bytes_len, canonical_bytes_domain_digest,
-    is_canonical_digest_file_name,
+    bounded_bytes_len, canonical_bytes_domain_digest, is_canonical_digest_file_name,
 };
 #[cfg(unix)]
 use super::finalized_archive_fs::{
     create_unix_staged_file, unix_staged_file_has_canonical_target, unix_stat_matches_metadata,
 };
+#[cfg(not(windows))]
+use crate::secure_file_metadata::{self, SecureMetadata};
 use crate::{
     kura::Kura,
-    secure_file_metadata::{self, SecureMetadata},
     state::{StateReadOnly, WorldReadOnly as _},
 };
 use iroha_data_model::{
@@ -59,15 +65,18 @@ use norito::{
     DecodeLimits, decode_from_bytes_with_limits,
     derive::{NoritoDeserialize, NoritoSerialize},
 };
+#[cfg(windows)]
+use secure_file_metadata::SecureMetadata;
 use sorafs_manifest::capacity::{MAX_CAPACITY_METADATA_VALUE_BYTES, ReplicationOrderV1};
 #[cfg(unix)]
 use std::ffi::{OsStr, OsString};
+#[cfg(not(windows))]
+use std::io::Read;
 #[cfg(unix)]
 use std::io::Write as _;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt, fs,
-    io::{self, Read},
+    fmt, fs, io,
     num::NonZeroUsize,
     path::{Component, Path, PathBuf},
 };
@@ -1546,6 +1555,9 @@ pub struct ProviderIngestFinalizedArchiveV1 {
     records_identity: ArchiveFileIdentity,
     checkpoints_identity: ArchiveFileIdentity,
     writer_lock_identity: ArchiveFileIdentity,
+    // Native pending originals and parents close before the exclusive archive lock.
+    #[cfg(windows)]
+    native: NativeArchive,
     writer_lock: fs::File,
     index: ArchiveIndexLock<ArchiveIndexV1>,
 }
@@ -1575,6 +1587,8 @@ impl ProviderInsertionPlan {
         };
         archive.verify_storage_boundaries()?;
         publish_immutable_bytes(
+            #[cfg(windows)]
+            &archive.native,
             &archive.records,
             archive.records_identity,
             &prepared.entry.path,
@@ -1686,6 +1700,20 @@ impl ProviderIngestFinalizedArchiveV1 {
     ) -> Result<(Self, Vec<ArchiveVirtualBaseV1>), ProviderIngestFinalizedArchiveErrorV1> {
         let root = root.into();
         validate_archive_root_path(&root)?;
+        #[cfg(windows)]
+        let native = NativeArchive::open(
+            &root,
+            &[
+                (RECORDS_DIRECTORY, RECORD_FILE_SUFFIX),
+                (CHECKPOINTS_DIRECTORY, CHECKPOINT_FILE_SUFFIX),
+            ],
+            bounds.max_record_bytes,
+            bounds.max_archive_entries(),
+        )
+        .map_err(|source| ProviderIngestFinalizedArchiveErrorV1::Write {
+            path: root.clone(),
+            source,
+        })?;
         create_direct_directory(&root)?;
         verify_absolute_directory_ancestry(&root)?;
         let root_identity = direct_archive_directory_identity(&root).map_err(|source| {
@@ -1723,12 +1751,16 @@ impl ProviderIngestFinalizedArchiveV1 {
                 },
             )?);
         recover_staged_directory(
+            #[cfg(windows)]
+            &native,
             &records,
             records_identity,
             bounds.max_record_bytes,
             RECORD_FILE_SUFFIX,
         )?;
         recover_staged_directory(
+            #[cfg(windows)]
+            &native,
             &checkpoints,
             checkpoints_identity,
             bounds.max_record_bytes,
@@ -1746,6 +1778,8 @@ impl ProviderIngestFinalizedArchiveV1 {
             checkpoints_identity,
             writer_lock_identity,
             writer_lock,
+            #[cfg(windows)]
+            native,
             index: ArchiveIndexLock::new(index),
         };
         archive.verify_storage_boundaries()?;
@@ -1800,6 +1834,8 @@ impl ProviderIngestFinalizedArchiveV1 {
             }
             require_exact_retention_readback(binding, authority, network_id, &approval)?;
             finish_compaction_cleanup(
+                #[cfg(windows)]
+                &self.native,
                 &self.records,
                 self.records_identity,
                 &self.checkpoints,
@@ -1829,6 +1865,8 @@ impl ProviderIngestFinalizedArchiveV1 {
             }
             require_exact_retention_readback(binding, authority, network_id, &approval)?;
             finish_compaction_cleanup(
+                #[cfg(windows)]
+                &self.native,
                 &self.records,
                 self.records_identity,
                 &self.checkpoints,
@@ -2468,6 +2506,8 @@ impl ProviderIngestFinalizedArchiveV1 {
             .checkpoints
             .join(checkpoint_file_name(checkpoint.checkpoint_digest));
         publish_immutable_bytes(
+            #[cfg(windows)]
+            &self.native,
             &self.checkpoints,
             self.checkpoints_identity,
             &checkpoint_path,
@@ -2487,15 +2527,29 @@ impl ProviderIngestFinalizedArchiveV1 {
             .virtual_bases
             .insert(checkpoint.material.retention_floor.network_id, virtual_base);
         for (position, (subject, entry)) in prepared.obsolete.iter().enumerate() {
-            unlink_verified_archive_file(&self.records, self.records_identity, &entry.path)?;
+            unlink_verified_archive_file(
+                #[cfg(windows)]
+                &self.native,
+                &self.records,
+                self.records_identity,
+                &entry.path,
+                #[cfg(windows)]
+                &norito::to_bytes(&entry.record)
+                    .map_err(ProviderIngestFinalizedArchiveErrorV1::Encode)?,
+            )?;
             after_unlink(position);
             index.by_height.remove(subject);
         }
         if let Some(previous) = prepared.previous_base {
             unlink_verified_archive_file(
+                #[cfg(windows)]
+                &self.native,
                 &self.checkpoints,
                 self.checkpoints_identity,
                 &previous.path,
+                #[cfg(windows)]
+                &norito::to_bytes(&previous.checkpoint)
+                    .map_err(ProviderIngestFinalizedArchiveErrorV1::Encode)?,
             )?;
         }
         refresh_archive_accounting(index, self.bounds)?;
@@ -2943,6 +2997,16 @@ impl ProviderIngestFinalizedArchiveV1 {
         }
     }
     fn verify_storage_boundaries(&self) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+        #[cfg(windows)]
+        {
+            self.native
+                .revalidate()
+                .and_then(|()| iroha_fs::FileSnapshot::of(&self.writer_lock, true).map(|_| ()))
+                .map_err(|source| ProviderIngestFinalizedArchiveErrorV1::Read {
+                    path: self.root.clone(),
+                    source,
+                })?;
+        }
         verify_absolute_directory_ancestry(&self.root)?;
         verify_archive_directory_identity(&self.root, self.root_identity).map_err(|source| {
             ProviderIngestFinalizedArchiveErrorV1::Read {
@@ -5730,6 +5794,7 @@ fn install_virtual_bases(
     Ok(())
 }
 fn finish_compaction_cleanup(
+    #[cfg(windows)] native: &NativeArchive,
     records: &Path,
     records_identity: ArchiveFileIdentity,
     checkpoints: &Path,
@@ -5749,7 +5814,27 @@ fn finish_compaction_cleanup(
         .map(|(subject, entry)| (subject.to_owned(), entry.path.clone()))
         .collect::<Vec<_>>();
     for (_, path) in &obsolete_records {
-        unlink_verified_archive_file(records, records_identity, path)?;
+        unlink_verified_archive_file(
+            #[cfg(windows)]
+            native,
+            records,
+            records_identity,
+            path,
+            #[cfg(windows)]
+            &norito::to_bytes(
+                &index
+                    .by_height
+                    .values()
+                    .find(|entry| entry.path == *path)
+                    .ok_or_else(
+                        || ProviderIngestFinalizedArchiveErrorV1::PathBindingMismatch {
+                            path: path.clone(),
+                        },
+                    )?
+                    .record,
+            )
+            .map_err(ProviderIngestFinalizedArchiveErrorV1::Encode)?,
+        )?;
     }
     for (subject, _) in obsolete_records {
         index.by_height.remove(&subject);
@@ -5765,7 +5850,26 @@ fn finish_compaction_cleanup(
         .map(|candidate| candidate.path.clone())
         .collect::<Vec<_>>();
     for path in &stale_checkpoints {
-        unlink_verified_archive_file(checkpoints, checkpoints_identity, path)?;
+        unlink_verified_archive_file(
+            #[cfg(windows)]
+            native,
+            checkpoints,
+            checkpoints_identity,
+            path,
+            #[cfg(windows)]
+            &norito::to_bytes(
+                &checkpoint_candidates
+                    .iter()
+                    .find(|entry| entry.path == *path)
+                    .ok_or_else(
+                        || ProviderIngestFinalizedArchiveErrorV1::PathBindingMismatch {
+                            path: path.clone(),
+                        },
+                    )?
+                    .checkpoint,
+            )
+            .map_err(ProviderIngestFinalizedArchiveErrorV1::Encode)?,
+        )?;
     }
     Ok(())
 }
@@ -5844,6 +5948,7 @@ fn verify_checkpoint_entry(
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn unlink_verified_archive_file(
     directory: &Path,
     expected_directory_identity: ArchiveFileIdentity,
@@ -5981,6 +6086,7 @@ fn validate_archive_root_path(path: &Path) -> Result<(), ProviderIngestFinalized
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn verify_existing_directory_ancestry(
     path: &Path,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
@@ -6131,6 +6237,7 @@ fn validate_root_namespace(root: &Path) -> Result<(), ProviderIngestFinalizedArc
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn recover_staged_directory(
     directory: &Path,
     expected_directory_identity: ArchiveFileIdentity,
@@ -6253,6 +6360,7 @@ fn recover_staged_directory(
         Ok(())
     }
 }
+#[cfg(not(windows))]
 fn publish_immutable_bytes(
     directory: &Path,
     expected_directory_identity: ArchiveFileIdentity,
@@ -6574,6 +6682,7 @@ fn read_bounded_archive_file_at_unix(
     }
     Ok(bytes)
 }
+#[cfg(not(windows))]
 fn create_direct_directory(path: &Path) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
     validate_archive_root_path(path)?;
     verify_existing_directory_ancestry(path)?;
@@ -6622,6 +6731,22 @@ fn create_direct_directory(path: &Path) -> Result<(), ProviderIngestFinalizedArc
         },
     )
 }
+#[cfg(windows)]
+fn create_direct_directory(path: &Path) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+    iroha_fs::OwnerDirectory::open_or_create(path)
+        .and_then(|owner| {
+            let result = owner.sync();
+            let final_check = owner.revalidate();
+            result.and(final_check)
+        })
+        .map_err(
+            |source| ProviderIngestFinalizedArchiveErrorV1::NamespaceSync {
+                path: path.to_path_buf(),
+                source,
+            },
+        )
+}
+#[cfg(not(windows))]
 fn open_writer_lock_file(path: &Path) -> Result<fs::File, ProviderIngestFinalizedArchiveErrorV1> {
     let mut options = fs::OpenOptions::new();
     options.read(true).write(true).create(true);
@@ -6670,6 +6795,23 @@ fn open_writer_lock_file(path: &Path) -> Result<fs::File, ProviderIngestFinalize
     }
     Ok(file)
 }
+#[cfg(windows)]
+fn open_writer_lock_file(path: &Path) -> Result<fs::File, ProviderIngestFinalizedArchiveErrorV1> {
+    let result = (|| {
+        let parent = path.parent().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "archive lock has no parent")
+        })?;
+        let name = path.file_name().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "archive lock has no name")
+        })?;
+        let owner = iroha_fs::OwnerDirectory::open(parent)?;
+        owner.open_exclusive_private_lock(name)
+    })();
+    result.map_err(|source| ProviderIngestFinalizedArchiveErrorV1::WriterBusy {
+        path: path.to_path_buf(),
+        source,
+    })
+}
 fn acquire_writer_ownership(
     file: &fs::File,
     path: &Path,
@@ -6690,7 +6832,7 @@ fn acquire_writer_ownership(
 #[cfg(unix)]
 type ArchiveFileIdentity = (u64, u64);
 #[cfg(windows)]
-type ArchiveFileIdentity = (Option<u32>, Option<u64>);
+type ArchiveFileIdentity = iroha_fs::FileIdentity;
 #[cfg(not(any(unix, windows)))]
 type ArchiveFileIdentity = ();
 #[cfg(unix)]
@@ -6700,7 +6842,7 @@ fn archive_file_identity(metadata: &SecureMetadata) -> ArchiveFileIdentity {
 }
 #[cfg(windows)]
 fn archive_file_identity(metadata: &SecureMetadata) -> ArchiveFileIdentity {
-    (metadata.volume_serial_number(), metadata.file_index())
+    metadata.identity()
 }
 #[cfg(not(any(unix, windows)))]
 fn archive_file_identity(_metadata: &SecureMetadata) -> ArchiveFileIdentity {}
@@ -6709,8 +6851,8 @@ const fn archive_file_identity_available(_identity: ArchiveFileIdentity) -> bool
     true
 }
 #[cfg(windows)]
-const fn archive_file_identity_available(identity: ArchiveFileIdentity) -> bool {
-    identity.0.is_some() && identity.1.is_some()
+const fn archive_file_identity_available(_identity: ArchiveFileIdentity) -> bool {
+    true
 }
 #[cfg(not(any(unix, windows)))]
 const fn archive_file_identity_available(_identity: ArchiveFileIdentity) -> bool {
@@ -6753,11 +6895,12 @@ fn archive_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata
 }
 #[cfg(windows)]
 fn archive_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
     archive_file_identity_available(archive_file_identity(left))
         && archive_file_identity(left) == archive_file_identity(right)
-        && left.number_of_links() == Some(1)
-        && right.number_of_links() == Some(1)
-        && left.file_size() == right.file_size()
+        && left.links() == 1
+        && right.links() == 1
+        && left.len() == right.len()
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
 }
@@ -6779,6 +6922,7 @@ fn direct_archive_file_metadata(path: &Path, max_bytes: u64) -> io::Result<Secur
     }
     Ok(metadata)
 }
+#[cfg(not(windows))]
 fn read_bounded_archive_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
     let path_before = direct_archive_file_metadata(path, max_bytes)?;
     let mut options = fs::OpenOptions::new();
@@ -6829,6 +6973,11 @@ fn read_bounded_archive_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>>
     }
     Ok(bytes)
 }
+#[cfg(windows)]
+fn read_bounded_archive_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
+    native_archive::read(path, max_bytes)
+}
+#[cfg(not(windows))]
 fn sync_archive_directory(path: &Path) -> io::Result<()> {
     #[cfg(windows)]
     {
@@ -6842,6 +6991,13 @@ fn sync_archive_directory(path: &Path) -> io::Result<()> {
     {
         fs::File::open(path)?.sync_all()
     }
+}
+#[cfg(windows)]
+fn sync_archive_directory(path: &Path) -> io::Result<()> {
+    let owner = iroha_fs::OwnerDirectory::open(path)?;
+    let result = owner.sync();
+    let final_check = owner.revalidate();
+    result.and(final_check)
 }
 /// Fail-closed errors returned by the finalized provider-ingest archive.
 #[derive(Debug, Error)]
@@ -7287,6 +7443,60 @@ pub enum ProviderIngestFinalizedArchiveErrorV1 {
     #[error("finalized provider-ingest archive lock is poisoned")]
     ArchiveLockPoisoned,
 }
+
+#[cfg(windows)]
+fn publish_immutable_bytes(
+    native: &NativeArchive,
+    directory: &Path,
+    expected_directory_identity: ArchiveFileIdentity,
+    target: &Path,
+    bytes: &[u8],
+) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+    native
+        .publish(directory, expected_directory_identity, target, bytes)
+        .map_err(|source| ProviderIngestFinalizedArchiveErrorV1::Write {
+            path: target.to_path_buf(),
+            source,
+        })
+}
+
+#[cfg(windows)]
+fn unlink_verified_archive_file(
+    native: &NativeArchive,
+    directory: &Path,
+    expected_directory_identity: ArchiveFileIdentity,
+    target: &Path,
+    expected: &[u8],
+) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+    native
+        .unlink(directory, expected_directory_identity, target, expected)
+        .map_err(|source| ProviderIngestFinalizedArchiveErrorV1::Write {
+            path: target.to_path_buf(),
+            source,
+        })
+}
+
+#[cfg(windows)]
+fn recover_staged_directory(
+    native: &NativeArchive,
+    directory: &Path,
+    expected_directory_identity: ArchiveFileIdentity,
+    max_record_bytes: u64,
+    canonical_suffix: &str,
+) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+    native
+        .recover(
+            directory,
+            expected_directory_identity,
+            max_record_bytes,
+            canonical_suffix,
+        )
+        .map_err(|source| ProviderIngestFinalizedArchiveErrorV1::Write {
+            path: directory.to_path_buf(),
+            source,
+        })
+}
+
 #[cfg(test)]
 mod tests {
     #[path = "../certified_capture_tests.rs"]
@@ -7987,6 +8197,8 @@ mod tests {
     ) -> PathBuf {
         let candidate = candidate_for_prepared_compaction(archive, prepared);
         publish_immutable_bytes(
+            #[cfg(windows)]
+            &archive.native,
             &archive.checkpoints,
             archive.checkpoints_identity,
             &candidate.path,
@@ -8010,6 +8222,52 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[cfg(windows)]
+    fn archive_namespace_snapshot(directory: &Path) -> BTreeMap<String, Vec<u8>> {
+        fn read_original(path: &Path) -> Vec<u8> {
+            use std::io::Read as _;
+            use std::os::windows::fs::MetadataExt as _;
+            let before = iroha_fs::FileMetadata::symlink_metadata(path).unwrap();
+            assert!(before.is_file());
+            assert_eq!(before.file_attributes() & 0x400, 0, "fixture reparse point");
+            let mut original = fs::File::open(path).unwrap();
+            let held = iroha_fs::FileMetadata::of(&original).unwrap();
+            assert_eq!(before.identity(), held.identity());
+            let mut bytes = Vec::new();
+            original.read_to_end(&mut bytes).unwrap();
+            let after = iroha_fs::FileMetadata::of(&original).unwrap();
+            let named = iroha_fs::FileMetadata::symlink_metadata(path).unwrap();
+            for observed in [&after, &named] {
+                assert_eq!(held.identity(), observed.identity());
+                assert_eq!(held.links(), observed.links());
+                assert_eq!(held.len(), observed.len());
+                assert_eq!(held.last_write_time(), observed.last_write_time());
+                assert_eq!(held.file_attributes(), observed.file_attributes());
+            }
+            assert_eq!(bytes.len() as u64, held.len());
+            bytes
+        }
+        use std::os::windows::fs::MetadataExt as _;
+        let before = iroha_fs::FileMetadata::symlink_metadata(directory).unwrap();
+        assert!(before.is_dir());
+        assert_eq!(before.file_attributes() & 0x400, 0, "fixture reparse point");
+        let snapshot = fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (
+                    entry.file_name().into_string().unwrap(),
+                    read_original(&entry.path()),
+                )
+            })
+            .collect();
+        let after = iroha_fs::FileMetadata::symlink_metadata(directory).unwrap();
+        assert_eq!(before.identity(), after.identity());
+        assert_eq!(before.file_attributes(), after.file_attributes());
+        assert_eq!(before.last_write_time(), after.last_write_time());
+        snapshot
     }
     #[cfg(unix)]
     include!("provider_ingest_finalized/retention_inventory_tests.rs");

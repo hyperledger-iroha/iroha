@@ -4247,7 +4247,7 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         if current_time_ms == 0
             || self
                 .publication_clock_floor_ms
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |previous| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |previous| {
                     (current_time_ms >= previous).then_some(current_time_ms)
                 })
                 .is_err()

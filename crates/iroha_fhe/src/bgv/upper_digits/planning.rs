@@ -22,6 +22,10 @@ fn ceiling(required: usize, budget: usize, resource: &'static str) -> Result<(),
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "preadmission accounts for the shared program, selected bank count and retention before any node allocation"
+)]
 pub(super) fn preallocation(
     profile: &BgvProfile,
     program: &UpperDigitsProgram,
@@ -62,7 +66,7 @@ pub(super) fn preallocation(
     // two component headers, and a public bound. Incoming owner metadata is
     // already allocated by the caller and is explicitly outside this budget.
     // A streaming caller owns/charges its one scalar token and frontier; it
-    // never creates this completed-bank container. Logical work still uses d.
+    // never creates this completed-bank container. Work uses the selected bank count.
     let completed = product(
         if retention == BankRetention::Collected {
             banks

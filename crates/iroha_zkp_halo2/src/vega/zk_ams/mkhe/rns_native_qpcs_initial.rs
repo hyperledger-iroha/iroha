@@ -592,8 +592,8 @@ fn validate_leaf_values_v1(values: &[u8]) -> Result<(), RnsNativeQpcsInitialErro
     if values.len() != OPENED_LEAF_COUNT_V1 * LEAF_BYTES_V1 {
         return Err(RnsNativeQpcsInitialErrorV1::InvalidCount);
     }
-    for leaf in values.chunks_exact(LEAF_BYTES_V1) {
-        for (coordinate, pair) in leaf.chunks_exact(FQ2_BYTES_V1).enumerate() {
+    for leaf in values.as_chunks::<LEAF_BYTES_V1>().0 {
+        for (coordinate, pair) in leaf.as_chunks::<FQ2_BYTES_V1>().0.iter().enumerate() {
             decode_fq2_v1(coordinate / ROWS_PER_LIMB_V1, pair)
                 .map_err(|_| RnsNativeQpcsInitialErrorV1::NonCanonicalResidue)?;
         }

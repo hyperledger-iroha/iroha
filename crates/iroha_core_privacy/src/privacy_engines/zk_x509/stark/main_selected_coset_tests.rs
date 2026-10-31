@@ -786,7 +786,7 @@ fn selected_low_degree_horner_pruned_and_metal_cost_keep_all_query_rows() {
                     let values = (0..1usize << native)
                         .map(|row| F((17 * row + 13 * column + 1) as u64))
                         .collect::<Vec<_>>();
-                    let mask = (0..MASK_DEGREE + 1)
+                    let mask = (0..=MASK_DEGREE)
                         .map(|degree| F((29 * degree + 7 * column + 3) as u64))
                         .collect::<Vec<_>>();
                     Column::from_vec_v1(
@@ -898,7 +898,7 @@ fn selected_current_cut_cpu_and_metal_cost_keep_every_registered_domain() {
                     let values = (0..1usize << native)
                         .map(|row| F((17 * row + 13 * column + 1) as u64))
                         .collect::<Vec<_>>();
-                    let mask = (0..MASK_DEGREE + 1)
+                    let mask = (0..=MASK_DEGREE)
                         .map(|degree| F((29 * degree + 7 * column + 3) as u64))
                         .collect::<Vec<_>>();
                     Column::from_vec_v1(

@@ -201,11 +201,11 @@ fn retained_network_plans_refuse_complete_input_and_native_custody_drift_without
         accept();
 
         // Loss of an unrelated transitive private input must not reuse the old positive image.
-        let key = runtime.read("onboarding-signer.key", 4096).unwrap();
-        std::fs::remove_file(runtime.path().join("onboarding-signer.key")).unwrap();
+        let client = generation.read("client.toml", 1024 * 1024).unwrap();
+        std::fs::remove_file(generation.path().join("client.toml")).unwrap();
         refuse();
-        runtime
-            .write_atomic("onboarding-signer.key", &key, PublishMode::CreateNew)
+        generation
+            .write_atomic("client.toml", &client, PublishMode::CreateNew)
             .unwrap();
         accept();
 
@@ -222,7 +222,7 @@ fn retained_network_plans_refuse_complete_input_and_native_custody_drift_without
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let path = runtime.path().join("onboarding-signer.key");
+            let path = generation.path().join("client.toml");
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
             refuse();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();

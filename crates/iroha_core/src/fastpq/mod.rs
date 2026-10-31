@@ -1440,13 +1440,31 @@ mod tests {
         delta.amount.encode_to(&mut streamed_preimage);
         streamed_preimage.extend_from_slice(batch_hash.as_ref());
         assert_eq!(streamed_preimage, encoded_preimage);
-        let digest = poseidon_preimage_digest(&delta, &batch_hash);
+        // Pin the input separately from the selected 8-full/57-partial-round
+        // BN254 Poseidon result. The independent hash_bytes implementation in
+        // scripts/zk_bn254_poseidon_reference.py reproduces the raw field bytes
+        // below from this preimage and generate_parameters(3, 8, 57).
         assert_eq!(
-            digest,
-            Hash::prehashed(halo2_poseidon::hash_bytes(&encoded_preimage))
+            hex::encode(&encoded_preimage),
+            concat!(
+                "000000004a2100000000000000010001ce017f01a4016c019d01ce017e01a401",
+                "b1012501e201e3016b01db016301ea01330107013e0175019001ac0192018101",
+                "6a01e101e8016101b70104018b0103000000004a210000000000000001000104",
+                "01ff015b01810104016d01dc01cf011901e201e4015101c4015d01fb016f0153",
+                "0175019d014e01b3010f01a201ef01a801070128014d011c01c30130011601a1",
+                "0158016b019b01e10164014b01040188019a018801c0018e0140011501440501",
+                "0000002a04000000001111111111111111111111111111111111111111111111",
+                "111111111111111111",
+            )
         );
-        // The canonical width-three bank has 8 full and 57 partial rounds.
-        // Checked with scripts/zk_bn254_poseidon_reference.py over this preimage.
+        let raw_digest = halo2_poseidon::hash_bytes(&encoded_preimage);
+        assert_eq!(
+            hex::encode(raw_digest),
+            "f34ee22cc4cd0b2ea90f03d303ce3c92ac5172d067a663cf2c687de7b95c2f1c"
+        );
+        let digest = poseidon_preimage_digest(&delta, &batch_hash);
+        assert_eq!(digest, Hash::prehashed(raw_digest));
+        // Hash reserves the low bit of its final byte for its nonzero invariant.
         assert_eq!(
             hex::encode(digest.as_ref()),
             "f34ee22cc4cd0b2ea90f03d303ce3c92ac5172d067a663cf2c687de7b95c2f1d"

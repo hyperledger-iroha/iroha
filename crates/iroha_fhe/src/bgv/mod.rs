@@ -6,14 +6,16 @@
 //! retained exact-lift construction of `iroha_crypto`, whose ciphertext
 //! modulus is a multiple of the plaintext modulus.
 //!
-//! Nothing here is wired into a consumer, and no profile is qualified: the
-//! candidates of [`BgvCandidate`] have no reviewed security estimate, no
+//! Consumers compose this arithmetic under their own admission; no profile is
+//! qualified. The candidates of [`BgvCandidate`] have no reviewed security estimate, no
 //! circuit-privacy construction, no client well-formedness proof and no
 //! verifiable opening. Those belong to the tasks that consume this module.
 //! [`LocalBootstrapKey`] supplies a closed local construction: its matching
 //! encrypted secret, exact homomorphic input, coefficient transforms and
 //! upper-digit execution use the same canonical master profile. It accepts no
 //! imported source/key authority and does not qualify the candidate parameters.
+//! [`LocalScalarCiphertext`] carries a separate closed scalar-message capability
+//! for bank-zero bootstrap selection; general local provenance is insufficient.
 //!
 //! # Ring, chain and levels
 //!
@@ -127,8 +129,9 @@ pub mod threshold;
 mod upper_digits;
 
 pub use bootstrap::{
-    BootstrapBudget, BootstrapError, BootstrapMetadata, BootstrapPayload, BootstrapPlan,
-    LocalBootstrapCiphertext, LocalBootstrapKey, LocalBootstrapSetupBudget,
+    BootstrapBudget, BootstrapError, BootstrapMessageSpace, BootstrapMetadata, BootstrapPayload,
+    BootstrapPlan, LocalBootstrapCiphertext, LocalBootstrapKey, LocalBootstrapSetupBudget,
+    LocalScalarCiphertext,
 };
 pub use cipher::{Ciphertext, Plaintext, PlaintextBound};
 pub use coefficient_slots::{

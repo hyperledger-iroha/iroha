@@ -4,7 +4,7 @@ use super::*;
 use crate::backend::deep_striped_merkle::{StreamLimits, StripedMerklePlan};
 
 fn payload(index: usize, output: &mut [u8]) {
-    for (position, word) in output.chunks_exact_mut(8).enumerate() {
+    for (position, word) in output.as_chunks_mut::<8>().0.iter_mut().enumerate() {
         word.copy_from_slice(&((index * 17 + position * 13 + 1) as u64).to_le_bytes());
     }
 }
@@ -26,7 +26,9 @@ fn tree(binding: &Context) -> Vec<Vec<Digest>> {
         let next = levels
             .last()
             .unwrap()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .enumerate()
             .map(|(index, pair)| {
                 binding
@@ -352,7 +354,9 @@ fn in_memory_parent_coordinates_match_u32_hashing_and_never_truncate() {
     let binding = Context::new(b"in-memory parent coordinates").unwrap();
     let levels = tree(&binding);
     for (level, pair) in levels.windows(2).enumerate() {
-        for (index, (children, &expected)) in pair[0].chunks_exact(2).zip(&pair[1]).enumerate() {
+        for (index, (children, &expected)) in
+            pair[0].as_chunks::<2>().0.iter().zip(&pair[1]).enumerate()
+        {
             assert_eq!(
                 binding
                     .hash_parent_at(Oracle::Fri(4), level + 1, index, children[0], children[1])

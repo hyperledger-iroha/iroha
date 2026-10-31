@@ -745,9 +745,7 @@ impl<'a> PenaltyApplier<'a> {
                 snapshot.stake_index,
             ));
         }
-        pending
-            .as_mut_slice()
-            .sort_unstable_by(|left, right| left.0.0.cmp(&right.0.0));
+        pending.as_mut_slice().sort_unstable_by_key(|left| left.0.0);
         let _witness_suppression = crate::exec_witness::suppress_recording_for_current_thread();
         let mut scratch = self.state.consensus_effects_probe_block(*block_header)?;
         let mut actions =
@@ -1269,7 +1267,7 @@ fn penalty_staking_fixture_header() -> BlockHeader {
 
 /// Complete author input for the penalty fixture's selected currency and custody.
 #[cfg(test)]
-pub(crate) fn penalty_staking_fixture_policy()
+pub fn penalty_staking_fixture_policy()
 -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
     let (asset, escrow, sink) = penalty_staking_fixture_ids();
     let mut policy = crate::sumeragi::test_chain::staking_fixture_policy(asset);

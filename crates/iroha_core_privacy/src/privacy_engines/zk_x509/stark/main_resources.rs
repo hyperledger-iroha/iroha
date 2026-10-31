@@ -41,6 +41,11 @@ pub(super) const MAIN_COMPOSITION_SHA_FOLD_BYTES_V1: usize =
 /// inside replay_batch, including while the next native source is replayed.
 pub(super) const MAIN_QUERY_REUSE_METADATA_BYTES_V1: usize =
     main_transform::selected_scratch_metadata_v1();
+/// At most 128 stripe tasks each own one exact two-sum arithmetic fold.
+/// This transient private stack storage stays inside the original runtime reserve.
+pub(super) const MAIN_ARITHMETIC_CONVOLUTION_SCRATCH_BYTES_V1: usize =
+    128 * crate::privacy_engines::transparent_stark::GOLDILOCKS_PRODUCT_DIFFERENCE_SCRATCH_BYTES_V1;
+
 /// Retained completed-output control/Arc headers, column descriptors and input views.
 /// Their pages replace existing initial output payload; carve metadata from the
 /// same unchanged runtime reserve even during source callbacks and CPU fallback.
@@ -50,6 +55,7 @@ const _: () = assert!(
     MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1
         + MAIN_COMPOSITION_SHA_FOLD_BYTES_V1
         + MAIN_QUERY_REUSE_METADATA_BYTES_V1
+        + MAIN_ARITHMETIC_CONVOLUTION_SCRATCH_BYTES_V1
         + MAIN_READONLY_OUTPUT_METADATA_BYTES_V1
         <= MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
 );
@@ -217,7 +223,7 @@ fn sum(values: &[usize]) -> Result<usize, ZkX509StarkErrorV1> {
 // The SHA and P-256 matrix producers own separate public fixed rows. Charge
 // both current/next scratch rows at their maximum width, independently of the
 // selected producer or transform backend.
-/// Maximum row owned by either batched public fixed-matrix producer.
+/// Maximum row owned by any batched public fixed-matrix producer.
 pub(super) const MAIN_FIXED_REPLAY_ROW_WIDTH_V1: usize =
     if ZK_X509_SHA_BATCH_FIXED_WIDTH_V1 > P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1 {
         ZK_X509_SHA_BATCH_FIXED_WIDTH_V1
@@ -235,6 +241,10 @@ type MainFixedReplayScratchV1 = (
 fn fixed_replay_scratch_charges_both_rows_of_the_widest_matrix_producer() {
     assert_eq!(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1, 137);
     assert_eq!(P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1, 134);
+    assert!(P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1 <= MAIN_FIXED_REPLAY_ROW_WIDTH_V1);
+    assert!(P256_BINDING_SINK_FIXED_WIDTH_V1 <= MAIN_FIXED_REPLAY_ROW_WIDTH_V1);
+    assert!(P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1 <= MAIN_FIXED_REPLAY_ROW_WIDTH_V1);
+    assert!(P256_VALUE_BUS_STARK_FIXED_WIDTH_V1 <= MAIN_FIXED_REPLAY_ROW_WIDTH_V1);
     assert_eq!(
         MAIN_FIXED_REPLAY_ROW_WIDTH_V1,
         ZK_X509_SHA_BATCH_FIXED_WIDTH_V1.max(P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1)
@@ -521,11 +531,13 @@ impl MainProverBufferPlanV1 {
             MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1,
             MAIN_COMPOSITION_SHA_FOLD_BYTES_V1,
             MAIN_QUERY_REUSE_METADATA_BYTES_V1,
+            MAIN_ARITHMETIC_CONVOLUTION_SCRATCH_BYTES_V1,
             MAIN_READONLY_OUTPUT_METADATA_BYTES_V1,
             MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
                 - MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1
                 - MAIN_COMPOSITION_SHA_FOLD_BYTES_V1
                 - MAIN_QUERY_REUSE_METADATA_BYTES_V1
+                - MAIN_ARITHMETIC_CONVOLUTION_SCRATCH_BYTES_V1
                 - MAIN_READONLY_OUTPUT_METADATA_BYTES_V1,
             // A fixed public maximum pair is charged before native sources
             // and in every later phase, even when the current public domain
@@ -812,3 +824,76 @@ impl MainProverBufferPlanV1 {
 #[cfg(test)]
 #[path = "main_initial_coalescing_resource_tests.rs"]
 mod initial_coalescing_resource_tests;
+
+#[cfg(test)]
+#[test]
+fn arithmetic_convolution_full_profile_geometry_and_private_scratch_are_charged() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let arithmetic = layout
+        .registered_segments
+        .iter()
+        .filter(|registration| registration.segment.adapter == SegmentAdapterIdV1::P256Arithmetic)
+        .collect::<Vec<_>>();
+    assert_eq!(arithmetic.len(), 5);
+    let mut rows = 0;
+    for registration in arithmetic {
+        let plan = registered_retained_prover_plan_v1(registration.segment, layout.common_lde_log2)
+            .unwrap();
+        assert_eq!(registration.segment.trace_log2, 19);
+        assert_eq!(registration.segment.constraint_degree, 4);
+        assert_eq!(plan.quotient_coset_log2, 21);
+        rows += plan.quotient_coset_rows;
+    }
+    assert_eq!(rows, 10_485_760);
+    assert_eq!(rows * 2 * 16 * 16, 5_368_709_120);
+    assert_eq!(MAIN_ARITHMETIC_CONVOLUTION_SCRATCH_BYTES_V1, 128 * 48);
+    assert_eq!(SECURITY_LANES, 1);
+    // Production uses public 4096-row tasks inside one native-log19 stripe.
+    assert_eq!((1_usize << 19).div_ceil(1 << 12), 128);
+    assert_eq!(MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1, 1 << 30);
+    let explicit = MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1
+        + MAIN_COMPOSITION_SHA_FOLD_BYTES_V1
+        + MAIN_QUERY_REUSE_METADATA_BYTES_V1
+        + MAIN_ARITHMETIC_CONVOLUTION_SCRATCH_BYTES_V1
+        + MAIN_READONLY_OUTPUT_METADATA_BYTES_V1;
+    assert!(explicit < MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1);
+    let plan = MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    assert_eq!(plan.maximum_live_buffers, CURRENT_FULL_PROFILE_PEAK_V1);
+    let charged = plan.check_before_sources_v1(288_345_698).unwrap();
+    assert!(
+        charged
+            <= usize::try_from(super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1)
+                .unwrap()
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn arithmetic_convolution_reserve_carve_preserves_exact_admission_boundary() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    // The new explicit scratch replaces an equal part of runtime headroom.
+    // This independently expresses the original, unsplit admission formula.
+    let unchanged_reserved = MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
+        + main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
+        + main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1;
+    for source_scratch in [0, MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1] {
+        let source_limit =
+            plan.remaining_source_and_runtime_envelope - unchanged_reserved - source_scratch;
+        for source in [0, 1, source_limit / 2, source_limit] {
+            assert_eq!(
+                plan.check_source_payloads_v1(&[source], source_scratch)
+                    .unwrap(),
+                plan.maximum_live_buffers + source + source_scratch + unchanged_reserved,
+            );
+        }
+        assert!(matches!(
+            plan.check_source_payloads_v1(&[source_limit + 1], source_scratch),
+            Err(ZkX509StarkErrorV1::ProofTooLarge)
+        ));
+    }
+    assert!(matches!(
+        plan.check_source_payloads_v1(&[usize::MAX, 1], 0),
+        Err(ZkX509StarkErrorV1::ProfileMismatch)
+    ));
+}

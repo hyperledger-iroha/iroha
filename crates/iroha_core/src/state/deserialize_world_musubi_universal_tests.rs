@@ -72,8 +72,10 @@ fn musubi_universal_authority_is_revision_only_after_exact_source_checks() {
         .musubi_public_directory
         .insert(selector.clone(), changed_directory.clone());
     assert_eq!(
-        WorldStateAccumulator::capture(&block).unwrap().root(),
-        baseline.root(),
+        WorldStateAccumulator::capture(&block)
+            .unwrap()
+            .baseline_root(),
+        baseline.baseline_root(),
         "duplicated source fields do not become independent authority"
     );
     assert_ne!(
@@ -95,8 +97,10 @@ fn musubi_universal_authority_is_revision_only_after_exact_source_checks() {
         .musubi_resolver_index
         .insert(release, revised_resolver.clone());
     assert_ne!(
-        WorldStateAccumulator::capture(&block).unwrap().root(),
-        baseline.root(),
+        WorldStateAccumulator::capture(&block)
+            .unwrap()
+            .baseline_root(),
+        baseline.baseline_root(),
         "independent resolver revision changes the authority baseline"
     );
     assert_ne!(

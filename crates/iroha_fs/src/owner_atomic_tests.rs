@@ -25,6 +25,7 @@ fn observed_writer_retains_all_real_boundaries_and_exact_bytes() {
             AtomicWriteStep::WriteTail,
             AtomicWriteStep::SyncFile,
             AtomicWriteStep::Publish,
+            AtomicWriteStep::Published,
             AtomicWriteStep::SyncDirectory
         ]
     );
@@ -33,6 +34,8 @@ fn observed_writer_retains_all_real_boundaries_and_exact_bytes() {
     file.read_to_end(&mut actual).unwrap();
     retained.require_same_regular_file("frame", &file).unwrap();
     assert_eq!(actual, bytes);
+    // The completed read must release its Windows no-delete-sharing fence before removal.
+    drop(file);
     assert!(retained.open_regular_optional("absent").unwrap().is_none());
     let mut names = Vec::new();
     retained
@@ -53,6 +56,56 @@ fn observed_writer_retains_all_real_boundaries_and_exact_bytes() {
     assert!(retained.remove_private("frame").unwrap());
     assert!(!retained.remove_private("frame").unwrap());
     directory.require_same_lock("lock", &lock).unwrap();
+}
+
+#[test]
+fn observed_writer_distinguishes_refusal_before_and_after_publication() {
+    for mode in [PublishMode::CreateNew, PublishMode::Replace] {
+        for boundary in [AtomicWriteStep::Publish, AtomicWriteStep::Published] {
+            let root = tempfile::tempdir().unwrap();
+            let directory = OwnerDirectory::open(root.path()).unwrap();
+            if mode == PublishMode::Replace {
+                directory
+                    .write_atomic("frame", b"previous", PublishMode::CreateNew)
+                    .unwrap();
+            }
+            let mut published = false;
+            let mut steps = Vec::new();
+            let result = directory.write_atomic_observed(
+                "frame",
+                b"complete replacement",
+                mode,
+                16,
+                |step, _| {
+                    steps.push(step);
+                    if step == AtomicWriteStep::Published {
+                        published = true;
+                    }
+                    if step == boundary {
+                        return Err(io::Error::other("injected publication interruption"));
+                    }
+                    Ok(())
+                },
+            );
+            assert!(result.is_err());
+            assert_eq!(published, boundary == AtomicWriteStep::Published);
+            assert_eq!(steps.last(), Some(&boundary));
+            assert!(!steps.contains(&AtomicWriteStep::SyncDirectory));
+            let observed = directory.read_private_optional("frame", 1024).unwrap();
+            let expected = if published {
+                Some(b"complete replacement".as_slice())
+            } else if mode == PublishMode::Replace {
+                Some(b"previous".as_slice())
+            } else {
+                None
+            };
+            assert_eq!(observed.as_ref().map(|bytes| bytes.as_slice()), expected);
+            assert_eq!(
+                directory.entries(16).unwrap().len(),
+                usize::from(expected.is_some())
+            );
+        }
+    }
 }
 
 #[test]
@@ -164,6 +217,112 @@ fn retained_lock_joins_refuse_replacement_and_hardlinks() {
         io::ErrorKind::PermissionDenied
     );
     std::fs::remove_file(root.path().join("alias")).unwrap();
+    directory.require_same_lock("lock", &lock).unwrap();
+}
+
+#[test]
+fn private_lock_join_retains_original_and_never_creates_missing_names() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::open_or_create(root.path().join("private")).unwrap();
+    let lock = directory.create_lock("lock").unwrap();
+    lock.try_lock().unwrap();
+    directory.require_same_lock("lock", &lock).unwrap();
+    assert_eq!(
+        directory
+            .require_same_lock("missing", &lock)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    assert!(!directory.path().join("missing").exists());
+    directory.require_same_lock("lock", &lock).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn private_lock_join_refuses_replacement_hardlinks_and_permissions() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::open_or_create(root.path().join("private")).unwrap();
+    let selected = directory.path().join("lock");
+    let original = directory.path().join("original");
+    let lock = directory.create_lock("lock").unwrap();
+    lock.try_lock().unwrap();
+    std::fs::rename(&selected, &original).unwrap();
+    assert_eq!(
+        directory
+            .require_same_lock("lock", &lock)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    assert!(!selected.exists());
+    let replacement = directory.create_lock("lock").unwrap();
+    replacement.try_lock().unwrap();
+    assert_eq!(
+        directory
+            .require_same_lock("lock", &lock)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::Other
+    );
+    drop(replacement);
+    std::fs::remove_file(&selected).unwrap();
+    std::fs::rename(&original, &selected).unwrap();
+    let alias = directory.path().join("alias");
+    std::fs::hard_link(&selected, &alias).unwrap();
+    assert_eq!(
+        directory
+            .require_same_lock("lock", &lock)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    std::fs::remove_file(alias).unwrap();
+    std::fs::set_permissions(&selected, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(
+        directory
+            .require_same_lock("lock", &lock)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    std::fs::set_permissions(&selected, std::fs::Permissions::from_mode(0o600)).unwrap();
+    directory.require_same_lock("lock", &lock).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn private_lock_join_preserves_private_directory_and_ancestor_custody() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = tempfile::tempdir().unwrap();
+    let parent = PrivateDirectory::open_or_create(root.path().join("parent")).unwrap();
+    let directory = parent.create_child("private").unwrap();
+    let lock = directory.create_lock("lock").unwrap();
+    lock.try_lock().unwrap();
+    for path in [directory.path(), parent.path()] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            directory
+                .require_same_lock("lock", &lock)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        directory.require_same_lock("lock", &lock).unwrap();
+    }
+    let original = root.path().join("original-parent");
+    std::fs::rename(parent.path(), &original).unwrap();
+    std::fs::create_dir(parent.path()).unwrap();
+    std::fs::set_permissions(parent.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(directory.require_same_lock("lock", &lock).is_err());
+    assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
+    assert!(original.join("private/lock").is_file());
+    std::fs::remove_dir(parent.path()).unwrap();
+    std::fs::rename(original, parent.path()).unwrap();
     directory.require_same_lock("lock", &lock).unwrap();
 }
 

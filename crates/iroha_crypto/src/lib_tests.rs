@@ -344,9 +344,9 @@ mod tests {
     fn algorithm_serialize_deserialize_consistent() {
         for algorithm in supported_algorithms() {
             let ser = norito::json::to_json(&algorithm)
-                .unwrap_or_else(|_| panic!("Failed to serialize algorithm {:?}", &algorithm));
+                .unwrap_or_else(|_| panic!("Failed to serialize algorithm {algorithm:?}"));
             let de: Algorithm = norito::json::from_str(&ser)
-                .unwrap_or_else(|_| panic!("Failed to deserialize algorithm {:?}", &algorithm));
+                .unwrap_or_else(|_| panic!("Failed to deserialize algorithm {algorithm:?}"));
             assert_eq!(algorithm, de);
         }
     }
@@ -1032,9 +1032,9 @@ mod tests {
                 private_key: ExposedPrivateKey(key_pair.private_key.clone()),
             };
             let ser = norito::json::to_json(&exposed_key_pair)
-                .unwrap_or_else(|_| panic!("Failed to serialize key pair {:?}", &key_pair));
+                .unwrap_or_else(|_| panic!("Failed to serialize key pair {key_pair:?}"));
             let de: KeyPair = norito::json::from_str(&ser)
-                .unwrap_or_else(|_| panic!("Failed to deserialize key pair {:?}", &key_pair));
+                .unwrap_or_else(|_| panic!("Failed to deserialize key pair {key_pair:?}"));
             assert_eq!(key_pair, de);
         }
     }
@@ -1211,7 +1211,7 @@ mod tests {
             norito::json::to_json(&private_key).expect("Couldn't serialize key"),
             format!("\"{PRIVATE_KEY_REDACTED}\"")
         );
-        assert_eq!(format!("{}", &private_key), PRIVATE_KEY_REDACTED);
+        assert_eq!(format!("{private_key}"), PRIVATE_KEY_REDACTED);
     }
     #[test]
     fn encode_decode_algorithm_consistent() {
@@ -1221,8 +1221,7 @@ mod tests {
                 Algorithm::decode(&mut encoded_algorithm.as_slice()).expect("Failed to decode");
             assert_eq!(
                 algorithm, decoded_algorithm,
-                "Failed to decode encoded {:?}",
-                &algorithm
+                "Failed to decode encoded {algorithm:?}"
             );
         }
     }
@@ -1329,8 +1328,7 @@ mod tests {
                 PublicKey::decode(&mut encoded_public_key.as_slice()).expect("Failed to decode");
             assert_eq!(
                 public_key, decoded_public_key,
-                "Failed to decode encoded Public Key{:?}",
-                &public_key
+                "Failed to decode encoded Public Key{public_key:?}"
             );
         }
     }

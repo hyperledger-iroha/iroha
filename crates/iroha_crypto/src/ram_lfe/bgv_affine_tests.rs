@@ -167,7 +167,7 @@ fn encrypted_state_aliasing_output_snapshots_and_full_padding_match_reference() 
     let keys = keys(&profile, &plan);
     let input = RamLfeReferenceInputV1::from_bytes(&[0, 255, 1, 113]).unwrap();
     let memory = RamLfeInitialMemoryV1::from_lanes(&std::array::from_fn::<_, 32, _>(|i| {
-        ((i * 31 + 5) % 257) as u16
+        u16::try_from((i * 31 + 5) % 257).unwrap()
     }))
     .unwrap();
     let program = tape([
@@ -365,10 +365,10 @@ fn dense_maximum_tape_uses_every_input_slot_and_reduced_lane_constants() {
     let plan =
         RamLfeBgvAffinePlanV1::new(&profile, profile.plaintext_precision(1).unwrap()).unwrap();
     let keys = keys(&profile, &plan);
-    let bytes = std::array::from_fn::<_, 63, _>(|i| ((i * 43 + 7) % 256) as u8);
+    let bytes = std::array::from_fn::<_, 63, _>(|i| u8::try_from((i * 43 + 7) % 256).unwrap());
     let input = RamLfeReferenceInputV1::from_bytes(&bytes).unwrap();
     let memory = RamLfeInitialMemoryV1::from_lanes(&std::array::from_fn::<_, 32, _>(|i| {
-        ((i * 19 + 197) % 257) as u16
+        u16::try_from((i * 19 + 197) % 257).unwrap()
     }))
     .unwrap();
     let mut instructions = vec![Op::LoadConst(0, 0)];
@@ -399,7 +399,10 @@ fn dense_maximum_tape_uses_every_input_slot_and_reduced_lane_constants() {
     let program = tape(instructions);
     let clear =
         ram_lfe_reference_execute_v1(RamLfeClassV1::Affine, &program, &memory, &input).unwrap();
-    assert_eq!(clear.output().scalars(), &[expected as u16]);
+    assert_eq!(
+        clear.output().scalars(),
+        &[u16::try_from(expected).unwrap()]
+    );
     assert_encrypted_matches_reference(&profile, &plan, &keys, &program, &input, &memory);
 }
 
@@ -437,11 +440,11 @@ fn one_prepared_map_uses_current_lanes_and_ignores_unused_input_slots() {
     )
     .unwrap();
     let memory_a = RamLfeInitialMemoryV1::from_lanes(&std::array::from_fn::<_, 32, _>(|i| {
-        ((i * 13 + 256) % 257) as u16
+        u16::try_from((i * 13 + 256) % 257).unwrap()
     }))
     .unwrap();
     let memory_b = RamLfeInitialMemoryV1::from_lanes(&std::array::from_fn::<_, 32, _>(|i| {
-        ((i * 31 + 17) % 257) as u16
+        u16::try_from((i * 31 + 17) % 257).unwrap()
     }))
     .unwrap();
     let mut first = None;
@@ -530,7 +533,8 @@ fn effective_f257_affine_under_prime_power_masters_matches_current_memory_and_re
         );
         let keys = keys(&profile, &plan);
         for seed in [7_u16, 191, 7] {
-            let lanes = std::array::from_fn::<_, 32, _>(|i| (seed + i as u16 * 3) % 257);
+            let lanes =
+                std::array::from_fn::<_, 32, _>(|i| (seed + u16::try_from(i).unwrap() * 3) % 257);
             let memory = RamLfeInitialMemoryV1::from_lanes(&lanes).unwrap();
             let shape = assert_encrypted_matches_reference(
                 &profile, &plan, &keys, &program, &input, &memory,

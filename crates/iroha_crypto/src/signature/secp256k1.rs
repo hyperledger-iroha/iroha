@@ -713,13 +713,13 @@ mod test {
             signature.normalize_s() == signature,
             "signatures must be low-S"
         );
-        let high_sig = if signature.normalize_s() != signature {
-            signature
-        } else {
+        let high_sig = if signature.normalize_s() == signature {
             let (r, s) = signature.split_scalars();
             k256::ecdsa::Signature::from_scalars(r, -s).expect("high-s signature")
+        } else {
+            signature
         };
-        assert!(high_sig.normalize_s() != high_sig);
+        assert_ne!(high_sig.normalize_s(), high_sig);
         let digest = sha2::Sha256::digest(message);
         let verifying_key = k256::ecdsa::VerifyingKey::from(&pk);
         let normalized = high_sig.normalize_s();
@@ -796,7 +796,7 @@ mod test {
         );
         let (r, s) = low.split_scalars();
         let high = k256::ecdsa::Signature::from_scalars(r, -s).expect("high-S signature");
-        assert!(high.normalize_s() != high);
+        assert_ne!(high.normalize_s(), high);
         signature[..64].copy_from_slice(high.to_bytes().as_ref());
         signature[64] = match signature[64] {
             27 => 28,

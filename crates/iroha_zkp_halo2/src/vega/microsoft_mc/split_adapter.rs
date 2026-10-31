@@ -540,8 +540,10 @@ fn replay_sha256_compression(
     current_hash: &[ReplayWord; SHA256_STATE_WORDS],
 ) -> Result<[ReplayWord; SHA256_STATE_WORDS], Figure9SplitAdapterError> {
     let mut w = input
-        .chunks_exact(SHA256_WORD_BITS)
-        .map(ReplayWord::from_bits_be)
+        .as_chunks::<SHA256_WORD_BITS>()
+        .0
+        .iter()
+        .map(|word| ReplayWord::from_bits_be(word.as_slice()))
         .collect::<Result<Vec<_>, _>>()?;
     if w.len() != 16 {
         return Err(Figure9SplitAdapterError::InvalidShape);
@@ -1286,7 +1288,9 @@ fn padded_blocks(
         return Err(Figure9SplitAdapterError::InvalidMetadata);
     }
     bytes
-        .chunks_exact(SHA256_BLOCK_BYTES)
+        .as_chunks::<SHA256_BLOCK_BYTES>()
+        .0
+        .iter()
         .map(|block| {
             block
                 .iter()
@@ -1472,8 +1476,10 @@ mod tests {
         }
         padded.extend_from_slice(&bit_length.to_be_bytes());
         padded
-            .chunks_exact(SHA256_BLOCK_BYTES)
-            .map(|block| block.try_into().expect("exact padded block"))
+            .as_chunks::<SHA256_BLOCK_BYTES>()
+            .0
+            .iter()
+            .map(|block| *block)
             .collect()
     }
 

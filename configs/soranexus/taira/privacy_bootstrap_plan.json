@@ -107,6 +107,6 @@
     "controller_observation_required": true,
     "mode": "ordered-restart-canary-convergence",
     "rollout_plan_path": "configs/soranexus/taira/privacy_rollout_plan_v1.json",
-    "rollout_plan_sha256": "57f6ba80eb0573d6f3161e51112be325f7b1465cc498eaeab4b61eb8725b0469"
+    "rollout_plan_sha256": "9997dfeb6c511130341a586a1065edd429b62f62acad8f995483d2458083230d"
   }
 }

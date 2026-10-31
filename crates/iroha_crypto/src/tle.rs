@@ -1012,9 +1012,8 @@ mod tests {
                 Ok(0)
             }
             fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
-                Ok({
-                    destination.fill(0);
-                })
+                destination.fill(0);
+                Ok(())
             }
         }
         impl rand::TryCryptoRng for ZeroRng {}

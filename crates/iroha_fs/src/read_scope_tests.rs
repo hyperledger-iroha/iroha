@@ -232,7 +232,7 @@ fn scoped_consumer_keeps_actual_native_deny_write_and_delete_ownership_until_ret
     let path = directory.path().join("first");
     let moved = directory.path().join("moved");
     let result = directory.read_scope(|reader| {
-        let semantic = reader.read("first", 5, |bytes| {
+        reader.read("first", 5, |bytes| {
             assert_eq!(bytes, b"first");
             assert!(std::fs::OpenOptions::new().write(true).open(&path).is_err());
             assert!(std::fs::rename(&path, &moved).is_err());
@@ -240,8 +240,7 @@ fn scoped_consumer_keeps_actual_native_deny_write_and_delete_ownership_until_ret
                 io::ErrorKind::InvalidData,
                 "semantic refusal",
             ))
-        })?;
-        semantic
+        })?
     });
     assert_eq!(result.unwrap_err().to_string(), "semantic refusal");
     assert!(!moved.exists());

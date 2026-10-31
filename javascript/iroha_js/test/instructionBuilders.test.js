@@ -44,6 +44,8 @@ import {
   buildReportKaigiRelayHealthInstruction,
   KAIGI_MAX_PARTICIPANTS_V1,
   KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
+  KAIGI_RELAY_HPKE_SUITES_V1,
+  buildKaigiRelayHpkeKeyV1,
   KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
@@ -586,6 +588,18 @@ function appendFinalizeProofAttachmentTail(encoded, tailPayload) {
   ]);
   return rebuildNoritoTestFrame(Buffer.from(encoded), rebuiltOuterPayload);
 }
+
+test("buildKaigiRelayHpkeKeyV1 prefixes the exact suite and rejects anything else", () => {
+  for (const [suite, { suiteId, publicKeyBytes }] of Object.entries(KAIGI_RELAY_HPKE_SUITES_V1)) {
+    const key = Buffer.alloc(publicKeyBytes, 0x5a);
+    const descriptor = buildKaigiRelayHpkeKeyV1(suite, key);
+    assert.equal(descriptor.readUInt16LE(0), suiteId);
+    assert.deepEqual(descriptor.subarray(2), key);
+    assert.ok(descriptor.length <= KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1);
+    assert.throws(() => buildKaigiRelayHpkeKeyV1(suite, key.subarray(1)), /exactly/u);
+  }
+  assert.throws(() => buildKaigiRelayHpkeKeyV1("x25519", Buffer.alloc(32)), /suite must be one of/u);
+});
 
 test("normalizeAccountId exported accepts encoded account IDs", () => {
   const canonical = exportedNormalizeAccountId(ACCOUNT_ID_INPUT);

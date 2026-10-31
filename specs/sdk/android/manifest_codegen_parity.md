@@ -43,15 +43,16 @@ builders can stay aligned with the Rust data model.
 
 ## 2. Instruction Coverage Snapshot
 
-- The current 112-discriminant exporter set spans 18 generator families sourced from
+- The current 111-discriminant exporter set spans 18 generator families sourced from
   `crates/iroha_data_model/src/isi/`, and every discriminant has a builder
   entry. The four boxed helpers use the short wire IDs `iroha.grant`,
   `iroha.revoke`, `iroha.set_key_value`, and `iroha.remove_key_value` while
   mapping to their fully qualified Rust types.
-- The previous 110-discriminant run has one Norito example per entry. The new
-  `ReportKaigiRelayHealth` and `UnregisterKaigiRelay` entries still need the
-  canonical generator rerun before fixture generation is complete. Android then
-  needs to bundle the examples into a signed manifest per release (see §4).
+- An earlier 110-discriminant run has one Norito example per entry. The new
+  `ReportKaigiRelayHealth`, `UnregisterKaigiRelay`, `AttestRuntimeSupportV1` and
+  `ContainRuntimeV1` entries still need the canonical generator rerun before
+  fixture generation is complete. Android then needs to bundle the examples into
+  a signed manifest per release (see §4).
 
 | Module | Count | Example discriminants |
 |---|---:|---|
@@ -66,7 +67,7 @@ builders can stay aligned with the Rust data model.
 | `transfer` | 6 | iroha.transfer, iroha.transfer_batch |
 | `smart_contract_code` | 8 | ActivateContractInstance, UploadSmartContractCodeChunk |
 | `repo` | 3 | iroha.repo.initiate, iroha.repo.reverse |
-| `runtime_upgrade` | 3 | iroha.runtime_upgrade.activate, iroha.runtime_upgrade.cancel |
+| `runtime_upgrade` | 2 | iroha.runtime.support.attest.v1, iroha.runtime.contain.v1 |
 | `settlement` | 3 | iroha.settlement.dvp, iroha.settlement.pvp |
 | `verifying_keys` | 2 | RegisterVerifyingKey, UpdateVerifyingKey |
 | `GrantBox` | 1 | iroha.grant |
@@ -162,11 +163,21 @@ artifacts are not generic transaction builders.
   must be called out explicitly because they share telemetry proofs across SDKs.
   Builders should surface relay manifest hashes and usage counters so Kaigi
   audits stay deterministic.
-- **Runtime upgrades (`runtime_upgrade.rs`).** `ProposeRuntimeUpgrade`,
-  `ActivateRuntimeUpgrade`, and `CancelRuntimeUpgrade` discriminate runtime
-  payloads with `abi_hash` gating. Android builders must embed the hash
-  validation rules described in `specs/ivm.md` and reuse the Norito
-  fixture used by the Rust admission tests.
+- **Runtime upgrades (`runtime_upgrade.rs`, `specs/live_runtime_upgrades.md`
+  §6).** Governed change sets replace the retired manifest instructions. A
+  Parliament `RuntimeUpgrade` proposal
+  (`iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal`) schedules
+  one `ChangeSetV1`, with the release signers' `ChangeSetEndorsementV1`s the
+  committed `runtime_provenance_policy_v1` requires, or cancels one scheduled
+  change-set id. Validators attest
+  support with `AttestRuntimeSupportV1` (`iroha.runtime.support.attest.v1`); a
+  scheduled change set activates at its effective height only when every
+  committee member attested and its notice elapsed, otherwise it lapses. There
+  is no activation instruction. The runtime emergency panel closes admission of
+  definitions with `ContainRuntimeV1` (`iroha.runtime.contain.v1`, §7.1), whose
+  endorsements authorize it.
+  The Kotlin `ParliamentApiV1` admits the closed proposal envelope and its
+  exact JSON integers and passes the change set through to node admission.
 - **Governance drafts (`governance.rs`).** ✅ Android now ships typed builders for
   certificate-only proposal instructions, `CreateParliamentGovernanceAttemptV1`,
   `SubmitParliamentLifecycleTransitionV1`, standalone `CastZkBallot` and

@@ -39,6 +39,18 @@ pub(super) fn validate_read_only(file: &File) -> io::Result<()> {
     Ok(())
 }
 
+pub(super) fn validate_executable(file: &File) -> io::Result<()> {
+    let metadata = validate_file(file, false)?;
+    if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o7777 != 0o500 {
+        return Err(denied(
+            "private executable requires current ownership and exact mode 0500",
+        ));
+    }
+    #[cfg(target_vendor = "apple")]
+    apple_acl::validate(file, true)?;
+    Ok(())
+}
+
 impl Directory {
     pub(crate) fn open_exact(path: &Path) -> io::Result<Self> {
         Self::open_with_policy(path, false, true, 0, false)
@@ -82,23 +94,41 @@ impl Directory {
         RetainedFile::open_read_only(self.clone(), name.to_owned())
     }
 
-    pub(crate) fn open_retained_private_optional(
+    pub(crate) fn open_retained_executable(&self, name: &OsStr) -> io::Result<RetainedFile> {
+        let mut file = self.open_retained(name, false, false)?;
+        file.executable = true;
+        file.revalidate()?;
+        Ok(file)
+    }
+
+    pub(crate) fn open_retained_optional(
         &self,
         name: &OsStr,
+        private: bool,
     ) -> io::Result<Option<RetainedFile>> {
-        let Some(file) = self.open_readonly_native(name, true)? else {
-            return Ok(None);
+        let file = match self.open_read(name) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
         };
-        let before = validate_file(&file, true)?;
+        let before = validate_file(&file, private)?;
+        #[cfg(test)]
+        before_readonly_named_open(name);
+        // Keep a later missing name as its native NotFound error before the retained
+        // single-link check can classify the now-unlinked original as unsafe custody.
+        if identity(&file)? != identity(&self.open_read(name)?)? {
+            return Err(changed());
+        }
         let retained = RetainedFile {
             directory: self.clone(),
             name: name.to_owned(),
             file,
             before,
             links: LinkPolicy::Single,
-            private: true,
+            private,
             writable: false,
             read_only: false,
+            executable: false,
             publication: PublicationAuthority::None,
             ancestry: AncestryCheck::EachCall,
         };
@@ -145,6 +175,7 @@ impl Directory {
             private: true,
             writable: false,
             read_only: true,
+            executable: false,
             publication: PublicationAuthority::None,
             ancestry,
         };
@@ -194,6 +225,7 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
             private: true,
             writable: true,
             read_only: false,
+            executable: false,
             publication: PublicationAuthority::ExclusiveCreation,
             ancestry: AncestryCheck::EachCall,
         };
@@ -223,6 +255,28 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
         self.before = validate_file(&self.file, true)?;
         self.writable = false;
         self.read_only = true;
+        self.directory.borrow().sync()?;
+        self.revalidate()?;
+        Ok(self)
+    }
+
+    pub(crate) fn seal_executable(mut self) -> io::Result<Self> {
+        if self.publication != PublicationAuthority::ExclusiveCreation || !self.writable {
+            return Err(denied(
+                "only a newly created writer may be sealed executable",
+            ));
+        }
+        self.revalidate()?;
+        self.file
+            .set_permissions(fs::Permissions::from_mode(0o500))?;
+        self.file.sync_all()?;
+        validate_executable(&self.file)?;
+        self.before = validate_file(&self.file, false)?;
+        // Executable custody has its own stricter leaf validator; ordinary private
+        // receipt admission continues to accept only 0400/0600, never 0500.
+        self.private = false;
+        self.writable = false;
+        self.executable = true;
         self.directory.borrow().sync()?;
         self.revalidate()?;
         Ok(self)
@@ -271,6 +325,7 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
             private: self.private,
             writable: self.writable,
             read_only: self.read_only,
+            executable: self.executable,
             publication: PublicationAuthority::None,
             ancestry: self.ancestry,
         };

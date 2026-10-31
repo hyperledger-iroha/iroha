@@ -77,6 +77,15 @@ pub fn validate(
     )
     .unwrap();
     let topology = Topology::new(chain.validators().iter().map(|(peer, _)| peer.clone()));
+    let uid_bindings =
+        iroha_core::state::asset_uid::binding_custody::retry::BindingPreparations::try_new(
+            chain
+                .state()
+                .world
+                .sccp_committee_generations
+                .allocation_budget(),
+        )
+        .expect("original native binding preparation bank");
     ValidBlock::validate_sumeragi_block(
         proposal,
         &topology,
@@ -89,7 +98,13 @@ pub fn validate(
         &bytes,
         chain.state(),
         None,
+        &uid_bindings,
         None,
+        &mut Default::default(),
+        &iroha_core::execution_attempt::PolicyDecodeControls::try_new(
+            &chain.state().ivm_execution_budget(),
+        )
+        .unwrap(),
     )
     .unpack(|_| {})
     .map(|(valid, _)| valid)

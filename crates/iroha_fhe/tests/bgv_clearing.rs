@@ -1094,10 +1094,10 @@ fn threshold_local_opening_clears_success_refusal_and_both_unwind_stages() {
         match scenario {
             0 => {
                 let ((), observation) = observe(POLYNOMIAL_BYTES, || {
-                    let plain = plan
+                    let plaintext = plan
                         .open_local(&profile, &cipher, local, budget)
                         .expect("open");
-                    assert_eq!(plain.coefficients(), expected.coefficients());
+                    assert_eq!(plaintext.coefficients(), expected.coefficients());
                 });
                 assert_cleared("local opening success", observation);
                 // Two inputs, two share products, c1, accumulator and returned plaintext.

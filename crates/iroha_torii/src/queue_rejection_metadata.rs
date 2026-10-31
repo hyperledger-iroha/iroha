@@ -20,7 +20,8 @@ impl Error {
                 StatusCode::BAD_REQUEST
             }
             queue::Error::UnsupportedTransactionAdmission { .. }
-            | queue::Error::UnresolvedRoute { .. } => StatusCode::BAD_REQUEST,
+            | queue::Error::UnresolvedRoute { .. }
+            | queue::Error::RuntimeRejected(_) => StatusCode::BAD_REQUEST,
             queue::Error::InBlockchain | queue::Error::IsInQueue => StatusCode::CONFLICT,
             queue::Error::UnregisteredAuthority { .. }
             | queue::Error::GovernanceNotPermitted { .. }
@@ -121,6 +122,11 @@ impl Error {
             queue::Error::AdmissionInvariant { .. } => (
                 "queue_admission_invariant",
                 "transaction queue admission requires recovery",
+            ),
+            // The stable code execution would commit for the same envelope.
+            queue::Error::RuntimeRejected(rejection) => (
+                rejection.code(),
+                "the committed runtime selection does not admit an instruction of the transaction",
             ),
         }
     }
@@ -256,6 +262,10 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
         queue::Error::AdmissionInvariant { reason } => (
             "PRTRY:QUEUE_ADMISSION_INVARIANT",
             format!("transaction queue admission requires recovery: {reason}"),
+        ),
+        queue::Error::RuntimeRejected(rejection) => (
+            "PRTRY:RUNTIME_REJECTED",
+            format!("{}: {rejection}", rejection.code()),
         ),
     }
 }

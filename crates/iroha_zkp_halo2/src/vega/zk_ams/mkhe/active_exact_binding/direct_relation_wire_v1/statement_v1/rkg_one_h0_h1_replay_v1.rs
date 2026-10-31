@@ -253,7 +253,7 @@ fn replay_limb<P>(
 where
     P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
 {
-    for residues in destination.chunks_exact_mut(RESIDUES_PER_READ_V1) {
+    for residues in destination.as_chunks_mut::<RESIDUES_PER_READ_V1>().0 {
         if transaction.read_next(provider, scratch)? != scratch.len() {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
         }

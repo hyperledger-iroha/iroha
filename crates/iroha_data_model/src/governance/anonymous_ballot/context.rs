@@ -770,8 +770,6 @@ mod context_wire_size_tests;
 
 #[cfg(test)]
 mod tests {
-    use norito::codec::{Decode as _, Encode as _};
-
     use super::*;
     use crate::governance::anonymous_ballot::{
         framing::{decode_enc, enc},

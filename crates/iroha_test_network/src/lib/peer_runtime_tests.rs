@@ -149,23 +149,69 @@ mod diagnostics_tests {
 #[cfg(test)]
 mod shutdown_tests {
     use super::*;
-    use std::process::Stdio;
+    use iroha_fs::{ProcessCommand as Command, ProcessStdio as Stdio};
     use tempfile::tempdir;
     use tokio::fs::File;
     use tokio::io::{AsyncWriteExt, duplex};
-    use tokio::process::Command;
+
+    const SHUTDOWN_FIXTURE_MODE: &str = "IROHA_TEST_PEER_SHUTDOWN_CHILD";
+
+    // Spawn this compiled Rust test executable, so native race controls never depend on sh.
+    fn shutdown_fixture_command(mode: &str) -> Command {
+        let mut command = Command::new(std::env::current_exe().expect("current test executable"))
+            .expect("absolute fixture executable");
+        let (_, module) = module_path!().split_once("::").expect("test module path");
+        command
+            .arg("--exact")
+            .arg(format!("{module}::peer_shutdown_child_fixture"))
+            .arg("--nocapture")
+            .env(SHUTDOWN_FIXTURE_MODE, mode)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        command
+    }
+
+    #[test]
+    fn peer_shutdown_child_fixture() {
+        let Ok(mode) = std::env::var(SHUTDOWN_FIXTURE_MODE) else {
+            return;
+        };
+        if mode == "exit" {
+            return;
+        }
+        assert!(matches!(mode.as_str(), "eof" | "ignore-eof"));
+        use std::io::Write as _;
+        let mut output = std::io::stdout().lock();
+        output.write_all(b"\npeer-shutdown-ready\n").expect("ready");
+        output.flush().expect("flush ready");
+        std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink())
+            .expect("read original input to EOF");
+        output
+            .write_all(b"peer-shutdown-eof\n")
+            .expect("EOF receipt");
+        output.flush().expect("flush EOF receipt");
+        if mode == "ignore-eof" {
+            std::thread::sleep(Duration::from_secs(60));
+        }
+    }
+
     #[cfg(target_family = "unix")]
     #[tokio::test]
     async fn shutdown_prefers_sigterm_before_sigquit() {
         let dir = tempdir().expect("tempdir");
         let signal_log = dir.path().join("signals.log");
-        let mut cmd = Command::new("sh");
+        let mut cmd = development_process_command("sh").expect("required Unix shell");
         cmd.arg("-c").arg(
             r#": > "$SIGNAL_LOG"; trap 'echo SIGTERM >> "$SIGNAL_LOG"; exit 0' TERM; trap 'echo SIGQUIT >> "$SIGNAL_LOG"; exit 0' QUIT; while true; do sleep 1; done"#,
         );
         cmd.env("SIGNAL_LOG", &signal_log);
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
-        let child = cmd.spawn().expect("spawn signal trapper");
+        let child = cmd
+            .spawn()
+            .and_then(ResolvedAsyncChild::from_development_child)
+            .expect("spawn signal trapper");
         let (events, _rx) = broadcast::channel(4);
         let (block_height, _rx) = watch::channel(None);
         let (_fatal_tx, fatal_rx) = watch::channel(false);
@@ -197,15 +243,24 @@ mod shutdown_tests {
     }
     #[tokio::test]
     async fn shutdown_treats_already_exited_child_as_graceful_completion() {
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg("exit 0");
-        cmd.stdout(Stdio::null()).stderr(Stdio::null());
-        let child = cmd.spawn().expect("spawn short-lived child");
+        let mut child = shutdown_fixture_command("exit")
+            .spawn()
+            .and_then(ResolvedAsyncChild::from_development_child)
+            .expect("spawn compiled short-lived child");
+        #[cfg(windows)]
+        let shutdown_input = child.stdin.take();
+        let status = timeout(Duration::from_secs(10), child.wait())
+            .await
+            .expect("short-lived child exit deadline")
+            .expect("short-lived child wait");
+        assert!(status.success());
         let (events, _rx) = broadcast::channel(4);
         let (block_height, _rx) = watch::channel(None);
         let (_fatal_tx, fatal_rx) = watch::channel(false);
         let mut peer_exit = PeerExit {
             child,
+            #[cfg(windows)]
+            shutdown_input,
             span: tracing::Span::none(),
             is_running: Arc::new(AtomicBool::new(true)),
             is_normal_shutdown_started: Arc::new(AtomicBool::new(false)),
@@ -215,7 +270,6 @@ mod shutdown_tests {
             stderr_log_ready: Arc::new(Notify::new()),
             stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
         };
-        tokio::time::sleep(Duration::from_millis(50)).await;
         let status = peer_exit
             .shutdown_or_kill()
             .await
@@ -227,16 +281,25 @@ mod shutdown_tests {
     }
     #[tokio::test]
     async fn monitor_handles_shutdown_race_after_child_already_exited() {
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg("exit 0");
-        cmd.stdout(Stdio::null()).stderr(Stdio::null());
-        let child = cmd.spawn().expect("spawn short-lived child");
+        let mut child = shutdown_fixture_command("exit")
+            .spawn()
+            .and_then(ResolvedAsyncChild::from_development_child)
+            .expect("spawn compiled short-lived child");
+        #[cfg(windows)]
+        let shutdown_input = child.stdin.take();
+        let status = timeout(Duration::from_secs(10), child.wait())
+            .await
+            .expect("short-lived child exit deadline")
+            .expect("short-lived child wait");
+        assert!(status.success());
         let (events, _rx) = broadcast::channel(4);
         let (block_height, _rx) = watch::channel(None);
         let (_fatal_tx, fatal_rx) = watch::channel(false);
         let stderr_log_ready = Arc::new(Notify::new());
         let peer_exit = PeerExit {
             child,
+            #[cfg(windows)]
+            shutdown_input,
             span: tracing::Span::none(),
             is_running: Arc::new(AtomicBool::new(true)),
             is_normal_shutdown_started: Arc::new(AtomicBool::new(false)),
@@ -246,7 +309,6 @@ mod shutdown_tests {
             stderr_log_ready: Arc::clone(&stderr_log_ready),
             stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
         };
-        tokio::time::sleep(Duration::from_millis(50)).await;
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(10)).await;
             stderr_log_ready.notify_waiters();
@@ -260,6 +322,153 @@ mod shutdown_tests {
             .expect("peer monitor should complete")
             .expect("already-exited child should be treated as graceful during shutdown race");
     }
+    #[cfg(windows)]
+    async fn native_eof_fixture(
+        mode: &str,
+    ) -> (
+        PeerExit,
+        tokio::io::BufReader<tokio::process::ChildStdout>,
+        watch::Sender<bool>,
+    ) {
+        use tokio::io::AsyncBufReadExt as _;
+        let mut command = shutdown_fixture_command(mode);
+        command.stdout(Stdio::piped());
+        let mut child = command
+            .spawn()
+            .and_then(ResolvedAsyncChild::from_development_child)
+            .expect("spawn native EOF child");
+        let shutdown_input = Some(child.stdin.take().expect("original stdin writer"));
+        let mut output = tokio::io::BufReader::new(child.stdout.take().expect("child stdout"));
+        timeout(Duration::from_secs(10), async {
+            loop {
+                let mut line = String::new();
+                assert_ne!(output.read_line(&mut line).await.expect("read ready"), 0);
+                if line.trim_end() == "peer-shutdown-ready" {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("native child readiness");
+        let (events, _rx) = broadcast::channel(4);
+        let (block_height, _rx) = watch::channel(None);
+        let (fatal_tx, fatal_rx) = watch::channel(false);
+        let stderr_log_ready = Arc::new(Notify::new());
+        stderr_log_ready.notify_one();
+        let peer = PeerExit {
+            child,
+            shutdown_input,
+            span: tracing::Span::none(),
+            is_running: Arc::new(AtomicBool::new(true)),
+            is_normal_shutdown_started: Arc::new(AtomicBool::new(false)),
+            events,
+            block_height,
+            fatal_rx,
+            stderr_log_ready,
+            stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
+        };
+        (peer, output, fatal_tx)
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn native_shutdown_closes_original_input_and_waits_for_clean_exit() {
+        use tokio::io::AsyncReadExt as _;
+        let (mut peer, mut output, _fatal_tx) = native_eof_fixture("eof").await;
+        assert!(peer.child.try_wait().expect("child is live").is_none());
+        assert!(peer.shutdown_input.is_some());
+        let status = timeout(Duration::from_secs(3), peer.shutdown_or_kill())
+            .await
+            .expect("EOF must finish before the force-kill deadline")
+            .expect("graceful EOF shutdown");
+        assert!(
+            status.success(),
+            "graceful handler must complete: {status:?}"
+        );
+        assert!(peer.shutdown_input.is_none());
+        let mut receipt = String::new();
+        output
+            .read_to_string(&mut receipt)
+            .await
+            .expect("EOF receipt");
+        assert!(receipt.contains("peer-shutdown-eof"));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn native_monitor_retains_input_until_shutdown_is_requested() {
+        use tokio::io::AsyncReadExt as _;
+        let (peer, mut output, _fatal_tx) = native_eof_fixture("eof").await;
+        let running = Arc::clone(&peer.is_running);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let monitor = peer.monitor(shutdown_rx);
+        tokio::pin!(monitor);
+        assert!(
+            timeout(Duration::from_millis(100), &mut monitor)
+                .await
+                .is_err(),
+            "ordinary Child::wait must not close the supervisor's original input"
+        );
+        assert!(running.load(Ordering::Relaxed));
+        shutdown_tx.send(()).expect("request shutdown");
+        timeout(Duration::from_secs(3), monitor)
+            .await
+            .expect("native monitor exits after EOF")
+            .expect("native monitor succeeds");
+        assert!(!running.load(Ordering::Relaxed));
+        let mut receipt = String::new();
+        output
+            .read_to_string(&mut receipt)
+            .await
+            .expect("EOF receipt");
+        assert!(receipt.contains("peer-shutdown-eof"));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn native_shutdown_escalates_only_after_unresponsive_eof_child() {
+        use tokio::io::AsyncReadExt as _;
+        let (mut peer, mut output, _fatal_tx) = native_eof_fixture("ignore-eof").await;
+        let started = Instant::now();
+        let status = timeout(Duration::from_secs(12), peer.shutdown_or_kill())
+            .await
+            .expect("bounded forced shutdown")
+            .expect("forced child exit is reaped");
+        assert!(started.elapsed() >= Duration::from_secs(5));
+        assert!(
+            !status.success(),
+            "unresponsive child must not claim clean shutdown"
+        );
+        assert!(peer.shutdown_input.is_none());
+        let mut receipt = String::new();
+        output
+            .read_to_string(&mut receipt)
+            .await
+            .expect("EOF receipt");
+        assert!(
+            receipt.contains("peer-shutdown-eof"),
+            "EOF precedes escalation"
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn native_run_config_owns_stdin_lifecycle_after_caller_layers() {
+        let environment = Environment::new();
+        let peer = NetworkPeer::builder().build(&environment);
+        let caller = Table::new().write(["lifecycle", "exit_on_stdin_close"], false);
+        let path = peer
+            .write_run_config(std::iter::once(Arc::new(caller)), None, None, 1)
+            .await
+            .expect("write native supervisor config");
+        let config: Table = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(
+            config["lifecycle"]["exit_on_stdin_close"].as_bool(),
+            Some(true),
+            "the final node file overrides caller lifecycle layers"
+        );
+    }
+
     #[tokio::test]
     async fn reaping_terminated_runs_drains_tasks_before_releasing_lifecycle_ownership() {
         let env = Environment::new();

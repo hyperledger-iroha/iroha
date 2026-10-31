@@ -766,7 +766,7 @@ fn live_manifest_dependency_refusal_preserves_original_route_and_retry() {
     let pointers = original.each_ref().map(|value| value.get().as_ptr());
     let registration: KaigiRelayRegistration = original[1].try_into_any_norito().unwrap();
     let mut rotated = registration.clone();
-    rotated.hpke_public_key = vec![0xAA, 0xBB];
+    rotated.hpke_public_key = test_relay_hpke_key(0xAB);
     let registry = block.world.kaigi_relay_registry.get(&relay).cloned();
     let dependencies = block.world.kaigi_account_dependencies.get(&relay).cloned();
     assert!(dependencies.as_ref().unwrap().iter().any(|dependency| {

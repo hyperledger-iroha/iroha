@@ -160,7 +160,7 @@ pub struct PrivacyStatementContextV1 {
     pub action_index: u32,
     /// Canonical transaction binding. Ordinary privacy statements use the normalized
     /// privacy transaction projection. Attached X.509 statements use the original
-    /// signed ActionStatementV1 digest, binding its ordered intent, operation,
+    /// signed `ActionStatementV1` digest, binding its ordered intent, operation,
     /// authority, invocation and proof-free inputs. The proof-free X.509 request
     /// requires ZERO here; only canonical materialization fills this derived value.
     pub transaction_intent_digest: PrivacyTransactionIntentDigestV1,

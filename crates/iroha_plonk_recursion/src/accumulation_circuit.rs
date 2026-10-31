@@ -639,13 +639,11 @@ impl<C: PastaCurve> VerifierChip<C> {
         let bound_inputs = match binding {
             InputBinding::Exact => inputs,
             InputBinding::Terminal { descriptor, raw } => {
-                for limb in descriptor.chunks_exact(16) {
-                    words.push(self.glue.constant(
-                        region,
-                        C::Base::from_u128(u128::from_le_bytes(
-                            limb.try_into().map_err(|_| Error::Synthesis)?,
-                        )),
-                    )?);
+                for limb in descriptor.as_chunks::<16>().0 {
+                    words.push(
+                        self.glue
+                            .constant(region, C::Base::from_u128(u128::from_le_bytes(*limb)))?,
+                    );
                 }
                 words.push(raw.clone());
                 // The complete A own-opening claim is NOT in its first prefix.

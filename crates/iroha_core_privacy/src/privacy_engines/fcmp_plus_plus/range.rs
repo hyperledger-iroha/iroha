@@ -1054,7 +1054,7 @@ impl SecretMultiexpBuilder {
     }
 }
 fn random_nonzero_scalar(
-    rng: &mut (impl TryRng + TryCryptoRng),
+    rng: &mut (impl TryCryptoRng),
 ) -> Result<Zeroizing<Scalar>, FcmpNativeErrorV1> {
     for _ in 0..MAX_SCALAR_SAMPLING_ATTEMPTS_V1 {
         let mut wide = Zeroizing::new([0_u8; 64]);
@@ -1309,7 +1309,7 @@ fn next_wip_generators(
     reason = "Taking ownership ensures every accepted secret is zeroized on success, failure, and unwind before the caller can reuse it."
 )]
 fn prove_wip(
-    rng: &mut (impl TryRng + TryCryptoRng),
+    rng: &mut (impl TryCryptoRng),
     generators: BpPlusGenerators,
     commitment: EdwardsPoint,
     weight: Scalar,
@@ -1635,7 +1635,7 @@ fn verify_wip(
     Ok(())
 }
 fn prove_range_once(
-    rng: &mut (impl TryRng + TryCryptoRng),
+    rng: &mut (impl TryCryptoRng),
     mode: TranscriptMode,
     openings: &[FcmpOutputCommitmentOpeningV1],
 ) -> Result<FcmpRangeProofV1, FcmpNativeErrorV1> {
@@ -1781,7 +1781,7 @@ fn preflight_fcmp_range_v1(
 /// # Errors
 /// Rejects invalid openings, unhealthy randomness, proof construction failures, or a failed prover self-check.
 pub fn prove_fcmp_range_v1(
-    rng: &mut (impl TryRng + TryCryptoRng),
+    rng: &mut (impl TryCryptoRng),
     context_hash: [u8; 32],
     openings: &[FcmpOutputCommitmentOpeningV1],
 ) -> Result<FcmpRangeProofV1, FcmpNativeErrorV1> {
@@ -1793,7 +1793,7 @@ pub fn prove_fcmp_range_v1(
     Ok(proof)
 }
 pub(super) fn prove_fcmp_range_with_checked_rng_v1(
-    rng: &mut (impl TryRng + TryCryptoRng),
+    rng: &mut (impl TryCryptoRng),
     context_hash: [u8; 32],
     openings: &[FcmpOutputCommitmentOpeningV1],
 ) -> Result<FcmpRangeProofV1, FcmpNativeErrorV1> {

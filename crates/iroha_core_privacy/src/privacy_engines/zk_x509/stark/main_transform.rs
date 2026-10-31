@@ -26,6 +26,12 @@ mod selected_coset;
 pub(super) struct MainTransformReceiptV1 {
     cpu_columns: usize,
     metal_columns: usize,
+    #[cfg(test)]
+    observe_full_cpu_routes: bool,
+    #[cfg(test)]
+    full_dense_cpu_columns: usize,
+    #[cfg(test)]
+    full_prefix_cpu_columns: usize,
 }
 
 // The full MAIN layout's largest masked polynomial is native log19 plus its
@@ -458,6 +464,7 @@ impl MainTraceCosetEvaluatorV1 {
             // allocations. This also releases it before partial-column batches.
             selected_scratch.release_v1();
         }
+        let prefix_full_batch = selected.is_none() && columns.len() == 8;
         // Selection follows complete original validation and the outer
         // uncertain-completion check, before allocating any device words.
         if self.device_columns == 0 || use_horner || use_pruned_fft {
@@ -475,6 +482,11 @@ impl MainTraceCosetEvaluatorV1 {
                     .map(|column| {
                         selected.map_or_else(
                             || {
+                                if prefix_full_batch {
+                                    return selected_coset::evaluate_full_v1(
+                                        column, native_log, common_log,
+                                    );
+                                }
                                 masked_trace_coefficients_on_coset_v1(
                                     column, native_log, common_log,
                                 )
@@ -496,6 +508,14 @@ impl MainTraceCosetEvaluatorV1 {
                     })
                     .collect::<Result<Vec<_>, _>>()?
             };
+            #[cfg(test)]
+            if self.receipt.observe_full_cpu_routes && selected.is_none() {
+                if prefix_full_batch {
+                    self.receipt.full_prefix_cpu_columns += columns.len();
+                } else {
+                    self.receipt.full_dense_cpu_columns += columns.len();
+                }
+            }
             self.receipt.cpu_columns += columns.len();
             #[cfg(test)]
             prover_observation::completed_transform_v1(false, columns.len());
@@ -1334,6 +1354,10 @@ mod tests {
 #[cfg(test)]
 #[path = "main_common22_coarse_diagnostic_tests.rs"]
 mod common22_coarse_diagnostic_tests;
+
+#[cfg(test)]
+#[path = "main_full_dispatch_tests.rs"]
+mod full_dispatch_tests;
 
 #[cfg(test)]
 #[path = "main_public_coset_powers_tests.rs"]

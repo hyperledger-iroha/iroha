@@ -1,12 +1,13 @@
-//! Retained current attestations: bounded request reads, unchanged signed bodies and
-//! the stated historical-corruption interval.
+//! Retained current attestations: bounded request reads, unchanged signed bodies, the
+//! stated historical-corruption interval, and admissions that hold from proof through
+//! signing to release.
 
 use super::*;
 use crate::{
     state::World,
     sumeragi::{
         certified_chain::relation_counts,
-        finality::{AttestationBuildError, build_attestation},
+        finality::{AttestationBuildError, build_attestation, build_attestation_with_release},
         node::NodeIdentity,
         test_chain::{CertifiedTestChain, TestChainConfig},
     },
@@ -48,25 +49,27 @@ fn status_at(chain: &CertifiedTestChain, height: u64) -> SumeragiStatus {
     }
 }
 
+fn identity() -> NodeIdentity {
+    NodeIdentity {
+        node_id: iroha_model_base::peer::PeerId::new(installed_signer().public_key().clone()),
+        config_fingerprint: Hash::new(b"exact attestation proof reader configuration"),
+    }
+}
+
 fn attest(
     view: &impl StateReadOnly,
     status: SumeragiStatus,
     height: u64,
     challenge: [u8; 32],
 ) -> Result<SumeragiFinalityAttestation, AttestationBuildError> {
-    let signer = installed_signer();
-    let identity = NodeIdentity {
-        node_id: iroha_model_base::peer::PeerId::new(signer.public_key().clone()),
-        config_fingerprint: Hash::new(b"exact attestation proof reader configuration"),
-    };
     build_attestation(
         view,
         status,
-        &identity,
+        &identity(),
         Hash::new(b"exact attestation proof reader build"),
         height,
         challenge,
-        &signer,
+        &installed_signer(),
     )
 }
 
@@ -81,6 +84,30 @@ fn attest_tip(
         chain.height(),
         challenge,
     )
+}
+
+// A route's statement: signed now, released later.
+fn attest_tip_released(
+    chain: &CertifiedTestChain,
+    challenge: [u8; 32],
+) -> Result<(SumeragiFinalityAttestation, AttestationRelease), AttestationBuildError> {
+    let view = chain.state().view();
+    build_attestation_with_release(
+        &view,
+        status_at(chain, chain.height()),
+        &identity(),
+        Hash::new(b"exact attestation proof reader build"),
+        chain.height(),
+        challenge,
+        &installed_signer(),
+    )
+}
+
+fn retained_refusal(error: AttestationBuildError) -> RetainedUnavailable {
+    match error {
+        AttestationBuildError::FinalityProof(ProofError::RetainedUnavailable(refusal)) => refusal,
+        other => panic!("expected a temporary retained-authority refusal, got {other:?}"),
+    }
 }
 
 fn chain_at(height: u64) -> CertifiedTestChain {
@@ -139,7 +166,8 @@ fn early_attestations_with_attached_producer_keep_complete_native_proofs() {
             }
         );
         assert_eq!(checked.qcs, if height == 1 { vec![] } else { vec![2] });
-        assert!(retained_attestation_releasable(chain.state(), height));
+        let (_, release) = attest_tip_released(&chain, [81; 32]).unwrap();
+        assert!(retained_attestation_releasable(chain.state(), &release));
 
         let tip = NonZeroUsize::new(height as usize).unwrap();
         chain.kura().corrupt_native_frame_for_test(tip);
@@ -157,10 +185,13 @@ fn early_attestations_preserve_poison_and_later_unminted_refusal() {
     for height in [1, 2, 3] {
         let chain = chain_at(height);
         let _producer = RetainedAttestationProducer::attach(Arc::clone(chain.state())).unwrap();
+        let early = (height <= 2).then(|| attest_tip_released(&chain, [84; 32]).unwrap().1);
         if height > 2 {
-            let error = attest_tip(&chain, [84; 32]).unwrap_err();
-            assert!(error.to_string().contains("not minted"));
-            assert!(!retained_attestation_releasable(chain.state(), height));
+            assert_eq!(
+                retained_refusal(attest_tip(&chain, [84; 32]).unwrap_err()),
+                RetainedUnavailable::NotMinted,
+                "an attached authority that has not minted is temporarily unavailable"
+            );
         }
         chain
             .kura()
@@ -168,7 +199,9 @@ fn early_attestations_preserve_poison_and_later_unminted_refusal() {
             .poison("test historical contradiction");
         let error = attest_tip(&chain, [85; 32]).unwrap_err();
         assert!(error.to_string().contains("poisoned"));
-        assert!(!retained_attestation_releasable(chain.state(), height));
+        if let Some(release) = early {
+            assert!(!retained_attestation_releasable(chain.state(), &release));
+        }
     }
 }
 
@@ -236,13 +269,78 @@ fn historical_corruption_is_detected_by_the_scrub_not_the_next_challenge() {
 }
 
 #[test]
+fn a_refused_walk_withdraws_the_authority_before_it_is_classified() {
+    let chain = chain_at(12);
+    let mut producer = minted(&chain);
+    let holder = chain.kura().retained_attestation();
+    let (_, signed) = attest_tip_released(&chain, [96; 32]).unwrap();
+    let view = chain.state().view();
+    let genesis = holder.current().unwrap().genesis;
+    let admitted = holder.admit(&view, 12, &genesis).unwrap();
+    let at = NonZeroUsize::new(6).unwrap();
+    chain.kura().corrupt_native_frame_for_test(at);
+    producer.next_scrub = Instant::now();
+    producer.step();
+    // The scrub recorded the contradiction; it is classified only on the next step,
+    // which busy or non-durable State could delay indefinitely.
+    assert!(producer.fault.is_some());
+    assert!(!holder.poisoned.load(Ordering::Acquire));
+    assert_eq!(
+        retained_refusal(attest_tip(&chain, [97; 32]).unwrap_err()),
+        RetainedUnavailable::NotMinted,
+        "no new request admits meanwhile"
+    );
+    assert!(
+        holder.check(admitted).is_err(),
+        "a request admitted before the contradiction cannot sign"
+    );
+    assert!(
+        !retained_attestation_releasable(chain.state(), &signed),
+        "a statement signed before it cannot leave the node"
+    );
+    producer.step();
+    assert!(holder.poisoned.load(Ordering::Acquire));
+    chain.kura().corrupt_native_frame_for_test(at);
+}
+
+#[test]
+fn an_admission_refuses_once_its_producer_detaches_or_mints_again() {
+    let chain = chain_at(12);
+    let producer = minted(&chain);
+    let holder = chain.kura().retained_attestation();
+    let view = chain.state().view();
+    let genesis = holder.current().unwrap().genesis;
+    let admitted = holder.admit(&view, 12, &genesis).unwrap();
+    assert!(matches!(admitted, RetainedAdmission::Retained { .. }));
+    let (_, signed) = attest_tip_released(&chain, [98; 32]).unwrap();
+    assert!(retained_attestation_releasable(chain.state(), &signed));
+    drop(producer);
+    assert!(
+        holder.check(admitted).is_err(),
+        "a fast-path request paused before signing refuses after detach"
+    );
+    assert!(!retained_attestation_releasable(chain.state(), &signed));
+    // A fresh detached request takes the complete walk and releases.
+    let (_, walked) = attest_tip_released(&chain, [99; 32]).unwrap();
+    assert!(retained_attestation_releasable(chain.state(), &walked));
+    let _again = minted(&chain);
+    assert!(
+        holder.check(admitted).is_err(),
+        "a newly minted authority is not the admitted one"
+    );
+    assert!(!retained_attestation_releasable(chain.state(), &signed));
+    assert!(retained_attestation_releasable(chain.state(), &walked));
+}
+
+#[test]
 fn a_clean_scrub_pass_renews_expired_coverage() {
     let chain = chain_at(12);
     let mut producer = minted(&chain);
     let holder = chain.kura().retained_attestation();
     expire_coverage(holder);
-    assert!(
-        attest_tip(&chain, [76; 32]).is_err(),
+    assert_eq!(
+        retained_refusal(attest_tip(&chain, [76; 32]).unwrap_err()),
+        RetainedUnavailable::CoverageExpired,
         "expired coverage refuses"
     );
     producer.next_scrub = Instant::now();
@@ -258,8 +356,9 @@ fn a_lagging_authority_refuses_until_the_producer_advances() {
     for _ in 0..=MAX_LEAD {
         chain.commit(Vec::new());
     }
-    assert!(
-        attest_tip(&chain, [78; 32]).is_err(),
+    assert_eq!(
+        retained_refusal(attest_tip(&chain, [78; 32]).unwrap_err()),
+        RetainedUnavailable::NotCovered,
         "a view more than MAX_LEAD ahead of the published tip refuses"
     );
     producer.step();
@@ -269,6 +368,69 @@ fn a_lagging_authority_refuses_until_the_producer_advances() {
     // A short lead is served directly; the producer closes it on its next step.
     chain.commit(Vec::new());
     attest_tip(&chain, [80; 32]).unwrap();
+}
+
+#[test]
+fn a_short_lead_is_authenticated_by_the_request() {
+    let mut chain = chain_at(12);
+    let _producer = minted(&chain);
+    for _ in 0..3 {
+        chain.commit(Vec::new());
+    }
+    let at = NonZeroUsize::new(13).unwrap();
+    chain.kura().corrupt_native_frame_for_test(at);
+    assert!(
+        attest_tip(&chain, [100; 32]).is_err(),
+        "a corrupt frame inside the lead refuses although the target pair is intact"
+    );
+    chain.kura().corrupt_native_frame_for_test(at);
+    let (attested, read) = relation_counts::measure(|| attest_tip(&chain, [101; 32]));
+    attested.unwrap();
+    assert!(
+        (13..=15).all(|height| read.frames.contains(&height)),
+        "every lead frame is read: {:?}",
+        read.frames
+    );
+    assert!(
+        read.frames
+            .iter()
+            .all(|height| [1, 13, 14, 15].contains(height)),
+        "nothing at or below the retained tip but genesis is read: {:?}",
+        read.frames
+    );
+}
+
+#[test]
+fn coverage_compares_the_full_native_identity() {
+    let chain = chain_at(12);
+    let mut producer = minted(&chain);
+    let holder = chain.kura().retained_attestation();
+    {
+        let mut slot = holder.published.write();
+        let mut replaced = Published::clone(slot.as_ref().unwrap());
+        let other = replaced
+            .tip
+            .with_result_for_test(iroha_sumeragi::types::Hash32([0xBB; 32]));
+        replaced.tip = other;
+        replaced.recent = Arc::from([other]);
+        *slot = Some(Arc::new(replaced));
+    }
+    // The same height and Iroha hash with another execution result is not this view's
+    // authority.
+    assert_eq!(
+        retained_refusal(attest_tip(&chain, [102; 32]).unwrap_err()),
+        RetainedUnavailable::NotCovered
+    );
+    assert!(!holder.poisoned.load(Ordering::Acquire));
+    // The State no longer holds the retained identity, so the producer mints again.
+    assert!(producer.step());
+    producer.step();
+    let tip = chain.state().view().native_execution_tip().unwrap();
+    assert_eq!(
+        holder.current().unwrap().tip,
+        AuthenticatedExecutionIdentity::tip(tip)
+    );
+    attest_tip(&chain, [103; 32]).unwrap();
 }
 
 #[test]
@@ -348,14 +510,33 @@ fn concurrent_current_attestations_share_one_retained_authority() {
 }
 
 #[test]
-fn release_recheck_follows_the_retained_authority() {
+fn release_follows_the_admitted_authority() {
     let chain = chain_at(12);
+    let (_, walked) = attest_tip_released(&chain, [86; 32]).unwrap();
     assert!(
-        retained_attestation_releasable(chain.state(), 12),
-        "a detached store releases"
+        retained_attestation_releasable(chain.state(), &walked),
+        "a detached store's complete walk releases"
     );
     let _producer = minted(&chain);
-    assert!(retained_attestation_releasable(chain.state(), 12));
+    assert!(
+        retained_attestation_releasable(chain.state(), &walked),
+        "a complete walk needs no retained authority"
+    );
+    let (_, retained) = attest_tip_released(&chain, [87; 32]).unwrap();
+    assert!(retained_attestation_releasable(chain.state(), &retained));
     expire_coverage(chain.kura().retained_attestation());
-    assert!(!retained_attestation_releasable(chain.state(), 12));
+    assert!(
+        !retained_attestation_releasable(chain.state(), &retained),
+        "coverage that expires after signing refuses release"
+    );
+    chain.kura().retained_attestation().revoke();
+    assert!(!retained_attestation_releasable(chain.state(), &retained));
+    chain
+        .kura()
+        .retained_attestation()
+        .poison("test historical contradiction");
+    assert!(
+        !retained_attestation_releasable(chain.state(), &walked),
+        "poison refuses every release"
+    );
 }

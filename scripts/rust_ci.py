@@ -765,10 +765,26 @@ def _git_nul_paths(command: Sequence[str], *, root: Path) -> tuple[str, ...]:
     return tuple(path for path in _run(command, cwd=root).stdout.split("\0") if path)
 
 
+def configured_base_ref(root: Path = ROOT) -> str | None:
+    """Return the integration branch recorded in ci/default_base_ref, when there is one."""
+
+    try:
+        lines = (root / "ci" / "default_base_ref").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        value = line.split("#", 1)[0].strip()
+        if value:
+            return value
+    return None
+
+
 def default_base(root: Path = ROOT) -> str | None:
     """Choose a discoverable local comparison base without network access."""
 
-    for reference in ("origin/main", "@{upstream}", "HEAD^"):
+    configured = configured_base_ref(root)
+    references = (*((configured,) if configured else ()), "origin/main", "@{upstream}", "HEAD^")
+    for reference in references:
         result = subprocess.run(
             ("git", "rev-parse", "--verify", "--quiet", reference),
             cwd=root,

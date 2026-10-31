@@ -101,7 +101,7 @@ impl<F: PastaField> PoseidonParams<F> {
         if bytes.len() != TABLE_BYTES {
             return None;
         }
-        let mut words = bytes.chunks_exact(32).map(|chunk| {
+        let mut words = bytes.as_chunks::<32>().0.iter().map(|chunk| {
             let mut repr = [0u8; 32];
             repr.copy_from_slice(chunk);
             Option::<F>::from(F::from_repr(repr))

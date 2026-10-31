@@ -1847,7 +1847,9 @@ where
             .checked_mul(core::mem::size_of::<u64>())
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         for (encoded, coefficient) in scratch[..encoded_bytes]
-            .chunks_exact_mut(core::mem::size_of::<u64>())
+            .as_chunks_mut::<{ core::mem::size_of::<u64>() }>()
+            .0
+            .iter_mut()
             .zip(chunk)
         {
             encoded.copy_from_slice(&coefficient.to_be_bytes());
@@ -2568,7 +2570,9 @@ where
             .checked_mul(core::mem::size_of::<u64>())
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         for (encoded, coefficient) in scratch[..encoded_bytes]
-            .chunks_exact_mut(core::mem::size_of::<u64>())
+            .as_chunks_mut::<{ core::mem::size_of::<u64>() }>()
+            .0
+            .iter_mut()
             .zip(chunk)
         {
             encoded.copy_from_slice(&coefficient.to_be_bytes());

@@ -23,7 +23,9 @@ fn retained_route_world() -> (World, DomainId, KaigiId, KaigiRelayManifest, Acco
                 let (relay_id, _) = gen_account_in("kaigi-route-restore");
                 KaigiRelayHop {
                     relay_id,
-                    hpke_public_key: vec![u8::try_from(index + 1).expect("bounded key byte")],
+                    hpke_public_key: test_relay_hpke_key(
+                        u8::try_from(index + 1).expect("bounded key byte"),
+                    ),
                     weight: 1,
                 }
             })
@@ -89,7 +91,7 @@ fn restore_rejects_missing_or_key_mismatched_active_relay_descriptor_without_rew
                     key,
                     Json::try_new(KaigiRelayRegistration {
                         relay_id: hop.relay_id.clone(),
-                        hpke_public_key: vec![0xAA],
+                        hpke_public_key: test_relay_hpke_key(0xAA),
                         bandwidth_class: 1,
                     })
                     .expect("serialize stale registered key"),

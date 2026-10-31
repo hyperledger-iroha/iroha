@@ -274,46 +274,51 @@ mod tests {
             .expect("permissioned consensus should be allowed");
     }
     #[test]
-    fn consensus_validation_rejects_authority_mismatched_with_embedded_topology() {
-        let topology = (0..4)
-            .map(|_| {
-                let key_pair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
-                    .expect("generate topology key");
-                let pop = bls_normal_pop_prove(key_pair.private_key())
-                    .expect("generate topology proof of possession");
-                GenesisTopologyEntry::new(
-                    iroha_model_base::peer::PeerId::new(key_pair.public_key().clone()),
-                    pop,
+    fn consensus_validation_admits_only_an_exact_embedded_committee_as_generation_zero() {
+        let manifest_with_validators = |validators: usize| {
+            let topology = (0..validators)
+                .map(|_| {
+                    let key_pair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+                        .expect("generate topology key");
+                    let pop = bls_normal_pop_prove(key_pair.private_key())
+                        .expect("generate topology proof of possession");
+                    GenesisTopologyEntry::new(
+                        iroha_model_base::peer::PeerId::new(key_pair.public_key().clone()),
+                        pop,
+                    )
+                })
+                .collect();
+            super::super::complete_test_genesis_builder(
+                GenesisBuilder::new_without_executor(
+                    ChainId::from("embedded-generation-zero"),
+                    PathBuf::from("."),
+                    iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                        iroha_crypto::Algorithm::Ed25519,
+                        iroha_crypto::Algorithm::Secp256k1,
+                        iroha_crypto::Algorithm::BlsNormal,
+                    ])
+                    .expect("explicit canonical genesis producer policy"),
                 )
-            })
-            .collect();
-        let manifest = super::super::complete_test_genesis_builder(
-            GenesisBuilder::new_without_executor(
-                ChainId::from("mismatched-authority"),
-                PathBuf::from("."),
-                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
-                    iroha_crypto::Algorithm::Ed25519,
-                    iroha_crypto::Algorithm::Secp256k1,
-                    iroha_crypto::Algorithm::BlsNormal,
-                ])
-                .expect("explicit canonical genesis producer policy"),
+                .with_staking_policy(crate::genesis::test_staking_policy())
+                .expect("explicit fixture staking policy")
+                .set_topology(topology),
             )
-            .with_staking_policy(crate::genesis::test_staking_policy())
-            .expect("explicit fixture staking policy")
-            .set_topology(topology),
-        )
-        .build_raw()
-        .expect("complete mismatched validation fixture")
-        .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-        .with_consensus_meta()
-        .expect("valid fixture consensus parameters");
+            .build_raw()
+            .expect("complete validation fixture")
+            .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters")
+        };
 
-        let error = validate_consensus_manifest(&manifest)
-            .expect_err("embedded topology must match the KAGEMUSHA authority exactly");
+        // The embedded BLS roster is generation zero; no separate authority can disagree with it.
+        validate_consensus_manifest(&manifest_with_validators(4))
+            .expect("an exact 3f+1 embedded topology is generation zero");
+        let error = validate_consensus_manifest(&manifest_with_validators(3))
+            .expect_err("a short embedded topology is not an exact committee");
         assert!(
             error
                 .to_string()
-                .contains("does not match the exact genesis topology"),
+                .contains("exact Sumeragi `3f + 1` topology"),
             "unexpected error: {error:#}"
         );
     }

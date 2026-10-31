@@ -174,7 +174,12 @@ impl<F: PastaField> Circuit<F> for Dot<F> {
                         ForeignModulus::PASTA_FP
                     };
                 }
-                let pairs: Vec<_> = values.chunks_exact(2).map(|v| (&v[0], &v[1])).collect();
+                let pairs: Vec<_> = values
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|v| (&v[0], &v[1]))
+                    .collect();
                 let is_narrow = self.staged && narrow(&pairs);
                 if self.inputs == Inputs::SelectWide {
                     assert!(!is_narrow);

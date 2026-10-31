@@ -77,7 +77,9 @@ impl RnsNativeLeafPayloadV1 {
             return Err(RnsNativeLeafErrorV1::Payload);
         }
         for (coordinate, pair) in values
-            .chunks_exact(RNS_NATIVE_QPCS_FQ2_BYTES_V1)
+            .as_chunks::<RNS_NATIVE_QPCS_FQ2_BYTES_V1>()
+            .0
+            .iter()
             .enumerate()
         {
             decode_fq2_v1(coordinate / ROWS_PER_LIMB_V1, pair)

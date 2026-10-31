@@ -92,12 +92,9 @@ fn recorded<'state>(
         .block_with_recorded_pristine_carrier_stage(
             source,
             |block| {
-                crate::smartcontracts::ivm::active_runtime_abi_hash(
-                    &block.world,
-                    source.header().height().get(),
-                )
-                .map(|_| ())
-                .map_err(|error| error.to_string())
+                crate::smartcontracts::ivm::active_host_abi_hashes(&block.world)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
             },
             |error| error,
         )

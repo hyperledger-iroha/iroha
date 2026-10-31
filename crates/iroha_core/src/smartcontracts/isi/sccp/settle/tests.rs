@@ -480,6 +480,187 @@ fn a_release_without_a_fee_registers_and_credits_the_recipient() {
 }
 
 #[test]
+fn inbound_local_capacity_refusal_never_records_a_pending_credit_reason() {
+    let _fixture_retirement_pin = crossbeam_epoch::pin();
+    for fail_during_guards in [false, true] {
+        let state = state();
+        let mut block = state.block(header(5));
+        let mut tx = block.transaction_for_fastpq_testing(Hash::new(b"sccp-inbound-capacity"));
+        install(&mut tx);
+        fund(&mut tx, ETH, 1, 10 * ONE_XOR);
+        let recipient = authority(21);
+        if fail_during_guards {
+            recipients::ensure_registered(&mut tx, &recipient).unwrap();
+        }
+        set_enabled(&mut tx, false);
+        let id = prove(&mut tx, 0, ONE_XOR, address_bytes(&recipient), 0);
+        set_enabled(&mut tx, true);
+        let record = store::inbound_messages::get(&*tx.world, &id)
+            .unwrap()
+            .clone();
+        let status = record.status;
+        let events = sccp_events(&tx);
+        let budget = tx
+            .world
+            .sccp_committee_generations
+            .allocation_budget()
+            .clone();
+        let baseline = budget.reserved_bytes();
+        let prepared =
+            escrow::PreparedReleases::new(&tx, ETH, &[Some((&recipient, ONE_XOR)), None]).unwrap();
+        let input_bytes = budget.reserved_bytes() - baseline;
+        drop(prepared);
+        let spare = if fail_during_guards { input_bytes } else { 0 };
+        let held = budget
+            .try_reserve_bytes(budget.limit_bytes() - baseline - spare)
+            .unwrap();
+        let result = release_inbound(
+            &mut tx,
+            id,
+            record,
+            ONE_XOR,
+            (recipient.clone(), fail_during_guards),
+        );
+        assert!(tx.is_execution_deferred());
+        assert_eq!(
+            inbound_status(&tx, &id),
+            status,
+            "HC972 local inbound refusal must not write a pending-credit reason"
+        );
+        result.expect_err("local resource exhaustion must abort the attempt");
+        assert_eq!(sccp_events(&tx), events);
+        assert_eq!(tx.world.account(&recipient).is_ok(), fail_during_guards);
+        assert_eq!(xor_balance(&*tx.world, &recipient), 0);
+        assert_eq!(liability(&tx, ETH, 1), 10 * ONE_XOR);
+        assert_eq!(store::pending_count(&*tx.world, &(ETH, 1)), (1, 0));
+        drop(held);
+        assert_eq!(budget.reserved_bytes(), baseline);
+        assert_escrow_invariant(&*tx.world, "local inbound refusal");
+    }
+}
+
+#[test]
+fn refund_local_capacity_refusal_preserves_pending_reason_and_registration() {
+    let _fixture_retirement_pin = crossbeam_epoch::pin();
+    for fail_during_guards in [false, true] {
+        let state = state();
+        let mut block = state.block(header(5));
+        let mut tx = block.transaction_for_fastpq_testing(Hash::new(b"sccp-refund-capacity"));
+        install(&mut tx);
+        let recipient = authority(22);
+        if fail_during_guards {
+            recipients::ensure_registered(&mut tx, &recipient).unwrap();
+        }
+        let id = seed_outbound(&mut tx, ETH, 0, &recipient, ONE_XOR);
+        set_enabled(&mut tx, false);
+        void_expired(&mut tx, ETH, 0).unwrap();
+        set_enabled(&mut tx, true);
+        let status = outbound_status(&tx, &id);
+        let budget = tx
+            .world
+            .sccp_committee_generations
+            .allocation_budget()
+            .clone();
+        let baseline = budget.reserved_bytes();
+        let prepared =
+            escrow::PreparedReleases::new(&tx, ETH, &[Some((&recipient, ONE_XOR)), None]).unwrap();
+        let input_bytes = budget.reserved_bytes() - baseline;
+        drop(prepared);
+        let spare = if fail_during_guards { input_bytes } else { 0 };
+        let held = budget
+            .try_reserve_bytes(budget.limit_bytes() - baseline - spare)
+            .unwrap();
+        let mut events = Vec::new();
+        let result = refund(&mut tx, id, &mut events, true);
+        assert!(tx.is_execution_deferred());
+        assert_eq!(
+            outbound_status(&tx, &id),
+            status,
+            "HC972 local refund refusal must not write a pending-credit reason"
+        );
+        result.expect_err("local resource refusal must abort refund");
+        assert!(events.is_empty());
+        assert_eq!(tx.world.account(&recipient).is_ok(), fail_during_guards);
+        assert_eq!(xor_balance(&*tx.world, &recipient), 0);
+        assert_eq!(liability(&tx, ETH, 1), ONE_XOR);
+        assert_eq!(store::pending_count(&*tx.world, &(ETH, 1)), (0, 1));
+        drop(held);
+        assert_eq!(budget.reserved_bytes(), baseline);
+        assert_escrow_invariant(&*tx.world, "local refund refusal");
+    }
+}
+
+#[test]
+fn late_sccp_preflight_refusal_cannot_publish_tentative_recipient_registration() {
+    use iroha_allocation::AllocationCharge;
+    let state = state();
+    let before_state = crate::snapshot::canonical_state_snapshot_bytes(&state);
+    let recipient = authority(23);
+    {
+        let mut block = state.block(header(5));
+        let id = {
+            let mut setup = block.transaction_for_fastpq_testing(Hash::new(b"late-refusal-setup"));
+            install(&mut setup);
+            fund(&mut setup, ETH, 1, 10 * ONE_XOR);
+            set_enabled(&mut setup, false);
+            let id = prove(&mut setup, 0, ONE_XOR, address_bytes(&recipient), 0);
+            set_enabled(&mut setup, true);
+            setup.apply();
+            id
+        };
+        let events_before = block.world.pending_external_events().len();
+        let mut tx = block.transaction_for_fastpq_testing(Hash::new(b"late-refusal-attempt"));
+        let original_status = inbound_status(&tx, &id);
+        let prepared =
+            escrow::PreparedReleases::new(&tx, ETH, &[Some((&recipient, ONE_XOR)), None])
+                .unwrap()
+                .unwrap();
+        recipients::register_recipient(&mut tx, &recipient, ETH, Some(id)).unwrap();
+        let mut account_backings = 0;
+        recipient
+            .for_each_admission_clone_layout(|_| account_backings += 1)
+            .unwrap();
+        let layout = std::alloc::Layout::array::<AllocationCharge>(account_backings).unwrap();
+        // Exercise only the preflight's fallible allocation boundary. Registration
+        // has completed; the separate capacity controls above cover both actual
+        // settlement callers' propagation of a refusal returned by this check.
+        let (result, refused) =
+            crate::test_allocations::refuse_one_layout_during(layout, || prepared.check(&tx));
+        assert!(refused);
+        assert!(result.is_err());
+        assert!(
+            tx.world.account(&recipient).is_ok(),
+            "exercise a genuinely tentative registration"
+        );
+        assert_eq!(inbound_status(&tx, &id), original_status);
+        assert!(
+            tx.borrow_execution_deferral()
+                .unwrap()
+                .allocator_refusal()
+                .is_some()
+        );
+        tx.apply();
+        assert!(
+            block.world.account(&recipient).is_err(),
+            "deferred overlay must not publish registration"
+        );
+        assert_eq!(
+            store::inbound_messages::get(&block.world, &id)
+                .unwrap()
+                .status,
+            original_status
+        );
+        assert_eq!(block.world.pending_external_events().len(), events_before);
+        assert_eq!(xor_balance(&block.world, &recipient), 0);
+        assert_escrow_invariant(&block.world, "late refusal dropped at transaction apply");
+    }
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_bytes(&state),
+        before_state
+    );
+}
+
+#[test]
 fn maximal_codec3_multisig_recipient_releases_without_decoder_deferral() {
     use iroha_data_model::{
         account::controller::{MultisigMember, MultisigPolicy},
@@ -2103,5 +2284,6 @@ fn late_void_keeps_full_refund_pending_when_reconciled_claims_spent_liability() 
     assert_escrow_invariant(&*stx.world, "late void after reconciliation");
 }
 
+mod sorafs;
 mod source_controls;
 mod uid;

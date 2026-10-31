@@ -611,7 +611,7 @@ fn constant_chunk_hashes(
             if chunk.iter().skip(1).all(|value| value == first) {
                 let canonical = first.to_repr();
                 if canonical != buffered_repr {
-                    for slot in repeated.chunks_exact_mut(32) {
+                    for slot in repeated.as_chunks_mut::<32>().0 {
                         slot.copy_from_slice(&canonical);
                     }
                     buffered_repr = canonical;

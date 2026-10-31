@@ -69,7 +69,7 @@ fn checked_add_equals_matches_checked_add_for_deterministic_wide_inputs() {
         let mut values = [Quantity::zero(), Quantity::zero()];
         for value in &mut values {
             let mut bytes = [0_u8; MAX_MANTISSA_BYTES];
-            for chunk in bytes.chunks_exact_mut(8) {
+            for chunk in bytes.as_chunks_mut::<8>().0 {
                 seed = seed
                     .wrapping_mul(6_364_136_223_846_793_005)
                     .wrapping_add(1_442_695_040_888_963_407);
@@ -2383,7 +2383,9 @@ fn admitted_numeric_copy_preserves_signed_canonical_limbs_and_scale() {
         Numeric::new(1, MAX_DECIMAL_SCALE),
         Numeric::new(signed_maximum(), 0),
         Numeric::new(
-            signed_maximum().checked_neg().expect("representable negative maximum"),
+            signed_maximum()
+                .checked_neg()
+                .expect("representable negative maximum"),
             MAX_DECIMAL_SCALE,
         ),
     ] {

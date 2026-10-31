@@ -384,6 +384,23 @@ fn initial_readonly_complete_profile_metadata_is_inside_existing_reserve() {
     let joint = MainCaJointBufferPlanV1::from_common_v1(plan).unwrap();
     let metadata = aggregate::initial_evaluated_column::metadata_payload_v1();
     assert_eq!(metadata, MAIN_READONLY_OUTPUT_METADATA_BYTES_V1);
+    let original_descriptors = 16
+        * (256
+            + core::mem::size_of::<
+                fastpq_prover::goldilocks_transform::CompletedGoldilocksColumnsV1,
+            >()
+            + 2 * core::mem::size_of::<usize>()
+            + core::mem::size_of::<Evaluated>())
+        + 4 * (core::mem::size_of::<Vec<Evaluated>>()
+            + core::mem::size_of::<std::vec::IntoIter<Evaluated>>())
+        + 16 * core::mem::size_of::<Evaluated>()
+        + 16 * core::mem::size_of::<aggregate::ZeroizingFieldColumnV1>()
+        + 16 * core::mem::size_of::<&[u64]>();
+    let preflight = aggregate::initial_evaluated_column::PREFLIGHT_METADATA_BYTES_V1;
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(preflight, 56);
+    assert_eq!(metadata, original_descriptors + preflight);
+
     assert!(
         metadata
             >= 16 * core::mem::size_of::<Evaluated>()
@@ -394,6 +411,7 @@ fn initial_readonly_complete_profile_metadata_is_inside_existing_reserve() {
     let explicit = MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1
         + MAIN_COMPOSITION_SHA_FOLD_BYTES_V1
         + MAIN_QUERY_REUSE_METADATA_BYTES_V1
+        + MAIN_ARITHMETIC_CONVOLUTION_SCRATCH_BYTES_V1
         + metadata;
     let residual = MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
         .checked_sub(explicit)

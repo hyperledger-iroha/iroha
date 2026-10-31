@@ -83,8 +83,7 @@ fn nvcc_available() -> bool {
     Command::new("nvcc")
         .arg("--version")
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|output| output.status.success())
 }
 fn locate_cuda_root() -> Option<PathBuf> {
     env::var_os("CUDA_HOME")

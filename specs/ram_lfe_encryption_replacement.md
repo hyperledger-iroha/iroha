@@ -567,46 +567,51 @@ each. The last column adds one projected noise flood to the output (below).
   exact centered-CRT physical noise, including all 64 outputs. It does not
   establish a complete resource bound, sanitization noise or the full `NL-L3`
   obligation. Folding does not qualify a candidate.
-- Both affine and bounded BGV plans take explicit `PlaintextPrecision` and
+- Affine and nonlinear BGV plans take explicit `PlaintextPrecision` and
   require 128 slots at effective modulus 257 under the same master profile.
-  Fresh inputs, masks, request-memory embeddings and trivial zeros use that
+  Fresh inputs, affine masks, request-memory embeddings and trivial zeros use that
   admitted precision; encryption and key-switch errors retain master scale
   `p^E`. E1 and higher masters use the same code path. This precision boundary
   does not itself install a bounded refresh schedule or qualify an input.
 - `RamLfeBgvPackedInputV1::encrypt` constructs a move-only input from an
   admitted `RamLfeReferenceInputV1`: it zero-extends the 64 reference slots
   to 128, runs canonical `SlotEncoding` at effective F257 precision, and
-  encrypts under the borrowed `LocalBootstrapKey`, then performs actual canonical
+  validates and encrypts that scalar plaintext under the borrowed
+  `LocalBootstrapKey`, then performs actual canonical
   modulus switching to the explicit public source level. Public profile, context,
   geometry and the complete fresh-to-source noise plan precede private slot
   reads; the staging allocation clears after encoding and on failure. The
   returned owner carries the exact resulting shape, without relabeling a bound.
-  The current bounded evaluator still requires its planned fresh top-level input;
-  a lower-level packed owner alone does not change that evaluation schedule. No raw or general local
+  The nonlinear evaluator requires the exact public source level admitted by
+  its plan; its bounded witness retains a top-level source while its Refresh
+  witness uses an actual level-zero source. No raw or general local
   ciphertext can be cast into this owner. This establishes actual local packed
   construction, not imported input/key authentication, circuit privacy or an
-  execution proof. The sole bounded evaluator consumes this owner and returns
-  a general local ciphertext; evaluated outputs never regain byte-input
-  provenance. The retired raw-ciphertext/evaluation-key entry point has no adapter.
+  execution proof. The sole nonlinear evaluator carries the closed
+  `LocalScalarCiphertext` through every switch, route, product, sum and refresh,
+  then consumes that capability into a general local result. Evaluated outputs
+  never regain byte-input provenance. The retired raw-ciphertext/evaluation-key
+  entry point has no adapter.
 - `iroha_crypto::ram_lfe::bgv_nonlinear_compiler` is the sole original-class-bound
   coefficient compiler for `bounded.v1` and `refresh.v1`; the bounded-only compiler
   name and factory are retired without aliases. One clearing copy preserves all
   canonical operands, mixed gate ordinals and ordered output snapshots. Exact
   public stage/class/geometry/support checks precede private row preparation.
-  Bounded retains its sixteen-layer layout. Refresh lowering uses 319 mixed gate
-  positions in three state banks plus one base bank and ten steps per position:
-  eight Select-condition squares (zero dummy target for other kinds), a retained
-  unit product, and a final `A*B+C` gate.
-  Four unique maps per position retain 3,369,228 coefficient bytes including
-  projection; the seven repeated middle squares share their public map. All
-  3190 physical steps remain required. Saved lanes, aliases, dead gates and early
-  outputs retain their original canonical forms. The Refresh compiler payload is
-  850,110 bytes, its clearing row is 2,052 bytes and the layout graphs occupy
-  25,759,944 bytes on a 64-bit target. Handles, temporary layout construction,
-  allocator overhead and ciphertext resources are separate. Scalar compiler
-  tests cover every boundary and fixed public row schedule; no encrypted R9
-  executor or committed lowering proof is supplied by this preparation owner.
-- `iroha_crypto::ram_lfe::bgv_bounded` now compiles and executes a complete
+  Bounded retains its sixteen-layer layout. Refresh lowering retains 319 mixed
+  positions in three state banks plus one base bank. Four input banks route to
+  three operands for one target-bank `A*B+C`; the other state/base owners move
+  unchanged and the target's prefix passes through C. Initial, Square and Final
+  maps execute one, seven and one times. Closed zero-future and embedded-one
+  invariants remove the redundant Unit step uniformly, giving 2,871 physical
+  steps without changing canonical rank ten, gate membership or descriptor hash.
+  The 957 unique maps plus projection retain 1,962,112 coefficient bytes and
+  5,098,896 layout bytes on a 64-bit target. Saved lanes, aliases, dead gates and
+  early outputs retain their original canonical forms. The compiler payload is
+  850,110 bytes and its clearing row is 2,052 bytes. Handles, layout construction,
+  allocator overhead and ciphertext resources remain separate. Scalar tests
+  cover every boundary and unchanged bank; arbitrary encrypted state cannot
+  enter the closed runtime. Preparation supplies no committed lowering proof.
+- `iroha_crypto::ram_lfe::bgv_nonlinear` compiles and executes a complete
   generic 16-layer bounded schedule through the same shared routing owner.
   Each layer routes 21 state/base banks into 60 A/B/C operands and performs all
   20 relinearized products and additions, including zero and carry rows.
@@ -616,19 +621,20 @@ each. The last column adds one projected noise flood to the output (below).
   budgeted 10,756-byte clearing row. Supported private zeros remain stored.
   Only publicly absent diagonals and Horner branches are skipped; each
   output/state bank carries its exact public noise transfer. The complete
-  fixture uses 1,100,922 plaintext products and all 320 ciphertext products.
+  fixture uses 1,100,920 plaintext products and all 320 ciphertext products.
   These payload scopes exclude public plan shapes and variable Natural
   capacities, compiler state, allocator overhead, keys and backend scratch. A
   public plan derives every noise transfer, level move and scoped residue
-  bound before private matrix preparation. Exact public 64-slot masks use
-  centered `l1=4494`; hidden-count masks retain their constant bound. An
-  explicit 256-instruction, rank 16 N128/q26 fixture passes independent
+  bound before private matrix preparation. The closed packed input has zero
+  upper slots, and the compiler projection emits zero upper output slots; the
+  nonlinear evaluator omits both redundant mask products and charges its actual
+  unmasked transfers. Arbitrary local ciphertexts cannot enter that initializer. An
+  explicit 256-instruction, rank 16 N128/q26 fixture checks independent
   reference output and centered-CRT physical-noise checks for all 16 layers.
   This small ring is an arithmetic fixture, not a selected security profile.
-  An independently replayed public search for current N65536/q22 reaches
-  fourteen layers but no fifteenth transition under the existing support,
-  transfer bounds and route/product switch placements. This does not rule
-  out other algorithms or tighter justified bounds. Full resources,
+  The original N65536/q22 profile still refuses the complete fixed schedule
+  in the public rejection fixture. That refusal does not rule out other
+  algorithms or tighter justified bounds. Full resources,
   committed execution, client/key proofs and sanitization remain unfinished.
   The same loop accepts an explicit public physical-refresh choice. It lowers
   and refreshes all 21 banks initially and after each of the 16 layers:
@@ -638,18 +644,25 @@ each. The last column adds one projected noise flood to the output (below).
   maximum of 357 distinct plans; exhaustion refuses without widening bounds.
   The N128/F257/E3 q20x60 arithmetic witness uses 21 distinct plans, routing
   at level 4, products at level 1, and refresh sources at level 0. It returns
-  effective F257 at level 0 with bound `4920306448512`. This is distinct from
-  executing the new R9 logical-Refresh coefficient maps and does not select a profile.
+  effective F257 at level 0 with derived bound `1094861248`, arithmetic units
+  `16638609472` and scalar-word operations `2059780864`. Every RAM-LFE physical
+  bootstrap explicitly selects `ScalarSlots`. Here `d=1`, so the genuine trace
+  and recomposition identity products remain, and derived work and supplied
+  preparation payload are unchanged. Current typed bounds include selection
+  metadata. All three complete bounded encrypted fixtures passed in the captured
+  wave29 campaign below; this selects no profile.
   Canonical `BootstrapPlan::new` owns immutable shared preparation;
   `admit_source` checks the new exact source, strict carry and all selected-stage
   and per-call budgets before sharing that same core. It neither substitutes
   another split/schedule nor mints ciphertext origin authority. Split typed
   metadata charges each actual core once and every exact descriptor separately;
   retained shared-stage payload is also counted once by actual core identity.
-  The current bounded planner still builds independent cores, so its supplied
-  retained preparation payload of 375,079,776 bytes remains unchanged.
+  The nonlinear planner now uses one actual shared core; the bounded witness
+  derives 36,238,176 retained preparation payload bytes and 36,838,178 bytes
+  including compiler/row preparation, with typed metadata charged separately.
   Aggregate preparation admits retained class maps/layouts and all admitted
-  bootstrap payloads, plus sequential public/private preparation scratch.
+  shared bootstrap preparation and every descriptor, plus sequential
+  public/private preparation scratch.
   Complementary typed metadata includes the enclosing owners, public vectors,
   shape-bound capacities and preparation overlap. Actual container/plan
   capacities are checked before private preparation. `from_normal_form`
@@ -659,6 +672,48 @@ each. The last column adds one projected noise flood to the output (below).
   call. Existing stage ceilings still apply. These categories exclude allocator
   overhead, RSS, caller-owned normal form/profile/keys, runtime plaintext/backend storage
   scopes and proof work; they do not establish whole-application qualification.
+- The same nonlinear runtime executes `refresh.v1` with all 319 mixed ordinals,
+  nine physical steps each, three state banks and one base bank. Square maps are
+  public plan data; Initial/Final and projection coefficients belong to the
+  class-bound program. Three honest zero banks start at the routing level; only
+  the base initially and each later target update are physically refreshed.
+  One shared kernel handles stored-bank, product-bank and scatter geometry for
+  both nonlinear classes. A private shared identity and stage/target tags bind
+  the program to its exact plan before input/memory/private-row reads; ordered
+  bank tags reject reordering. These local checks supply no external proof.
+  The fixed schedule has 2,872 routes, 2,871 products and 2,872 bootstrap calls,
+  independent of private logical refreshes. The level-4/level-1 diagnostic uses
+  28,714 individual modulus switches. The unselected N128/F257/E3 source-zero
+  witness retains 640 exact descriptors under one core and derives final bound
+  `1094861248`, arithmetic units `73234637760` and scalar-word operations
+  `5767183744`. Its supplied preparation payload is 24,003,088 retained and
+  24,855,250 peak bytes. Public aggregate payload/typed-metadata admission
+  precedes private preparation; per-stage caps and exact mixed sources remain
+  mandatory. These derived counts do not qualify production cost, full-size
+  encrypted execution, security, proofs, circuit privacy or native/SDK delivery.
+  A separate unselected N256/q23 diagnostic has a complete public recurrence
+  with two exact source descriptors and final level-zero bound `2181235200`.
+  Both N128 and N256 first-gate fixtures run conditions 256 and zero with unequal
+  branches 17 and 99: each case has 10 bootstraps and 36 independent all-bank
+  phase checks, including every N256 off-stride coefficient. Carried ciphertexts
+  are also compared unchanged. An ignored complete N256 cross-bank tape uses
+  canonical evaluation, checks all banks at gates 127/128/255/256/318 and checks
+  final projection through the same full-degree CRT oracle. Both first-gate
+  drivers passed for both conditions in the captured wave29 campaign.
+  Canonical rank ten and class admission are unchanged.
+
+  Captured wave29 execution passes all three complete N128 Refresh tapes,
+  the complete N256 cross-bank tape, all three bounded fixtures and both
+  first-gate conditions. The current N65536/q23 public planner also passes
+  all 640 exact source descriptors and exact/one-under resource checks.
+  The [execution specification](ram_lfe_execution_proof.md#fixed-public-schedule)
+  records the immutable JSON/log evidence, the separate passing post-cleanup
+  focused tests/strict lint and their source boundaries. Public planning
+  generates no key or ciphertext. A separate honest N65536 bootstrap/repeat
+  diagnostic now passes all-coefficient message/phase checks with sampled
+  independent convolution, under the execution specification's explicit scope.
+  No selected security, production custody or complete application is qualified.
+
 - `iroha_fhe::bgv::relative_trace` now decomposes a full-ring plaintext
   into its `d=N/S` scalar-subalgebra coordinate banks and recomposes them.
   A fixed parity tree uses `d` plaintext products and `d-1` Galois
@@ -717,16 +772,30 @@ each. The last column adds one projected noise flood to the output (below).
   owner and arise through canonical encryption, trivial construction, sums,
   plaintext products, switching, multiplication, squaring, routing or refresh;
   foreign-key sources and raw re-imports cannot enter. Trivial construction
-  hides no plaintext. Local origin does not establish scalar-subalgebra
-  membership or external input/key authentication. A validation-only public
-  preflight checks the exact source shape and complete requested key union
+  hides no plaintext. General local origin does not establish scalar-subalgebra
+  membership or external input/key authentication. Separately,
+  `LocalScalarCiphertext` is seeded only by checking actual scalar plaintexts
+  and is preserved by typed closure operations. It proves membership modulo
+  effective `t`, not sparsity of encrypted residues or the homomorphic input at
+  master `T`. No raw/general-local promotion exists; consuming demotion loses
+  the capability. A validation-only public preflight checks the exact source
+  shape and complete requested key union
   before a consumer reads request memory or private matrices.
   For master `T=p^E`, source `t=p^r`, scale `a=p^(E-r)` and honest centered phase
   bound `V`, the complete plan requires `2*a*V+(N+1)*Q<a*Q`. Centered conversions
-  `w_i=[a*c_i]_Q` and the encrypted-secret product form `w0+w1*s`; complete
-  coefficient decomposition, balanced upper digits and inverse reconstruction
-  recover every message coefficient. See Geelen and Vercauteren,
+  `w_i=[a*c_i]_Q` and the encrypted-secret product form the full dense `w0+w1*s`.
+  `BootstrapPlan::new` requires an explicit `Ring` or `ScalarSlots` message space.
+  `Ring` decomposes all `d=N/S` coefficient banks; `ScalarSlots` requires the
+  closed scalar owner and extracts only bank zero by the same core's fixed
+  even-only trace. Both run the complete upper-digit DAG for every selected bank
+  and the corresponding inverse reconstruction. Generic local refresh rejects
+  `ScalarSlots` before private access. Degree, dense-secret norm and strict carry
+  stay unchanged, as do the genuine initial and recomposition identity products.
+  The underlying dense scaled homomorphic-decryption construction follows
+  Geelen and Vercauteren,
   [*Bootstrapping for BGV and BFV Revisited*, §3.2 Eq. (8), §3.3 Eq. (10)](https://doi.org/10.1007/s00145-023-09454-6).
+  The native and full-size planner values below are historical `Ring`
+  observations preceding scalar selection, not fresh scalar validation.
   Native p5/E3/N16/q5 tests check repeated honest square/refresh, independent
   full-ring CRT phases and origin/budget/clearing failures. The public API test
   covers zero/X/dense sources at levels 4/2/1 and three square/refresh cycles;
@@ -737,8 +806,11 @@ each. The last column adds one projected noise flood to the output (below).
   its natural residue ordinal through inverse-N mapping, the complete upper
   DAG, forward mapping and monomial accumulation. Only pending siblings,
   current stage owners and one output accumulator are retained; complete-bank
-  APIs collect the same core. Logical bank count and complete work remain
-  `d=N/S`, with no phase reset or public scalar-origin constructor.
+  APIs collect the same core. Geometric bank count remains `d=N/S`; selected
+  cardinality is `d` for `Ring` and one for `ScalarSlots`. Closed selection and
+  ordinal tags flow through every stage, and recomposition requires that exact
+  cardinality. Omitted banks remove only their actual branches/maps/DAG work;
+  no phase is reset and no claimed scalar origin is accepted.
   `stream_owned_residue_bytes` counts the combined post-input frontier, map,
   DAG/tensor/switch and output lifetimes; `stream_metadata_bytes` separately
   admits new traversal/frame/bank/accumulator headers and conservative bound
@@ -746,8 +818,9 @@ each. The last column adds one projected noise flood to the output (below).
   separate. Kernel scratch retains its own upper-digit ceiling; keys/profile,
   other backend/plaintext scopes, allocator overhead and RSS remain distinct.
   Aggregate `canonical_arithmetic_units` and `scalar_word_operations` add
-  the input, both full transforms and all-bank upper counters with checked
-  arithmetic. Every bank is counted once. Refusal precedes private execution;
+  the unchanged homomorphic input and each selected trace/map/upper/inverse
+  operation with checked arithmetic. Every selected bank is counted once.
+  Refusal precedes private execution;
   already bounded public preparation occurs first. Slot encoding, copying,
   clearing and proof work remain outside these canonical counters. These
   fields do not establish original application resource limits or cumulative
@@ -768,7 +841,7 @@ each. The last column adds one projected noise flood to the output (below).
   `7559680` explicit scalar-word operations, with a `1622016`-byte scoped
   streaming residue peak. This does not qualify production parameters,
   security, the complete application budget or full-size encrypted execution.
-  An explicitly run N65536/F257/E3 public planner fixture admits the current
+  A historical `Ring` N65536/F257/E3 public planner fixture admitted the
   18-wave pipeline with unselected q24x60/p2x60. The level-4 output can be
   squared; every subsequent modulus drop and level-zero carry admission matches
   an independent integer replay. Fresh and refreshed level-zero bounds are
@@ -788,8 +861,8 @@ each. The last column adds one projected noise flood to the output (below).
   separate unchanged 1 MiB encrypted-input cap. This wire-size fact grants no
   authentication or local source provenance and does not qualify the proof
   envelope, complete runtime memory/work or full-size encrypted execution.
-  A separate unselected q23x60/p2x60 public-planner fixture retains the current
-  generic matrix bounds. It uses the upper-digit levels
+  A separate historical `Ring` q23x60/p2x60 public-planner fixture retains its
+  recorded generic matrix bounds. It uses the upper-digit levels
   `[20,19,18,17,16,15,14,13,13,11,10,9,8,7,6,5,4,4]`, then switches the complete
   level-4 output to level 2 before squaring and lowers the square to level 0.
   The resulting source bound `5588487865142` satisfies strict carry and the same
@@ -800,6 +873,9 @@ each. The last column adds one projected noise flood to the output (below).
   The fixture checks independent prime, phase, carry and work vectors with
   exact/one-under component budgets. It generates no keys or ciphertexts and
   claims neither minimal parameters nor security or full-size encrypted execution.
+  Those full-`Ring` values are not costs for the current RAM-LFE scalar pipeline.
+  Selected full-size work/resource accounting and encrypted execution need their
+  own current evidence; no replacement numeric cost is inferred from bank count.
   TODO(C.8, R.9, R.11): qualify F257 production parameters, the complete application
   schedule/resources, external source/key proofs and circuit privacy.
 - `refresh.v1` has no qualified application bootstrap. The local algorithm above

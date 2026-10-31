@@ -185,7 +185,9 @@ mod tests {
     fn rejection_m_q256(index: usize) -> U512 {
         let mut bytes = [0_u8; 64];
         for (chunk, limb) in bytes
-            .chunks_exact_mut(8)
+            .as_chunks_mut::<8>()
+            .0
+            .iter_mut()
             .zip(REJECTION_M_Q256_LIMBS_V1[index])
         {
             chunk.copy_from_slice(&limb.to_le_bytes());

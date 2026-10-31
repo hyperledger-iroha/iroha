@@ -212,7 +212,10 @@ impl Work {
         clippy::result_large_err,
         reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
     )]
-    pub(super) fn next<I: Iterator>(&mut self, rows: &mut I) -> Result<Option<I::Item>, TriggerContractError> {
+    pub(super) fn next<I: Iterator>(
+        &mut self,
+        rows: &mut I,
+    ) -> Result<Option<I::Item>, TriggerContractError> {
         self.prepay(CURSOR_NEXT)?;
         #[cfg(test)]
         {
@@ -411,7 +414,7 @@ impl Strategy for CheckedStrategy {
     }
 }
 fn compact_prefix(value: usize) -> u64 {
-    u64::from((usize::BITS - value.leading_zeros()).max(1)).div_ceil(7)
+    u64::from(value.bit_width().max(1)).div_ceil(7)
 }
 #[derive(Clone, Copy)]
 enum Phase {

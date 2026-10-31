@@ -537,10 +537,16 @@ impl DeploymentRuntime {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         let slot = deployment_slot(&self.config, &self.journal_root, alias);
         // A read must not create a new alias slot merely because no deployment exists.
-        let session = DeploymentSlot::open_read(&slot)?;
+        let session = DeploymentSlot::open_read(&slot).map_err(|error| {
+            if error_is_not_found(&error) {
+                no_saved_deployment(alias)
+            } else {
+                error
+            }
+        })?;
         let journal = session
             .current_journal()?
-            .ok_or_else(|| eyre!("contract alias has no retained deployment"))?;
+            .ok_or_else(|| no_saved_deployment(alias))?;
         let service = DeploymentService::new(self.config.clone())?;
         let preflight = service
             .retained_preflight(&journal)
@@ -706,6 +712,20 @@ fn validate_journal_id(id: &str) -> Result<()> {
     }
     id.parse::<iroha::crypto::Hash>()?;
     Ok(())
+}
+
+fn no_saved_deployment(alias: &ContractAlias) -> eyre::Report {
+    eyre!(
+        "contract alias `{alias}` has no saved deployment in this environment; check the alias, or deploy the contract first"
+    )
+}
+
+fn error_is_not_found(error: &eyre::Report) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    })
 }
 
 #[cfg(test)]
@@ -938,7 +958,15 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         let runtime =
             DeploymentRuntime::new(config.clone(), root.clone(), temporary.path().join("cache"));
         let alias: ContractAlias = "Counter::universal".parse()?;
-        assert!(runtime.current_deployment(&alias).is_err());
+        let missing = runtime
+            .current_deployment(&alias)
+            .err()
+            .expect("an absent slot has no deployment")
+            .to_string();
+        assert!(
+            missing.contains("`Counter::universal` has no saved deployment"),
+            "{missing}"
+        );
         assert!(!root.exists());
 
         let slot = deployment_slot(&config, &root, &alias);

@@ -2,7 +2,7 @@
 //!
 //! The sole constructor starts with an admitted byte input, zero-extends its
 //! 64 reference slots to 128 scalar slots, and performs the canonical encoding
-//! and local encryption, followed by actual modulus switching to an explicitly
+//! and checked scalar encryption, followed by actual modulus switching to an explicitly
 //! admitted source level. General local ciphertext provenance alone does not
 //! establish this packing invariant. No raw or local ciphertext import exists.
 //!
@@ -14,8 +14,8 @@
 
 use super::{RamLfeReferenceInputV1, clearing::ClearingArray};
 use iroha_fhe::bgv::{
-    BgvError, BgvProfile, BootstrapError, Ciphertext, CiphertextShape, LocalBootstrapCiphertext,
-    LocalBootstrapKey, PlaintextPrecision, SlotEncoding,
+    BgvError, BgvProfile, BootstrapError, Ciphertext, CiphertextShape, LocalBootstrapKey,
+    LocalScalarCiphertext, Plaintext, PlaintextPrecision, SlotEncoding,
 };
 use std::fmt;
 use thiserror::Error;
@@ -51,7 +51,7 @@ pub enum RamLfeBgvInputErrorV1 {
 /// retain their existing clearing behavior. Compiler-created scalar copies in
 /// registers or on the stack are outside this heap-ownership guarantee.
 pub struct RamLfeBgvPackedInputV1<'key> {
-    source: LocalBootstrapCiphertext<'key>,
+    source: LocalScalarCiphertext<'key>,
 }
 
 impl<'key> RamLfeBgvPackedInputV1<'key> {
@@ -103,21 +103,40 @@ impl<'key> RamLfeBgvPackedInputV1<'key> {
         drop(slots);
         #[cfg(test)]
         tests::checkpoint()?;
-        let source = key.encrypt(profile, &plaintext)?;
+        let source = key.encrypt_scalar(profile, &encoding, &plaintext)?;
         drop(plaintext);
         #[cfg(test)]
         tests::checkpoint()?;
-        let source = key.switch_to(profile, source, source_level)?;
+        let source = key.switch_scalar(profile, source, source_level)?;
         #[cfg(test)]
         tests::checkpoint()?;
         debug_assert_eq!(source.shape(), expected);
         Ok(Self { source })
     }
 
-    // Only the canonical RAM-LFE evaluator consumes this construction capability.
-    // No reverse conversion exists; ordinary outputs never regain byte admission.
-    pub(super) fn into_local(self) -> LocalBootstrapCiphertext<'key> {
-        self.source
+    // The input token survives only because the canonical sum returns its
+    // original unchanged source. This is not a constructor from arbitrary local
+    // ciphertexts: the only source supplied here is the consumed token's field.
+    // The separate result retains scalar membership, never PackedInput admission.
+    pub(super) fn add_plain_retaining_input(
+        self,
+        profile: &BgvProfile,
+        key: &'key LocalBootstrapKey,
+        plaintext: &Plaintext,
+    ) -> Result<(Self, LocalScalarCiphertext<'key>), BootstrapError> {
+        let (source, result) = key.add_plain_scalar(profile, self.source, plaintext)?;
+        Ok((Self { source }, result))
+    }
+
+    // Borrow the already-constructed owner only for complete public preflight.
+    pub(super) fn preflight(
+        &self,
+        profile: &BgvProfile,
+        key: &LocalBootstrapKey,
+        expected: &CiphertextShape,
+        galois: &[u32],
+    ) -> Result<(), BootstrapError> {
+        key.preflight_evaluation(profile, self.source.as_local(), expected, galois)
     }
 
     /// Borrow the ordinary ciphertext without granting a packed-input constructor.
@@ -190,6 +209,83 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    #[test]
+    fn preflight_and_plain_addition_preserve_the_same_constructed_input_owner() {
+        for log_degree in [7, 8] {
+            let profile = profile(log_degree, 3);
+            let precision = profile.plaintext_precision(1).unwrap();
+            let (secret, owner) = key(&profile);
+            let (_, foreign) = key(&profile);
+            let admitted = RamLfeReferenceInputV1::from_bytes(&[255, 0, 17]).unwrap();
+            let mut input =
+                RamLfeBgvPackedInputV1::encrypt(&profile, precision, 1, &owner, &admitted).unwrap();
+            let original = input.ciphertext().to_bytes(&profile).unwrap();
+            let expected = input.shape();
+            input.preflight(&profile, &owner, &expected, &[]).unwrap();
+            assert_eq!(
+                input.preflight(&profile, &foreign, &expected, &[]),
+                Err(BootstrapError::Origin)
+            );
+            let wrong = profile
+                .plan_add_plain(
+                    &expected,
+                    Plaintext::constant(&profile, precision, 1).unwrap().bound(),
+                )
+                .unwrap();
+            assert!(input.preflight(&profile, &owner, &wrong, &[]).is_err());
+            let encoding = SlotEncoding::new(&profile, precision).unwrap();
+            for lane in [7, 211, 7] {
+                let slots: [u64; 128] =
+                    std::array::from_fn(|i| if i == 95 { lane } else { u64::from(i == 96) });
+                let plain = encoding.encode(&profile, &slots).unwrap();
+                let (retained, sum) = input
+                    .add_plain_retaining_input(&profile, &owner, &plain)
+                    .unwrap();
+                input = retained;
+                assert_eq!(input.shape(), expected);
+                assert_eq!(input.ciphertext().to_bytes(&profile).unwrap(), original);
+                input.preflight(&profile, &owner, &expected, &[]).unwrap();
+                let decoded = encoding
+                    .decode(&secret.decrypt(&profile, sum.ciphertext()).unwrap())
+                    .unwrap();
+                for i in 0..128 {
+                    assert_eq!(
+                        decoded[i],
+                        if i < 64 {
+                            u64::from(admitted.slots()[i])
+                        } else {
+                            slots[i]
+                        }
+                    );
+                }
+            }
+            let plain = Plaintext::constant(&profile, precision, 1).unwrap();
+            assert!(matches!(
+                input.add_plain_retaining_input(&profile, &foreign, &plain),
+                Err(BootstrapError::Origin)
+            ));
+        }
+    }
+
+    #[test]
+    fn retained_input_plain_addition_refuses_off_stride_coefficients() {
+        let profile = profile(8, 3);
+        let precision = profile.plaintext_precision(1).unwrap();
+        let (_, owner) = key(&profile);
+        let admitted = RamLfeReferenceInputV1::from_bytes(&[255, 17]).unwrap();
+        let input =
+            RamLfeBgvPackedInputV1::encrypt(&profile, precision, 1, &owner, &admitted).unwrap();
+        let mut coefficients = vec![0; profile.degree()];
+        coefficients[1] = 1;
+        let outside = Plaintext::new(&profile, precision, coefficients).unwrap();
+        assert!(matches!(
+            input.add_plain_retaining_input(&profile, &owner, &outside),
+            Err(BootstrapError::Bgv(BgvError::OutsideScalarSubalgebra {
+                index: 1
+            }))
+        ));
     }
 
     // Independent integer CRT of the actual decryption phase; these synthetic
@@ -278,7 +374,7 @@ mod tests {
                     // Independent direct Vandermonde evaluation, with the
                     // canonical F257 root3, checks every slot without decode.
                     for slot in 0..128 {
-                        let beta = (0..(2 * slot + 1)).fold(1_u64, |v, _| v * 3 % 257);
+                        let beta = (0..=2 * slot).fold(1_u64, |v, _| v * 3 % 257);
                         let actual = plain
                             .coefficients()
                             .iter()
@@ -440,7 +536,7 @@ mod tests {
         }
         // Independent direct Vandermonde evaluation, without SlotEncoding::decode.
         for slot in 0..SLOTS {
-            let beta = (0..2 * slot + 1).fold(1_u64, |v, _| v * 3 % 257);
+            let beta = (0..=2 * slot).fold(1_u64, |v, _| v * 3 % 257);
             let actual = plain
                 .coefficients()
                 .iter()

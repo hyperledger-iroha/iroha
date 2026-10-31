@@ -6,6 +6,31 @@ use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discrimin
 use std::borrow::Cow;
 
 #[test]
+fn network_builder_leaves_caller_headroom_on_the_ordinary_stack() {
+    const ORDINARY_STACK: usize = 2 * 1024 * 1024;
+    // An unoptimized libtest caller can hold several resolved configs in its own
+    // frame, hundreds of KiB, when it builds a network.
+    const CALLER_HEADROOM: usize = 256 * 1024;
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .name("network-builder-caller-headroom".to_owned())
+            .stack_size(ORDINARY_STACK - CALLER_HEADROOM)
+            .spawn_scoped(scope, || {
+                let network =
+                    crate::tests::build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
+                assert!(
+                    network.genesis().0.has_results(),
+                    "the builder must have executed native genesis on this thread"
+                );
+            })
+            .expect("spawn builder headroom regression");
+        if let Err(panic) = worker.join() {
+            std::panic::resume_unwind(panic);
+        }
+    });
+}
+
+#[test]
 fn genesis_preexecution_uses_ordinary_stack_with_exact_runtime_profile() {
     let _caller_profile = ChainDiscriminantGuard::enter(777);
     let before_build = genesis_preexecution_count();

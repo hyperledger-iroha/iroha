@@ -196,7 +196,7 @@ macro_rules! field_suite {
 
 fn limbs_to_bytes(l: &[u64; 4]) -> [u8; 32] {
     let mut out = [0u8; 32];
-    for (chunk, limb) in out.chunks_exact_mut(8).zip(l) {
+    for (chunk, limb) in out.as_chunks_mut::<8>().0.iter_mut().zip(l) {
         chunk.copy_from_slice(&limb.to_le_bytes());
     }
     out

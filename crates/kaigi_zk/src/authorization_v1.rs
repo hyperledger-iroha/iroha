@@ -153,8 +153,8 @@ impl KaigiAuthorizationContextV1 {
 
     pub(super) fn words(&self) -> [Scalar; CONTEXT_WORDS] {
         let mut words = [Scalar::ZERO; CONTEXT_WORDS];
-        for (index, chunk) in self.network_id.chunks_exact(8).enumerate() {
-            words[index] = Scalar::from(u64::from_le_bytes(chunk.try_into().expect("fixed limb")));
+        for (index, chunk) in self.network_id.as_chunks::<8>().0.iter().enumerate() {
+            words[index] = Scalar::from(u64::from_le_bytes(*chunk));
         }
         for (offset, limbs) in [
             (CALL_ROW, self.call_id),
@@ -167,9 +167,8 @@ impl KaigiAuthorizationContextV1 {
         }
         words[SEQUENCE_ROW] = Scalar::from(self.participation_sequence);
         words[ACTION_ROW] = Scalar::from(self.action as u64);
-        for (index, chunk) in self.pre_roster_root.chunks_exact(8).enumerate() {
-            words[ROOT_ROW + index] =
-                Scalar::from(u64::from_le_bytes(chunk.try_into().expect("fixed limb")));
+        for (index, chunk) in self.pre_roster_root.as_chunks::<8>().0.iter().enumerate() {
+            words[ROOT_ROW + index] = Scalar::from(u64::from_le_bytes(*chunk));
         }
         words
     }

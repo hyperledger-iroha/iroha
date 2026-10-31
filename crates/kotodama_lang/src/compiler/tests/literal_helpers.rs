@@ -83,8 +83,10 @@ seiyaku LiteralRoots {
         let parsed = crate::metadata::ProgramMetadata::parse(&output.artifact).unwrap();
         assert_eq!(
             output.artifact[parsed.code_offset..]
-                .chunks_exact(4)
-                .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|chunk| u32::from_le_bytes(*chunk))
                 .filter(|word| *word == authority_word)
                 .count(),
             1,

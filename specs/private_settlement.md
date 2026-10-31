@@ -15,7 +15,8 @@ validated limits. It does not require protocol registration, activation,
 lifecycle history or an all-protocol qualification record. Unfinished native
 implementations remain unavailable. Governance may schedule increases or
 decreases within canonical hard bounds at an exact height strictly after the
-admission block; the next block is allowed. Changes take effect at the start of
+admission block; relation-closing changes also respect the captured private-payment
+drain described below. Changes take effect at the start of
 that block after the scheduling transaction commits. Persisted histories are
 validated against the current retention cap and their authenticated attained
 count. New appends use the minimum of the current and pending caps; due pruning
@@ -423,12 +424,22 @@ source contracts require native platform testing and crash-durability evidence;
 cross-compilation does not establish runtime qualification.
 Startup scanning rejects unknown, noncanonical, substituted, or capacity-
 violating records and reconstructs staged pool/nullifier/output reservations.
+
 Those locks use exact-route keys: pool heads are reserved by
 `(route, pool_id, old_epoch, old_root)`, nullifiers by
 `(route, pool_id, nullifier)`, and outputs by
 `(route, pool_id, commitment)`. Equal opaque values on different routes do not
 alias, while a conflict on the same full route cannot be bypassed by reusing a
 pool identifier.
+
+Windows configured APS storage uses retained private root and `.tmp` owners,
+an exclusive original writer lock, bounded original-file reads and borrowed
+cross-parent journal publication. Failed mutations retain their original handles;
+publication/disposition latches preserve the existing committed-error and restart
+boundary. The canonical records, reservation keys and lifecycle policy are shared
+with Unix. Native source and failure controls still require current-source
+execution and the separate real-process persistence-cut qualification; the
+optional governed APS configuration remains disabled by default.
 
 Access views are least privilege:
 
@@ -528,8 +539,9 @@ Collecting -> Audited -> Prepared -> CommitCertified -> Finalized
    finalization instruction, including its registered instruction framing.
    Torii admission and the core transaction-scoped carrier binding additionally
    measure the exact canonical sponsor-signed transaction--including authority,
-   metadata, fee intent, and signature--for `max_carrier_bytes` before any WSV
-   mutation. Consensus-assigned `finalized_height` is not signed carrier
+   metadata, fee intent, and signature--against the fixed continuation allowance
+   reserved at Register. A later tighter admission cap cannot revoke that original
+   allowance. Consensus-assigned `finalized_height` is not signed carrier
    material. Torii rejects already stale ingress and requires room for at least
    the next block within the manifest expiry window. Before finalization, the
    same sponsor may instead submit one
@@ -655,47 +667,98 @@ fails closed with a fixed redacted error; restricted HTTP dispatch does not
 begin until bridge availability is established. Public redacted status and
 receipt queries do not depend on access to restricted verification material.
 
-## Configuration
+## Committed validity policy and local capacity
 
-Production behavior is sourced from `[nexus.atomic_private_settlement]`; no
-environment variable enables the feature. Native relation availability and committed
-protocol policy govern admission; no node enable flag, activation height or notice
-period is required. Strict startup constructs both settlement signers from the
-original configured node key and opens the durable encrypted-sidecar store with
-its governed capacity bounds. Missing signers or a failed store open refuse
-Strict startup. Emergency Fast keeps the runtime store and signers absent, so
-settlement routes remain unavailable until a Strict restart. Request admission
-still enforces the native profile and applicable committed and pool policies.
-The remaining configuration includes:
+The typed `PrivateSettlementPolicyV1` under custom parameter
+`private_settlement_policy_v1` owns private-payment admission limits in the
+existing `World.parameters` cell. It holds current limits, at most one pending
+update and an optional captured protocol-closure drain. Its canonical Norito JSON
+payload is bounded to 4096 bytes. Authenticated absence means the immutable native
+V1 baseline; a malformed, noncanonical or invalid present value never selects that
+baseline. Local codec refusal preserves retry custody. Bootstrap and replay do
+not create a missing parameter.
 
-- `proof_profile_version`;
-- `max_participants` (hard V1 maximum 255) and `max_expiry_blocks`;
-- audit, Prepare, and Commit height timeouts;
-- strictly increasing capsule padding classes;
-- proof, whole-canonical-capsule, carrier, per-record, and retention bounds;
-- `sidecar_max_records` and `sidecar_max_total_bytes`, which are consensus-
-  committed governed capacities passed to every Torii sidecar store at open;
-- `default_min_auditor_approvals`, which is the governed minimum threshold
-  accepted for every newly admitted policy, and permitted audit-policy versions.
+`PrivateSettlementValidityLimitsV1` binds participant count, original
+context-to-expiry span, three phase durations, selected fixed padding classes,
+proof and complete canonical capsule bytes, canonical signed carrier bytes,
+minimum sidecar retention and minimum auditor threshold. The selected-context
+proof authenticates the complete Parameters cell before extracting the extension,
+and the native protocol's exact optional policy row or its absence in the same
+World cut. Neither node configuration nor a caller-supplied policy grants native
+admission. The proof profile, audit schema and policy version are fixed V1 values.
 
-`max_capsule_bytes` limits the canonical Norito encoding of the complete
-`PrivateSettlementAuditCapsuleV1`, including AAD, nonce, ciphertext, vector
-framing, auditor identifiers, and every wrapped-DEK row; it is not a
-ciphertext-only allowance. Configuration parsing proves that each enabled
-padding class can fit the conservative complete-capsule envelope for at least
-`default_min_auditor_approvals` auditors. Admission then rejects any policy
-whose `min_approvals` is below that governed floor and any actual capsule whose
-whole canonical encoding exceeds `max_capsule_bytes`.
+Governed `SetParameter` schedules a successor without replacing current limits or
+an outstanding update. At ordinary height `H >= 2`, a changed policy activates at
+`E > H + current.max_expiry_blocks`, using checked arithmetic. New admission must
+have original expiry strictly below every pending private-policy or native
+relation-closing deadline. Scheduling a generic native-policy closure while the
+extension exists or staged locks remain atomically captures its protocol
+identifier, scheduled and effective heights, canonical successor-limit hash and
+original private expiry span in this extension. Subsequent private-policy changes
+cannot shorten that drain. With neither extension nor staged locks, a valid
+closure updates only its original protocol-policy row; it does not insert a
+parameter or require a missing capture. Its pending effective height still
+exclusively bounds new admission. Block-start processing validates linkage for
+present extensions, applies due limits and clears completed captures in the same
+overlay. Snapshot restoration checks both current and predecessor policy state.
+No policy-history archive is introduced.
 
-`max_carrier_bytes` limits the complete canonical sponsor-signed direct
-transaction, including registered instruction framing, authority, metadata,
-fee intent, and signature. Coordinator/WSV receipt preflight reconstructs and
-measures the boxed finalization instruction, while Torii and the transaction-
-scoped core binding enforce the exact signed-transaction size. Ordinary network
-transaction bounds remain independent.
+The original general privacy-policy layouts remain unchanged, and moving the
+protocol-policy key into Model preserves its sole nominal wire identity,
+`iroha_core::privacy_state::PrivacyProtocolPolicyKeyV1`. The genesis-signed SORA
+Nexus policy keeps its original private-settlement field order and frozen V1
+baseline values, including fixed sidecar capacity slots. Those signing slots are
+independent of both this governed extension and current node-local capacity;
+they do not reconstruct arbitrary historical configurations. See
+[`first_release_history_cutover.md`](first_release_history_cutover.md) for the
+unchanged-fixture replay qualification contract.
 
-Invalid zero values, unsupported V1 versions, duplicate/unsorted padding or
-policy lists, and values above hard protocol limits are configuration errors.
+Signed genesis may initialize this policy with a strictly future activation,
+including `E = 2`. No prior monetary obligation exists at genesis: the canonical
+Core carrier boundary rejects Register, Finalize and Abort at height one. This
+exception does not waive any height-two-or-later drain. Pool setup retains its
+existing independent authorization rules.
+
+Admission validates all enabled capsule padding classes against a conservative
+complete-capsule envelope for `min_auditor_approvals` auditors. Actual capsule
+bounds count canonical `PrivateSettlementAuditCapsuleV1` bytes, including AAD,
+nonce, ciphertext, vector framing, auditor identifiers and every wrapped-DEK row.
+The selected context refuses an audit opening below the governed threshold; SDK
+preparation and Torii also enforce actual proof/capsule size and signed retention.
+
+`max_carrier_bytes` counts the complete canonical `SignedTransaction` frame,
+including original sponsor identity and roster, metadata, fee intent, instruction
+framing and signatures. Register reserves the larger of its own frame and the
+conservative complete Finalize/Abort envelope derived from its original manifest,
+account and fee context. The sole canonical writer supplies size counting; the
+V1 wire-to-frame conversion is applied once. Native carriers allow at most sixteen
+actual signers, while retaining the complete original nonsigning account roster.
+Current signature authentication and revocation still apply. While the same
+authenticated World cut contains staged private-settlement locks, generic
+resource updates must preserve the fixed 4 MiB complete continuation frame,
+sixteen signer slots and the existing block reserve. Final-candidate validation
+sees newly registered locks before publication; snapshot checks use the matching
+current or predecessor cut. With no such obligations and no explicit extension,
+the immutable baseline does not impose new generic transaction/signature floors
+on an existing history. An explicit extension separately requires its current
+and scheduled carrier caps to fit the generic transaction cap, even when no locks
+remain.
+
+Finalize and Abort consume their exact original registered obligation and native
+evidence after a later admission policy takes effect. They do not pass through
+fresh current count/byte admission. A terminal status or receipt remains readable
+after admission closes. These rules do not treat expiry, a rejected carrier,
+local capacity refusal or an absent response as an authenticated business abort.
+
+`[nexus.atomic_private_settlement]` contains only `sidecar_max_records` and
+`sidecar_max_total_bytes`. They bound the local encrypted-sidecar store and are
+excluded from consensus policy identity. Exhaustion refuses local custody without
+establishing a settlement outcome or releasing unresolved reservations. Retired
+semantic configuration keys are rejected; there are no compatibility fields or
+environment-variable bypasses. Strict startup constructs settlement signers from
+the original configured node key and opens the durable store with these local
+bounds. Missing signers or a failed store open refuse Strict startup. Emergency
+Fast keeps the store and signers absent until a Strict restart.
 
 ## Determinism and recovery invariants
 

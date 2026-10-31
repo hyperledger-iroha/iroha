@@ -26,16 +26,35 @@ impl OneCallPrivateSettlementError {
         use OneCallPrivateSettlementError as E;
         match self {
             E::Binding => WorkflowErrorCode::BindingMismatch,
-            E::Capacity | E::Storage(_) => WorkflowErrorCode::LocalResourceUnavailable,
+            E::Capacity | E::Worker(_) | E::Storage(_) => {
+                WorkflowErrorCode::LocalResourceUnavailable
+            }
             E::Pending => WorkflowErrorCode::EvidenceUnavailable,
             E::Workflow(error) => error.code,
             E::Finality(_) => WorkflowErrorCode::ProofInvalid,
             E::FinalityRead(error) => finality_read_code(error),
             E::Preparation(error) => preparation_code(error),
             E::Provider(error) => provider_code(error),
+            E::WalletCustody(error) => wallet_custody_code(error),
+            E::ReconciliationPending(error) => error.cause().workflow_code(),
             E::Encoding(error) => codec_code(error),
             E::Settlement(error) => settlement_code(error),
         }
+    }
+}
+
+fn wallet_custody_code(error: &PrivateSettlementWalletStorageError) -> WorkflowErrorCode {
+    use PrivateSettlementWalletStorageError as E;
+    match error {
+        E::Binding | E::InputReserved | E::Consumed | E::Aborted => {
+            WorkflowErrorCode::BindingMismatch
+        }
+        E::Missing => WorkflowErrorCode::EvidenceUnavailable,
+        E::Capacity | E::Busy | E::Io(_) | E::Encryption(_) => {
+            WorkflowErrorCode::LocalResourceUnavailable
+        }
+        E::Codec(error) => codec_code(error),
+        E::Authorization(error) => preparation_code(error),
     }
 }
 
@@ -197,15 +216,38 @@ fn settlement_code(error: &PrivateSettlementError) -> WorkflowErrorCode {
     match error {
         PrivateSettlementError::Binding => WorkflowErrorCode::BindingMismatch,
         PrivateSettlementError::Workflow(error) => error.code,
+        PrivateSettlementError::Custody(error) => match error.kind {
+            WorkflowStorageErrorKind::Conflict => WorkflowErrorCode::JournalConflict,
+            WorkflowStorageErrorKind::Oversized => WorkflowErrorCode::StorageCorrupted,
+            WorkflowStorageErrorKind::Busy
+            | WorkflowStorageErrorKind::Unavailable
+            | WorkflowStorageErrorKind::WriteUncertain => {
+                WorkflowErrorCode::LocalResourceUnavailable
+            }
+        },
+        PrivateSettlementError::FinalityStorage(error) => {
+            use iroha::client::PrivateSettlementFinalityStorageError as E;
+            match error {
+                E::Binding => WorkflowErrorCode::BindingMismatch,
+                E::Capacity | E::Busy | E::Io(_) | E::Encryption(_) => {
+                    WorkflowErrorCode::LocalResourceUnavailable
+                }
+                E::Conflict => WorkflowErrorCode::JournalConflict,
+                E::Codec(error) => codec_code(error),
+                E::Finality(error) => finality_read_code(error),
+                E::Execution(_) => WorkflowErrorCode::ProofInvalid,
+            }
+        }
         PrivateSettlementError::Protocol(error) => provider_code(error),
         PrivateSettlementError::Codec(error) => codec_code(error),
         PrivateSettlementError::Finality(error) => finality_read_code(error),
         PrivateSettlementError::Execution(_) | PrivateSettlementError::Receipt(_) => {
             WorkflowErrorCode::ProofInvalid
         }
-        PrivateSettlementError::ReadBudget | PrivateSettlementError::Worker => {
-            WorkflowErrorCode::LocalResourceUnavailable
-        }
+        PrivateSettlementError::ReadBudget
+        | PrivateSettlementError::Worker(_)
+        | PrivateSettlementError::Capacity
+        | PrivateSettlementError::Synchronization => WorkflowErrorCode::LocalResourceUnavailable,
         PrivateSettlementError::Unresolved => WorkflowErrorCode::EvidenceUnavailable,
     }
 }
@@ -213,6 +255,124 @@ fn settlement_code(error: &PrivateSettlementError) -> WorkflowErrorCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_worker_lifecycle_is_a_direct_local_failure_owner() {
+        for failure in [
+            NativeWorkerError::RuntimeUnavailable,
+            NativeWorkerError::ThreadCreation(std::io::Error::other("original worker creation")),
+            NativeWorkerError::Panicked,
+            NativeWorkerError::CompletionUnavailable,
+        ] {
+            let failure = OneCallPrivateSettlementError::from(failure);
+            assert!(matches!(failure, OneCallPrivateSettlementError::Worker(_)));
+            assert_eq!(
+                failure.workflow_code(),
+                WorkflowErrorCode::LocalResourceUnavailable
+            );
+        }
+        for failure in [
+            PrivateSettlementError::Capacity,
+            PrivateSettlementError::Synchronization,
+        ] {
+            assert_eq!(
+                settlement_code(&failure),
+                WorkflowErrorCode::LocalResourceUnavailable
+            );
+        }
+    }
+
+    #[test]
+    fn original_wallet_custody_failure_keeps_its_category() {
+        use PrivateSettlementWalletStorageError as E;
+        for (original, expected) in [
+            (E::Binding, WorkflowErrorCode::BindingMismatch),
+            (E::InputReserved, WorkflowErrorCode::BindingMismatch),
+            (E::Consumed, WorkflowErrorCode::BindingMismatch),
+            (E::Aborted, WorkflowErrorCode::BindingMismatch),
+            (E::Missing, WorkflowErrorCode::EvidenceUnavailable),
+            (E::Capacity, WorkflowErrorCode::LocalResourceUnavailable),
+            (E::Busy, WorkflowErrorCode::LocalResourceUnavailable),
+            (
+                E::Io(std::io::Error::other("original wallet publication")),
+                WorkflowErrorCode::LocalResourceUnavailable,
+            ),
+            (
+                E::Codec(norito::Error::InvalidMagic),
+                WorkflowErrorCode::NonCanonicalEncoding,
+            ),
+            (
+                E::Authorization(AtomicPrivateSettlementPreparationErrorV1::Wallet(
+                    WalletError::SecretMaterial,
+                )),
+                WorkflowErrorCode::AuthorizationDenied,
+            ),
+        ] {
+            assert_eq!(
+                OneCallPrivateSettlementError::WalletCustody(original).workflow_code(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn original_pending_finality_failure_keeps_its_classification() {
+        use iroha::client::PrivateSettlementFinalityStorageError as E;
+        for (original, expected) in [
+            (E::Binding, WorkflowErrorCode::BindingMismatch),
+            (E::Capacity, WorkflowErrorCode::LocalResourceUnavailable),
+            (E::Busy, WorkflowErrorCode::LocalResourceUnavailable),
+            (
+                E::Io(std::io::Error::other("original custody I/O")),
+                WorkflowErrorCode::LocalResourceUnavailable,
+            ),
+            (E::Conflict, WorkflowErrorCode::JournalConflict),
+            (
+                E::Codec(norito::Error::InvalidMagic),
+                WorkflowErrorCode::NonCanonicalEncoding,
+            ),
+            (
+                E::Execution(FinalityError("invalid checkpoint".into())),
+                WorkflowErrorCode::ProofInvalid,
+            ),
+        ] {
+            let error = OneCallPrivateSettlementError::Settlement(
+                PrivateSettlementError::FinalityStorage(original),
+            );
+            assert_eq!(error.workflow_code(), expected);
+        }
+    }
+
+    #[test]
+    fn original_phase_custody_failure_keeps_its_local_classification() {
+        for (kind, expected) in [
+            (
+                WorkflowStorageErrorKind::Busy,
+                WorkflowErrorCode::LocalResourceUnavailable,
+            ),
+            (
+                WorkflowStorageErrorKind::Unavailable,
+                WorkflowErrorCode::LocalResourceUnavailable,
+            ),
+            (
+                WorkflowStorageErrorKind::WriteUncertain,
+                WorkflowErrorCode::LocalResourceUnavailable,
+            ),
+            (
+                WorkflowStorageErrorKind::Conflict,
+                WorkflowErrorCode::JournalConflict,
+            ),
+            (
+                WorkflowStorageErrorKind::Oversized,
+                WorkflowErrorCode::StorageCorrupted,
+            ),
+        ] {
+            let error = OneCallPrivateSettlementError::Settlement(PrivateSettlementError::Custody(
+                WorkflowStorageError::new(kind, "original local custody refusal"),
+            ));
+            assert_eq!(error.workflow_code(), expected);
+        }
+    }
 
     #[test]
     fn original_operational_categories_do_not_infer_capacity_from_text_or_codec_labels() {

@@ -1245,7 +1245,7 @@ define_privacy_digest!(
 );
 define_privacy_digest!(
     /// Canonical transaction binding: the privacy intent projection for ordinary
-    /// statements, or the original ActionStatementV1 digest for attached X.509.
+    /// statements, or the original `ActionStatementV1` digest for attached X.509.
     PrivacyTransactionIntentDigestV1,
     "iroha_data_model::privacy::PrivacyTransactionIntentDigestV1"
 );
@@ -1549,8 +1549,12 @@ include!("privacy/protocol.rs");
 mod action_role;
 mod capability_manifest;
 mod policy;
+mod private_settlement_policy;
+mod protocol_policy_key;
 pub use action_role::PrivacyActionRoleV1;
 pub use capability_manifest::*;
+pub use private_settlement_policy::*;
+pub use protocol_policy_key::PrivacyProtocolPolicyKeyV1;
 mod release_manifest;
 pub use release_manifest::*;
 mod zk_x509_interval;

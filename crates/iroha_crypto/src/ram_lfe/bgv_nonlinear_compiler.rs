@@ -2,10 +2,11 @@
 //!
 //! A single clearing owner copies canonical operands and ordered snapshots.
 //! Bounded uses sixteen rank layers, twenty state banks and ten slots per gate.
-//! Refresh uses three state banks, 319 mixed gate ordinals and ten public steps
-//! per ordinal: condition square, seven repeated squares, retained unit product,
-//! then the canonical gate result. Four unique maps per ordinal cover those ten
-//! steps; prior results carry and future slots remain structural zero.
+//! Refresh retains three state banks and updates only the public target bank
+//! at each of 319 mixed gate ordinals. Nine physical steps use a condition square,
+//! seven repeated squares and the canonical result. Three unique maps cover
+//! those steps; prior local slots carry through C and future slots stay zero.
+//! The redundant unit step is omitted uniformly on this closed reachable domain.
 //!
 //! Preparation alone may inspect private kinds or coefficients. Every map's
 //! exact public support is checked before those private reads. The base bank
@@ -13,9 +14,9 @@
 //! memory is captured. Logical Refresh admission and stored/aliased forms remain
 //! those of the original class-first normalizer, regardless of physical padding.
 //!
-//! The sibling bounded runtime consumes the bounded maps. TODO(R.9): integrate
-//! the Refresh maps with the one closed encrypted runtime and complete resource
-//! admission. This compiler does not establish encrypted R9 execution, input
+//! The sibling nonlinear runtime consumes both class geometries with one closed
+//! encrypted evaluator. TODO(R.9): complete end-to-end application proofs and
+//! resource qualification. This compiler alone does not establish input
 //! authentication, a committed lowering proof, circuit privacy or parameter
 //! qualification; those production refusals remain unchanged.
 
@@ -108,7 +109,7 @@ pub enum RamLfeBgvNonlinearCompileErrorV1 {
 ///
 /// This descriptor supplies no class admission: the compiler binds it to the
 /// original normal form. Bounded uses sixteen rank layers; Refresh uses all
-/// 319 mixed canonical gate positions and ten steps at each position.
+/// 319 mixed canonical gate positions and nine physical steps at each position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RamLfeBgvNonlinearShapeV1 {
     /// Twenty state banks and one base bank, with ten slots per nonlinear gate.
@@ -117,16 +118,14 @@ pub enum RamLfeBgvNonlinearShapeV1 {
     Refresh,
 }
 
-/// One of four unique maps at each public refresh-class gate position.
+/// One of three unique maps at each public refresh-class gate position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RamLfeBgvRefreshMapV1 {
     /// Step zero: Select condition square; other kinds start from zero.
     Initial,
     /// Steps one through seven reuse this same target-slot squaring map.
     Square,
-    /// Step eight retains the target through an actual product by one.
-    Unit,
-    /// Step nine computes the canonical Mul, Select, Refresh or padding result.
+    /// Step eight computes the canonical Mul, Select, Refresh or padding result.
     Final,
 }
 
@@ -139,7 +138,7 @@ pub enum RamLfeBgvNonlinearStageV1 {
     RefreshGate {
         /// Public canonical ordinal including padded absent gates.
         gate: u16,
-        /// One of the four fixed maps in the ten-step schedule.
+        /// One of the three fixed maps in the nine-step schedule.
         mode: RamLfeBgvRefreshMapV1,
     },
 }
@@ -190,7 +189,7 @@ impl RamLfeBgvNonlinearShapeV1 {
     pub const fn maximum_layer_payload_bytes(self) -> usize {
         (match self {
             Self::Bounded => LAYER_CELLS,
-            Self::Refresh => 5 * (REFRESH_GATES - 1) + 292,
+            Self::Refresh => 3 * (REFRESH_GATES - 1) + 292 + (REFRESH_GATES - 1) % SLOTS,
         }) * size_of::<u32>()
     }
 
@@ -260,7 +259,10 @@ impl RamLfeBgvNonlinearShapeV1 {
         }
         if I != self.input_banks()
             || O != if stage.is_some() {
-                (self.input_banks() - 1) * 3
+                match self {
+                    Self::Bounded => STATE_BANKS * 3,
+                    Self::Refresh => 3,
+                }
             } else {
                 1
             }
@@ -268,6 +270,74 @@ impl RamLfeBgvNonlinearShapeV1 {
             return Err(RamLfeBgvNonlinearCompileErrorV1::ClassMismatch);
         }
         Ok(())
+    }
+
+    fn check_plan<const I: usize, const O: usize>(
+        self,
+        stage: Option<RamLfeBgvNonlinearStageV1>,
+        plan: &SlotLinearPlan<I, O>,
+    ) -> Result<(), RamLfeBgvNonlinearCompileErrorV1> {
+        self.check_geometry::<I, O>(stage)?;
+        if plan.slots() != SLOTS || plan.plaintext_modulus() != u64::from(MODULUS) {
+            return Err(RamLfeBgvNonlinearCompileErrorV1::UnsupportedProfile);
+        }
+        for row in 0..O * SLOTS {
+            let (expected, count) = self.support(stage, row);
+            let actual = plan
+                .layout()
+                .row_segments(row)
+                .ok_or(SlotLinearError::LayoutMismatch)?;
+            if actual.len() != count
+                || actual.iter().zip(&expected[..count]).any(|(a, b)| {
+                    (a.start(), a.count(), a.stride()) != (b.start(), b.count(), b.stride())
+                })
+            {
+                return Err(SlotLinearError::LayoutMismatch.into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Prepare a tape-independent Square map for the Refresh class.
+    ///
+    /// This mode has entirely public coefficients. Class, stage,
+    /// dimensions, effective F257 encoding and every support segment are
+    /// checked before map or row allocation. No private compiler or normal
+    /// form is constructed, and this method grants no tape-class admission.
+    /// # Errors
+    /// Refuses private modes, another class, invalid stage/profile/support or
+    /// a shared map allocation failure.
+    pub fn prepare_public_layer<const I: usize, const O: usize>(
+        self,
+        stage: RamLfeBgvNonlinearStageV1,
+        plan: &SlotLinearPlan<I, O>,
+    ) -> Result<SlotLinearMap<I, O>, RamLfeBgvNonlinearCompileErrorV1> {
+        let RamLfeBgvNonlinearStageV1::RefreshGate { gate, mode } = stage else {
+            return Err(RamLfeBgvNonlinearCompileErrorV1::ClassMismatch);
+        };
+        if self != Self::Refresh || mode != RamLfeBgvRefreshMapV1::Square {
+            return Err(RamLfeBgvNonlinearCompileErrorV1::ClassMismatch);
+        }
+        self.check_plan(Some(stage), plan)?;
+        Ok(SlotLinearMap::prepare_rows(plan, |row, values| {
+            #[cfg(test)]
+            tests::observe_row();
+            let complete = emit_public_refresh_row(
+                usize::from(gate),
+                mode,
+                row % SLOTS,
+                row / SLOTS,
+                &mut |column, coefficient| {
+                    values[column] = (values[column] + u32::from(coefficient)) % u32::from(MODULUS);
+                },
+            );
+            debug_assert!(complete);
+            #[cfg(test)]
+            for column in 0..values.len() {
+                tests::observe_write(row * values.len() + column);
+            }
+            Ok(())
+        })?)
     }
 
     /// Exact metadata bytes for a class-fixed layer support graph.
@@ -361,23 +431,20 @@ fn refresh_support(
     };
     if let Some(RamLfeBgvNonlinearStageV1::RefreshGate { gate, mode }) = stage {
         let gate = usize::from(gate);
-        let physical = row % REFRESH_PHYSICAL;
-        let operand = row / REFRESH_PHYSICAL;
-        if physical < gate {
-            match operand {
-                0 => push(physical, 1),
-                1 => push(REFRESH_ONE, 1),
-                _ => {}
+        let slot = row % SLOTS;
+        let operand = row / SLOTS;
+        let target = gate % SLOTS;
+        if slot < target {
+            if operand == 2 {
+                push(gate / SLOTS * SLOTS + slot, 1);
             }
-        } else if physical == gate {
+        } else if slot == target {
             match (mode, operand) {
                 (RamLfeBgvRefreshMapV1::Initial, 0 | 1) => {
                     push(0, gate);
                     push(REFRESH_BASE, 97);
                 }
                 (RamLfeBgvRefreshMapV1::Square, 0 | 1) => push(gate, 1),
-                (RamLfeBgvRefreshMapV1::Unit, 0) => push(gate, 1),
-                (RamLfeBgvRefreshMapV1::Unit, 1) => push(REFRESH_ONE, 1),
                 (RamLfeBgvRefreshMapV1::Final, 0..=2) => {
                     push(0, gate + usize::from(operand == 0));
                     push(REFRESH_BASE, 97);
@@ -390,6 +457,37 @@ fn refresh_support(
         push(REFRESH_BASE, 97);
     }
     (support, count)
+}
+
+/// Emit a complete row when it depends only on public stage geometry.
+/// Returns false only for the current Initial/Final target, whose coefficients
+/// must be supplied by the private compiler after the public support preflight.
+fn emit_public_refresh_row(
+    gate: usize,
+    mode: RamLfeBgvRefreshMapV1,
+    slot: usize,
+    operand: usize,
+    emit: &mut impl FnMut(usize, u16),
+) -> bool {
+    let target = gate % SLOTS;
+    if slot < target {
+        if operand == 2 {
+            emit(gate / SLOTS * SLOTS + slot, 1);
+        }
+        return true;
+    }
+    if slot != target {
+        return true;
+    }
+    match mode {
+        RamLfeBgvRefreshMapV1::Square => {
+            if operand <= 1 {
+                emit(gate, 1);
+            }
+        }
+        RamLfeBgvRefreshMapV1::Initial | RamLfeBgvRefreshMapV1::Final => return false,
+    }
+    true
 }
 
 enum PrivateForms {
@@ -512,8 +610,8 @@ impl RamLfeBgvNonlinearCompilerV1 {
                 left.max(right) + 1
             } else {
                 // Eight squarings followed by a retained product by one.
-                for step in 0..9 {
-                    compiler.private[READY + start + step] = left + step as u16 + 1;
+                for step in 0_u16..9 {
+                    compiler.private[READY + start + usize::from(step)] = left + step + 1;
                 }
                 (left + 10)
                     .max(right + 1)
@@ -588,8 +686,8 @@ impl RamLfeBgvNonlinearCompilerV1 {
     ///
     /// The exact support graph, stage, class, dimensions and effective F257
     /// encoding are checked before private coefficients or row allocation.
-    /// Refresh callers prepare four maps per gate and reuse Square for the
-    /// seven public middle steps; this never removes physical execution steps.
+    /// Refresh callers prepare three maps per gate and reuse Square for the
+    /// seven public middle steps; each of those seven squares still executes.
     /// # Errors
     /// Refuses an invalid stage/class/profile/support or shared-owner failure.
     pub fn prepare_layer<const I: usize, const O: usize>(
@@ -597,7 +695,7 @@ impl RamLfeBgvNonlinearCompilerV1 {
         stage: RamLfeBgvNonlinearStageV1,
         plan: &SlotLinearPlan<I, O>,
     ) -> Result<SlotLinearMap<I, O>, RamLfeBgvNonlinearCompileErrorV1> {
-        self.check_plan(Some(stage), plan)?;
+        self.shape.check_plan(Some(stage), plan)?;
         Ok(SlotLinearMap::prepare_rows(plan, |row, values| {
             match stage {
                 RamLfeBgvNonlinearStageV1::BoundedLayer(layer) => {
@@ -618,37 +716,11 @@ impl RamLfeBgvNonlinearCompilerV1 {
         &self,
         plan: &SlotLinearPlan<I, 1>,
     ) -> Result<SlotLinearMap<I, 1>, RamLfeBgvNonlinearCompileErrorV1> {
-        self.check_plan(None, plan)?;
+        self.shape.check_plan(None, plan)?;
         Ok(SlotLinearMap::prepare_rows(plan, |row, values| {
             self.fill_projection_row(row, values);
             Ok(())
         })?)
-    }
-
-    fn check_plan<const I: usize, const O: usize>(
-        &self,
-        stage: Option<RamLfeBgvNonlinearStageV1>,
-        plan: &SlotLinearPlan<I, O>,
-    ) -> Result<(), RamLfeBgvNonlinearCompileErrorV1> {
-        self.shape.check_geometry::<I, O>(stage)?;
-        if plan.slots() != SLOTS || plan.plaintext_modulus() != u64::from(MODULUS) {
-            return Err(RamLfeBgvNonlinearCompileErrorV1::UnsupportedProfile);
-        }
-        for row in 0..O * SLOTS {
-            let (expected, count) = self.shape.support(stage, row);
-            let actual = plan
-                .layout()
-                .row_segments(row)
-                .ok_or(SlotLinearError::LayoutMismatch)?;
-            if actual.len() != count
-                || actual.iter().zip(&expected[..count]).any(|(a, b)| {
-                    (a.start(), a.count(), a.stride()) != (b.start(), b.count(), b.stride())
-                })
-            {
-                return Err(SlotLinearError::LayoutMismatch.into());
-            }
-        }
-        Ok(())
     }
 
     fn operand(&self, gate: usize, operand: usize) -> &[u16] {
@@ -738,30 +810,19 @@ impl RamLfeBgvNonlinearCompilerV1 {
         &self,
         gate: usize,
         mode: RamLfeBgvRefreshMapV1,
-        physical: usize,
+        slot: usize,
         operand: usize,
         mut emit: impl FnMut(usize, u16),
     ) {
         #[cfg(test)]
         tests::observe_row();
-        if physical < gate {
-            match operand {
-                0 => emit(physical, 1),
-                1 => emit(REFRESH_ONE, 1),
-                _ => {}
-            }
-            return;
-        }
-        if physical != gate {
+        if emit_public_refresh_row(gate, mode, slot, operand, &mut emit) {
             return;
         }
         match (mode, self.private[REFRESH_KINDS + gate], operand) {
-            (RamLfeBgvRefreshMapV1::Initial, 2, 0 | 1) => {
+            (RamLfeBgvRefreshMapV1::Initial, 2, 0 | 1) | (RamLfeBgvRefreshMapV1::Final, 3, 2) => {
                 self.emit_form(self.operand(gate, 0), false, &mut emit)
             }
-            (RamLfeBgvRefreshMapV1::Square, _, 0 | 1) => emit(gate, 1),
-            (RamLfeBgvRefreshMapV1::Unit, _, 0) => emit(gate, 1),
-            (RamLfeBgvRefreshMapV1::Unit, _, 1) => emit(REFRESH_ONE, 1),
             (RamLfeBgvRefreshMapV1::Final, 1, 0 | 1) => {
                 self.emit_form(self.operand(gate, operand), false, &mut emit)
             }
@@ -775,9 +836,6 @@ impl RamLfeBgvNonlinearCompilerV1 {
             }
             (RamLfeBgvRefreshMapV1::Final, 2, 2) => {
                 self.emit_form(self.operand(gate, 2), false, &mut emit)
-            }
-            (RamLfeBgvRefreshMapV1::Final, 3, 2) => {
-                self.emit_form(self.operand(gate, 0), false, &mut emit)
             }
             _ => {}
         }
@@ -794,8 +852,8 @@ impl RamLfeBgvNonlinearCompilerV1 {
         self.emit_refresh_row(
             gate,
             mode,
-            row % REFRESH_PHYSICAL,
-            row / REFRESH_PHYSICAL,
+            row % SLOTS,
+            row / SLOTS,
             |column, coefficient| {
                 values[column] = (values[column] + u32::from(coefficient)) % u32::from(MODULUS);
             },

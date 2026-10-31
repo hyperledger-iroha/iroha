@@ -48,10 +48,10 @@ pub fn instructions(
         };
         ContractArtifactError::preparation("instruction admission", error)
     })?;
-    for (index, bytes) in code.chunks_exact(4).enumerate() {
+    for (index, bytes) in code.as_chunks::<4>().0.iter().enumerate() {
         decoded.push_reserved(DecodedOp {
             pc: (index as u64) * 4,
-            inst: u32::from_le_bytes(bytes.try_into().expect("four-byte instruction")),
+            inst: u32::from_le_bytes(*bytes),
         });
     }
     Ok(Instructions::Funded(decoded))

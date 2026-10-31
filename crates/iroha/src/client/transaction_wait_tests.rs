@@ -779,3 +779,23 @@ fn transaction_wait_local_late_applied_never_confirms_the_peer() {
         assert_exact_scoped_reads(&snapshots, "local");
     }
 }
+
+#[test]
+fn rejection_summary_includes_the_underlying_cause_once() {
+    use iroha_data_model::{ValidationFail, transaction::error::TransactionRejectionReason};
+    let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+        "authority cannot modify this metadata".to_owned(),
+    ));
+    let summary = crate::client::rejection_summary(&reason);
+    assert!(
+        summary.contains("authority cannot modify this metadata"),
+        "{summary}"
+    );
+    assert_eq!(
+        summary
+            .matches("authority cannot modify this metadata")
+            .count(),
+        1,
+        "{summary}"
+    );
+}

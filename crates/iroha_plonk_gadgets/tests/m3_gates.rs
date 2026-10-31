@@ -1824,7 +1824,7 @@ fn harness_signatures_verify_natively_and_with_the_p256_crate() {
     let leaf = q_leaf(2, 2, 1);
     for case in &leaf.cases {
         assert!(case.native(&leaf.params.fixed_keys));
-        assert!(words_cmp(&case.s, &HALF_N) != core::cmp::Ordering::Greater);
+        assert_ne!(words_cmp(&case.s, &HALF_N), core::cmp::Ordering::Greater);
         let key = case.key.unwrap_or(leaf.params.fixed_keys[0]);
         let mut sec1 = vec![4_u8];
         sec1.extend_from_slice(&native::words_to_be(&key.x));

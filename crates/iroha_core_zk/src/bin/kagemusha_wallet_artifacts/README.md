@@ -92,6 +92,32 @@ this issuer record alone never establishes a retained anchor or completed
 Refresh. This command is a direct response signer, not a network time service or
 phone qualification result.
 
+## Built-in source profiles
+
+These commands take one absolute path to a closed JSON request with schema
+`iroha.kagemusha.builtin-source-profile.v1` (fields in [builtin.rs](builtin.rs)):
+
+```sh
+kagemusha_wallet_artifacts --export-builtin-profile "$PROFILE_REQUEST"
+kagemusha_wallet_artifacts --inspect-builtin-profile "$PROFILE_REQUEST"
+kagemusha_wallet_artifacts --verify-builtin-sources "$PROFILE_REQUEST"
+```
+
+Export strictly reconstructs every source, compares every commitment and writes
+`builtin-profile-entry.rs` for the next native build. Inspect checks the carrier
+against this build's compiled profile the way an installation opens it, and
+prints `OPENING_METRICS`.
+
+Verify does what Inspect does and also rebuilds every actual current source
+witnessless and compares it with its installed key. That is the comparison each
+proof makes on a phone, with no commitment work. A circuit changed without new
+keys passes every format, ABI and contract check, and then fails at its first
+proof on a device. Run Verify against the exact carrier an app bundles before
+shipping a Native built from this source. Success ends with
+`BUILTIN_PROFILE_COMPLETE mode=source_verification`. A refusal prints
+`BUILTIN_SOURCE_MISMATCH` with the Q program or route index whose source differs,
+and exits non-zero.
+
 Run focused component tests with
 `cargo iroha-fast -- test -p iroha_core_zk --features dev-tools --bin kagemusha_wallet_artifacts`.
 Full integration additionally needs the current four-validator registration,

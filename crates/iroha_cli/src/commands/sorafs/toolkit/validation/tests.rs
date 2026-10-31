@@ -17,6 +17,46 @@ fn parse_command(args: impl IntoIterator<Item = String>) -> Result<Command, CliE
         .map_err(|error| CliError::Config(error.to_string()))
 }
 use super::*;
+
+#[test]
+fn release_files_use_native_private_custody_and_no_clobber_publication() {
+    let root = tempfile::tempdir().unwrap();
+    let private = root.path().join("private");
+    let directory = iroha_fs::PrivateDirectory::open_or_create(&private).unwrap();
+    directory
+        .write_atomic("seed", &[0x63; 32], iroha_fs::PublishMode::CreateNew)
+        .unwrap();
+    let seed = private.join("seed");
+    assert_eq!(
+        read_release_input(&seed, "test seed", 32, Some(32), true).unwrap(),
+        vec![0x63; 32]
+    );
+    assert!(read_release_input(&seed, "test seed", 31, None, true).is_err());
+    assert!(read_release_input(&seed, "test seed", 32, Some(31), true).is_err());
+    let alias = private.join("seed.alias");
+    fs::hard_link(&seed, &alias).unwrap();
+    assert!(read_release_input(&seed, "test seed", 32, Some(32), true).is_err());
+    fs::remove_file(alias).unwrap();
+    let signature = private.join("release.sig");
+    write_release_signature(&signature, &[0x42; 64]).unwrap();
+    assert_eq!(
+        read_release_input(&signature, "test signature", 64, Some(64), false).unwrap(),
+        vec![0x42; 64]
+    );
+    assert!(write_release_signature(&signature, &[0x43; 64]).is_err());
+    assert_eq!(fs::read(signature).unwrap(), vec![0x42; 64]);
+}
+
+#[cfg(windows)]
+#[test]
+fn release_seed_rejects_inherited_windows_access_without_repair() {
+    let root = tempfile::tempdir().unwrap();
+    let seed = root.path().join("seed");
+    fs::write(&seed, [0x63; 32]).unwrap();
+    assert!(read_release_input(&seed, "test seed", 32, Some(32), true).is_err());
+    assert_eq!(fs::read(seed).unwrap(), vec![0x63; 32]);
+}
+
 fn workspace_fixture(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")

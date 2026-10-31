@@ -418,7 +418,9 @@ mod tests {
         assert!(value.len().is_multiple_of(2));
         value
             .as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| {
                 let digit = |v: u8| match v {
                     b'0'..=b'9' => v - b'0',

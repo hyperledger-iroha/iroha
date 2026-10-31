@@ -247,27 +247,46 @@ membership or external authentication. Exporting the ordinary ciphertext loses
 that origin; independently generated keys are rejected even with the same profile.
 `preflight_evaluation` checks the exact local source shape and complete requested
 key union before a consumer reads request memory or private matrices.
-`mul_plain` returns the unchanged checked input and its actual product by
-moving both owners. A consumer explicitly retains or drops the input; no raw
+`add_plain` and `mul_plain` return the unchanged checked input and their actual
+result by moving both owners. A consumer explicitly retains or drops the input; no raw
 conversion, ciphertext clone or second plaintext-product API is involved.
 The input, result and existing arithmetic scratch coexist during that operation.
+
+`LocalScalarCiphertext` adds a separate closed capability: the message belongs
+to the canonical scalar subalgebra modulo its effective plaintext precision.
+`encrypt_scalar` and `trivial_scalar` check the actual plaintext with the existing
+`SlotEncoding` membership check. Typed sums, checked plaintext operations,
+switching, products, squaring, routing and refresh preserve that capability.
+There is no raw/general-local promotion; `into_local` consumes and relinquishes
+it. This evidence does not assert that encrypted residues, noise or the
+homomorphic decryption polynomial are sparse at master precision.
 
 For master `T=p^E`, effective `t=p^r`, scale `a=p^(E-r)` and centered source
 phase bound `V`, `BootstrapPlan` requires `2*a*V+(N+1)*Q<a*Q`. Centered RNS
 conversion forms `w_i=[a*c_i]_Q`; canonical multiplication by the encrypted
 secret and plaintext addition encrypt `w0+w1*s`. The strict dense-ternary carry
-bound lets balanced upper digits recover the message after complete coefficient
-decomposition; the inverse restores every original coefficient. This follows
+bound lets balanced upper digits recover the message. In `Ring` mode, complete
+coefficient decomposition and its inverse restore every original coefficient. This follows
 the scaled homomorphic-decryption construction in Geelen and Vercauteren,
 [*Bootstrapping for BGV and BFV Revisited*, §§3.2–3.3](https://doi.org/10.1007/s00145-023-09454-6),
 with the explicit conservative carry condition above.
 
-`BootstrapPlan::new` prepares one immutable transform/upper-digit core and an
-exact source descriptor. `admit_source` reuses that same preparation for another
+`BootstrapPlan::new` takes an explicit `BootstrapMessageSpace::{Ring, ScalarSlots}`
+and prepares one immutable transform/upper-digit core and an exact source
+descriptor. `Ring` retains all `d=N/S` coefficient banks. `ScalarSlots` requires
+a `LocalScalarCiphertext` at execution: generic local refresh rejects that mode
+before private access. Its fixed even-only trace extracts bank zero, executes the
+complete upper-digit DAG for that bank and recomposes ordinal zero. Both modes
+use one internal executor, the full ring degree and dense secret, the same
+homomorphic input and strict carry condition. Only absent banks and their
+actual branches/maps/DAG calls are omitted. Effective-message membership
+justifies zero off-stride output coefficients; it never sparsifies the encrypted
+secret or homomorphic input. The genuine initial trace identity product and
+ordinal-zero recomposition identity remain counted, including when `d=1`. `admit_source` reuses that same preparation for another
 exact shape, rechecking profile, precision, components, strict carry and all
 selected-stage, source, stream and complete-work ceilings before sharing it.
-It cannot replace the program, level schedule or routing split, and it creates
-no ciphertext origin. Each refresh still checks its exact source and same-key
+It cannot replace the message space, program, level schedule or routing split,
+and it creates no ciphertext origin. Each refresh still checks its exact source and same-key
 owner and executes the complete pipeline; preparation reuse removes no work.
 
 `LocalBootstrapKey::route` consumes a fixed array of same-owner inputs and
@@ -287,8 +306,11 @@ parity traversal. Each leaf carries its natural residue ordinal through the
 inverse-N map, complete upper-digit DAG, forward map and monomial accumulator.
 Only pending siblings and the current stages remain live; no complete bank
 array is retained by refresh. Public complete-bank APIs collect the same core.
-All `d=N/S` banks and their full arithmetic remain charged, with unchanged
-phase bounds and output precision. There is no alternative refresh evaluator.
+The geometric `d=N/S` remains unchanged. `Ring` charges all `d` banks;
+`ScalarSlots` charges its one selected bank and actual even-only traversal.
+Selection and ordinal tags stay closed through every stage, and recomposition
+requires the exact selected cardinality. Neither mode resets a bound or changes
+output precision. There is no alternative refresh evaluator.
 
 `stream_owned_residue_bytes` admits the combined post-input lifetime peak,
 including pending high-level siblings, route scratch, DAG tensor/switch overlap
@@ -316,8 +338,9 @@ when `shares_preparation` confirms actual shared allocation identity, and count
 every descriptor and each call's full work. Sequential preparation takes the
 maximum scratch. `shared_preparation_bytes` reports the conservative supplied
 matrix/layout/upper scope, which remains separate from typed metadata and does
-not shrink when a later descriptor supplies smaller ceilings. Current bounded
-planning still constructs independent cores and must charge each one.
+not shrink when a later descriptor supplies smaller ceilings. The nonlinear
+RAM-LFE planner shares one actual core across all admitted exact descriptors,
+while each physical call retains its complete arithmetic and work charges.
 Matrix coefficients, shared layout graphs, upper-program/DAG payloads, profiles
 and keys keep their separate mandatory scopes. These architecture-local
 requested-storage bounds exclude allocator headers, excess reservations, compiler
@@ -326,13 +349,18 @@ consensus memory policy. Actual retained metadata is checked on complete
 N65536 q23/q24 public plans as well as small encrypted-plan fixtures.
 
 The plan also checks aggregate `canonical_arithmetic_units` and
-`scalar_word_operations` across input conversion, both complete transforms and
-all-bank upper digits. These are separate existing work categories, with checked
-sums and products; streaming changes no bank count. Refusal precedes private
+`scalar_word_operations` across the unchanged input conversion and the selected
+trace, maps, upper-digit DAGs and recomposition. These are separate existing work
+categories, with checked sums and products. Selection changes actual work;
+streaming alone changes no selected bank count. Refusal precedes private
 input execution. Existing public preparation ceilings remain enforced before
 that aggregate can be computed; this is not a claim of refusal before all
 public preparation. Slot encoding, copying, clearing and proof work are outside
 these canonical counters and still need complete application accounting.
+
+The following native and public-planner observations are historical `Ring`
+results from before scalar selection. They retain their original scope; the
+separate captured scalar target-bank results are recorded below.
 
 Native unselected p5/E3/N16 arithmetic tests preserve zero, basis and dense
 messages through repeated square/refresh cycles; independent full-ring CRT
@@ -354,7 +382,7 @@ is `1622016` bytes, and each bootstrap declares `102490880` canonical arithmetic
 units plus `7559680` explicit scalar-word operations. This small-ring fixture
 does not establish full-size execution, production parameters or security.
 
-An explicitly run public planner test admits the complete current pipeline at
+A historical `Ring` public-planner test admitted the complete pipeline at
 unselected F257/E3/N65536 with 24 60-bit main primes and two 60-bit special
 primes. It checks the exact 18-wave schedule, all modulus drops, output squaring
 and the strict level-zero carry boundary against independent integer vectors.
@@ -373,8 +401,8 @@ alone authenticates no input and grants no local-bootstrap origin. Current cost
 projections use packed frames; historical measured frame sizes remain labeled
 with their recorded layout and are not presented as new measurements.
 
-A separate unselected F257/E3/N65536 public-planner fixture uses 23 60-bit
-main primes and two 60-bit special primes with the current generic matrix
+A separate historical `Ring` F257/E3/N65536 public-planner fixture uses 23 60-bit
+main primes and two 60-bit special primes with the recorded generic matrix
 bounds. Its 18-wave schedule returns at level 4. Ordinary switching to level 2,
 squaring, then switching to level 0 yields bound `5588487865142`, which satisfies
 the strict carry condition for the next refresh. The same schedule can repeat
@@ -384,6 +412,44 @@ Including the output drops, square and source drops gives `11423296061440`
 canonical units, retaining the declared exclusions above. This public diagnostic generates
 no keys or ciphertexts and establishes no minimal prime count, security level
 or full-size encrypted execution.
+
+RAM-LFE keeps checked scalar owners from its genuine packed-input seed through
+one nonlinear kernel and selects `ScalarSlots` for every physical bootstrap.
+Only its public result consumes the scalar capability into a general local
+ciphertext. The N128 witnesses have `d=1`, so scalar selection alone leaves
+per-bootstrap arithmetic unchanged. The Refresh outer schedule now updates one
+target bank while carrying the other state/base owners unchanged. Three honest
+zero banks start at routing level; only the base initially and each target later
+are refreshed. Closed zero-future and embedded-one invariants eliminate Unit:
+nine physical steps per ordinal retain canonical rank ten and class admission.
+The complete 319-ordinal schedule has 2,871 products and 2,872 bootstraps/routes.
+Exact mixed source descriptors and one actual shared preparation are charged;
+neither a common widened source bound nor arbitrary encrypted-state admission
+is used. Historical full-`Ring` and all-bank schedule costs do not describe this
+target-bank execution. Full-size encrypted and security qualification remain open.
+
+A separate unselected N256/F257/E3 q23 diagnostic has an independently replayed
+complete 2,871-step public recurrence with two exact source descriptors and final
+level-zero bound `2181235200`. Both N128 and N256 first-gate fixtures run
+conditions 256 and zero with unequal branches 17 and 99. Each case executes
+10 bootstraps and 36 independent all-bank CRT/negacyclic phase checks, including
+all N256 off-stride coefficients, and compares carried ciphertexts unchanged.
+An ignored complete N256 cross-bank tape exercises target banks one and two
+and final projection through canonical evaluation, with all-bank phases at
+gates 127/128/255/256/318. Both first-gate drivers passed for both conditions
+in the captured wave29 campaign.
+
+Captured wave29 execution passes all three complete N128 Refresh tapes,
+the complete N256 cross-bank tape, all three bounded fixtures and both
+first-gate conditions. The N65536/q23 public planner passes all 640 exact
+source descriptors and exact/one-under resource checks without generating a
+key or ciphertext. The [execution specification](../../specs/ram_lfe_execution_proof.md#fixed-public-schedule)
+retains the immutable JSON/log evidence, separate passing post-cleanup focused
+tests/strict lint and exact source boundaries. A separate honest N65536
+bootstrap/repeat diagnostic now passes all-coefficient message/phase checks
+with sampled independent convolution, under that specification's explicit
+scope. These component results do not qualify selected security, production
+custody or a complete application.
 
 TODO(C.8, R.9, R.11): qualify F257 auxiliary parameters and a complete application
 schedule/resource ledger, prove external input/key correctness and circuit
@@ -495,8 +561,15 @@ caller. `constant_time` is branch-free in operand values; `modular` is not.
 ```sh
 cargo test -p iroha_fhe                         # accelerated kernels and scalar references
 cargo test -p iroha_fhe --no-default-features   # scalar-only build
+cargo test -p iroha_fhe --lib accel::tests::required_avx2_execution -- --ignored --exact
 make check-fhe-bgv-cost                         # cost summary, its view and the known answers are current
 ```
+
+The explicit AVX2 qualification test requires x86-64, the `simd` feature and
+runtime AVX2 support. It fails instead of accepting a scalar fallback or the
+portable lane model. The [Intel execution record](../../docs/validation/intel_avx2.md)
+identifies the checked source and host; this arithmetic check does not qualify
+protocol security or a named performance baseline.
 
 The BGV tests use two references that share no code with the crate:
 `tests/vectors/bgv_reference.py` (Python integers, its own BLAKE3) generates

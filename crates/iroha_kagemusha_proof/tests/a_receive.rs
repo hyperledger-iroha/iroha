@@ -588,7 +588,9 @@ fn merged_signature_leaf_refuses_a_bad_own_receipt_and_keeps_incoming_slots_soft
         let verdicts = |witnesses: &[SignatureWitness]| {
             schema.native_instances(witnesses).map(|[public]| {
                 public
-                    .chunks_exact(SLOT_WORDS)
+                    .as_chunks::<SLOT_WORDS>()
+                    .0
+                    .iter()
                     .map(|slot| slot[SLOT_WORDS - 1])
                     .collect::<Vec<_>>()
             })

@@ -3,11 +3,11 @@
 use std::time::Duration;
 
 use eyre::{Result, WrapErr as _, ensure, eyre};
-use iroha::blocking::Client;
+use iroha::{blocking::Client, query::QueryError};
 use iroha_data_model::{
-    prelude::QueryBuilderExt,
+    ValidationFail,
     privacy::PrivacyExact12CapabilityManifestV1,
-    query::transaction::prelude::FindTransactions,
+    query::error::QueryExecutionFail,
     transaction::{SignedTransaction, TransactionEntrypoint},
 };
 use tokio::time::{Instant, sleep};
@@ -53,18 +53,16 @@ fn exact_applied_transaction_visible(
     client: &Client,
     transaction: &SignedTransaction,
 ) -> Result<bool> {
+    // The signed details route selects the one committed entrypoint; absence means not yet
+    // committed on this peer.
     let expected_hash = transaction.hash_as_entrypoint();
     let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
-    let transactions = client
-        .client()
-        .query(FindTransactions::new())
-        .execute_all()
-        .wrap_err("query finalized transactions")?;
-    let Some(committed) = transactions
-        .iter()
-        .find(|committed| committed.entrypoint_hash() == &expected_hash)
-    else {
-        return Ok(false);
+    let committed = match client.client().get_transaction_details(expected_hash) {
+        Ok(details) => details.transaction,
+        Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {
+            return Ok(false);
+        }
+        Err(error) => return Err(error).wrap_err("query the finalized transaction details"),
     };
     ensure!(
         committed.entrypoint() == &expected_entrypoint,
@@ -101,7 +99,7 @@ pub(super) async fn wait_for_transaction_on_peers(
                     last_observed.push(format!("peer {index}: exact transaction visible"));
                 }
                 Ok(false) => last_observed.push(format!("peer {index}: transaction absent")),
-                Err(error) => last_observed.push(format!("peer {index}: {error}")),
+                Err(error) => last_observed.push(format!("peer {index}: {error:#}")),
             }
         }
         if visible == clients.len() {

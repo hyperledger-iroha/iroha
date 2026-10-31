@@ -316,7 +316,7 @@ impl NoritoKeyRangeTreeV1 {
                 let current = levels.last().expect("a nonempty tree has a level");
                 let mut parents = Vec::new();
                 reserve_exact(&mut parents, current.len() / 2)?;
-                for pair in current.chunks_exact(2) {
+                for pair in current.as_chunks::<2>().0 {
                     parents.push(branch_hash(level, pair[0], pair[1]));
                 }
                 reserve_exact(&mut levels, 1)?;

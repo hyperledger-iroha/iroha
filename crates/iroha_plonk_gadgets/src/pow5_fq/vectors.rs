@@ -66,7 +66,7 @@ pub fn decode_word(text: &str) -> Option<Fq> {
         return None;
     }
     let mut repr = [0u8; 32];
-    for (byte, pair) in repr.iter_mut().zip(digits.chunks_exact(2)) {
+    for (byte, pair) in repr.iter_mut().zip(digits.as_chunks::<2>().0) {
         let high = char::from(pair[0]).to_digit(16)?;
         let low = char::from(pair[1]).to_digit(16)?;
         *byte = u8::try_from(high * 16 + low).ok()?;

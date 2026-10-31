@@ -477,6 +477,7 @@ pub(super) fn matched_workload_record(
     .map_err(Into::into)
 }
 
+#[cfg(unix)]
 pub(super) fn publish_matched_workload(
     request: &RealProcessBenchmarkRequestV1,
     request_sha: &str,
@@ -1011,7 +1012,7 @@ mod tests {
             assert_eq!(data[ordinal].amount, u128::from(payment.amount));
             let funding = private_settlement_funding(
                 network_id(),
-                &governed[ordinal],
+                &governed[ordinal].governance,
                 ordinal,
                 &data[ordinal],
             )

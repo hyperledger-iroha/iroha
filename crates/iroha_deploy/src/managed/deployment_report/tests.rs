@@ -30,7 +30,7 @@ fn private_fixture() -> (tempfile::TempDir, ManagedStore, ManagedDeploymentTarge
     let spec = super::super::tests::private_spec();
     let ports = LocalnetPorts::reserve().unwrap();
     let prepared =
-        crate::localnet::prepare_private_root("private", bundle.path(), &ports, &spec).unwrap();
+        crate::sora_network::prepare_private_root("private", bundle.path(), &ports, &spec).unwrap();
     let pin = store::pin_binary(&std::env::current_exe().unwrap()).unwrap();
     let retained = RetainedLocalnet {
         root_kind: RootKind::Private { spec },

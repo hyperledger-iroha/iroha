@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from collections.abc import Iterator
 from pathlib import Path
 
 try:
@@ -19,6 +20,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on Python < 3.11
 
 import pytest
 from scripts.tests.release_builder_fixture import prepare_source_fixture
+from scripts.tests.release_workspace_fixture import owned_release_workspace
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -1390,9 +1392,17 @@ def test_release_pipeline_dry_run_uses_complete_bundle_target_matrix(
     assert not output_dir.exists()
 
 
+@pytest.fixture
+def release_workspace_path() -> Iterator[Path]:
+    """Supply an owned directory only to the evidence publication fixture."""
+    with owned_release_workspace("release-evidence-") as directory:
+        yield directory
+
+
 def test_release_pipeline_closes_evidence_before_manifest_inventory(
-    tmp_path: Path,
+    release_workspace_path: Path,
 ) -> None:
+    tmp_path = release_workspace_path
     scripts_dir = REPO_ROOT / "scripts"
     sys.path.insert(0, str(scripts_dir))
     try:

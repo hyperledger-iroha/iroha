@@ -365,8 +365,10 @@ mod tests {
             .map(|i| b.scale.mul(b.start.pow(32)).mul(plan.byte_step.pow(i)))
             .collect();
         let words: Vec<_> = bytes
-            .chunks_exact(4)
-            .map(|word| F(u64::from(u32::from_be_bytes(word.try_into().unwrap()))))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|word| F(u64::from(u32::from_be_bytes(*word))))
             .collect();
         (
             polynomial_v1(&source_points, &words),
@@ -527,7 +529,7 @@ mod tests {
                 .mul(denominator.inv().unwrap())
         );
         let mut little = digest;
-        for word in little.chunks_exact_mut(4) {
+        for word in little.as_chunks_mut::<4>().0 {
             word.reverse();
         }
         let (_, wrong) = byte_case_v1(&plan, 0, little);

@@ -287,6 +287,8 @@ fn checkpoint_and_validation_frames_are_canonical_and_reject_wrong_roots() {
         ReputationCheckpointValidationSummaryV1
     );
     publish_immutable_bytes(
+        #[cfg(windows)]
+        &archive.native,
         &archive.checkpoints,
         archive.checkpoints_identity,
         &path,

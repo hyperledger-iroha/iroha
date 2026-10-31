@@ -454,7 +454,9 @@ fn decode_response_slots(
         return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
     }
     for (destination_slot, slot) in destination
-        .chunks_exact_mut(RELEASE_RING_COEFFICIENTS_V1)
+        .as_chunks_mut::<RELEASE_RING_COEFFICIENTS_V1>()
+        .0
+        .iter_mut()
         .zip(slots)
     {
         for (coefficient, residue) in destination_slot.iter_mut().enumerate() {
@@ -533,7 +535,7 @@ fn absorb_residue_limb(
             .checked_mul(core::mem::size_of::<u64>())
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
     )?;
-    for (encoded, residue) in bytes.chunks_exact_mut(8).zip(residues) {
+    for (encoded, residue) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(residues) {
         encoded.copy_from_slice(&residue.to_be_bytes());
     }
     hasher.absorb_limb(row, limb, &bytes)

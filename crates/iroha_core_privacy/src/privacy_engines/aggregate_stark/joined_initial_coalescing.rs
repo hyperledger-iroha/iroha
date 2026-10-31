@@ -6,6 +6,74 @@ use super::*;
 const COLUMNS: usize = 2 * MASKED_TRACE_LDE_COLUMN_BATCH_V1;
 const ROWS_PER_PACKING_TASK: usize = 1024;
 
+/// Immutable columns whose complete incoming batches passed this owner's
+/// canonical preflight. The constructor is private to this module; no caller
+/// can mark arbitrary fields as checked. The borrow prevents safe mutation
+/// until the hash callback returns and the original clearing owners are consumed.
+pub(crate) struct PreflightedInitialColumnsV1<'a, C> {
+    columns: &'a [C],
+}
+
+impl<C> PreflightedInitialColumnsV1<'_, C> {
+    /// Borrow the exact checked columns without changing their lifetime or data.
+    pub(crate) fn columns_v1(&self) -> &[C] {
+        self.columns
+    }
+}
+
+impl<C> core::ops::Deref for PreflightedInitialColumnsV1<'_, C> {
+    type Target = [C];
+    fn deref(&self) -> &Self::Target {
+        self.columns
+    }
+}
+
+impl<C: AsRef<[F]> + Sync> PreflightedInitialColumnsV1<'_, C> {
+    /// Resolve sealed immutable owners once while preserving their preflight.
+    pub(super) fn absorb_into_v1(
+        self,
+        builder: &mut StreamingRowCommitmentV1,
+    ) -> Result<(), AggregateStarkErrorV1> {
+        if self.columns.len() > COLUMNS {
+            return Err(AggregateStarkErrorV1::InvalidLayout);
+        }
+        let views: [&[F]; COLUMNS] = core::array::from_fn(|index| {
+            self.columns
+                .get(index)
+                .map_or::<&[F], _>(&[], AsRef::as_ref)
+        });
+        builder.absorb_preflighted_initial_columns_v1(PreflightedInitialColumnsV1 {
+            columns: &views[..self.columns.len()],
+        })
+    }
+}
+
+/// Public-fixture benchmark entry: perform the same incoming-eight preflight,
+/// then retain an immutable borrow. This checked constructor exists only in tests.
+#[cfg(test)]
+pub(crate) fn preflight_test_batch_v1<'a, 'b>(
+    columns: &'a [&'b [F]],
+) -> Result<PreflightedInitialColumnsV1<'a, &'b [F]>, AggregateStarkErrorV1> {
+    let rows = columns.first().map_or(0, |column| column.len());
+    if rows == 0 || !rows.is_power_of_two() || columns.is_empty() || columns.len() > COLUMNS {
+        return Err(AggregateStarkErrorV1::InvalidLayout);
+    }
+    for incoming in columns.chunks(MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
+        if incoming.iter().any(|column| column.len() != rows) {
+            return Err(AggregateStarkErrorV1::InvalidLayout);
+        }
+        let invalid = |column: &&[F]| !canonical_field_column_v1(column);
+        if if rows >= 1 << 22 {
+            incoming.par_iter().any(invalid)
+        } else {
+            incoming.iter().any(invalid)
+        } {
+            return Err(AggregateStarkErrorV1::NonCanonicalField);
+        }
+    }
+    Ok(PreflightedInitialColumnsV1 { columns })
+}
+
 /// Additional simultaneous output and metadata beyond the ordinary replay batch.
 pub(super) fn extra_payload_v1(rows: usize) -> Result<usize, AggregateStarkErrorV1> {
     if rows == 0 || !rows.is_power_of_two() {
@@ -50,7 +118,7 @@ impl<C: InitialEvaluationV1> InitialCoalescerV1<C> {
     pub(super) fn push_v1(
         &mut self,
         evaluations: Vec<C>,
-        mut absorb: impl FnMut(&[C]) -> Result<(), AggregateStarkErrorV1>,
+        mut absorb: impl FnMut(PreflightedInitialColumnsV1<'_, C>) -> Result<(), AggregateStarkErrorV1>,
     ) -> Result<(), AggregateStarkErrorV1> {
         // Local custody makes every refusal/unwind immediately erase previously
         // retained outputs as well as this newly transferred batch.
@@ -69,7 +137,8 @@ impl<C: InitialEvaluationV1> InitialCoalescerV1<C> {
         }
         // Preserve the original callback boundary: a late-invalid word in the
         // first eight outputs must refuse before another source is invoked.
-        // The initial streaming builder keeps its independent preflight too.
+        // The streaming builder retains its shape/state checks and reuses the
+        // immutable capability instead of repeating this canonical-field scan.
         let invalid = |column: &C| !canonical_field_column_v1(column.as_ref());
         if if self.rows >= 1 << 22 {
             evaluations.par_iter().any(invalid)
@@ -87,7 +156,7 @@ impl<C: InitialEvaluationV1> InitialCoalescerV1<C> {
         // Moves each clearing output owner without reading or copying any private field.
         pending.extend(evaluations);
         if pending.len() == COLUMNS {
-            absorb(&pending)?;
+            absorb(PreflightedInitialColumnsV1 { columns: &pending })?;
             drop_completed_v1(pending);
         } else {
             self.pending = pending;
@@ -99,7 +168,7 @@ impl<C: InitialEvaluationV1> InitialCoalescerV1<C> {
     /// Flush a public group boundary, including an odd or short final batch.
     pub(super) fn flush_v1(
         &mut self,
-        mut absorb: impl FnMut(&[C]) -> Result<(), AggregateStarkErrorV1>,
+        mut absorb: impl FnMut(PreflightedInitialColumnsV1<'_, C>) -> Result<(), AggregateStarkErrorV1>,
     ) -> Result<(), AggregateStarkErrorV1> {
         let pending = core::mem::take(&mut self.pending);
         let previously_failed = self.failed;
@@ -108,7 +177,7 @@ impl<C: InitialEvaluationV1> InitialCoalescerV1<C> {
             return Err(AggregateStarkErrorV1::InvalidLayout);
         }
         if !pending.is_empty() {
-            absorb(&pending)?;
+            absorb(PreflightedInitialColumnsV1 { columns: &pending })?;
             drop_completed_v1(pending);
         }
         self.failed = false;
@@ -195,12 +264,12 @@ mod tests {
                     .unwrap();
                 owner
                     .push_v1(columns(first, count, ROWS), |values| {
-                        combined.absorb_initial_columns_v1(values)
+                        values.absorb_into_v1(&mut combined)
                     })
                     .unwrap();
             }
             owner
-                .flush_v1(|values| combined.absorb_initial_columns_v1(values))
+                .flush_v1(|values| values.absorb_into_v1(&mut combined))
                 .unwrap();
         }
         assert_eq!(original.finish().unwrap(), combined.finish().unwrap());
@@ -350,6 +419,32 @@ mod tests {
         });
         assert_eq!(result, Err(AggregateStarkErrorV1::InvalidLayout));
         assert_eq!(erased.iter().map(|entry| entry.cells).sum::<usize>(), 8 * 4);
+        assert!(erased.iter().all(|entry| entry.nonzero_after == 0));
+    }
+
+    #[test]
+    fn initial_preflighted_bad_second_batch_never_reaches_hash_and_clears_both() {
+        let (result, erased) = field_column_erasure::observe_v1(|| {
+            let mut owner = InitialCoalescerV1::<ZeroizingFieldColumnV1>::new_v1(4).unwrap();
+            owner.push_v1(columns(0, 8, 4), |_| unreachable!()).unwrap();
+            let mut incoming = columns(8, 8, 4);
+            incoming[7].0[3] = F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1);
+            let result = owner.push_v1(incoming, |_| {
+                panic!("bad tail must precede capability publication")
+            });
+            assert!(owner.failed);
+            assert!(owner.pending.is_empty());
+            assert_eq!(
+                owner.flush_v1(|_| unreachable!()),
+                Err(AggregateStarkErrorV1::InvalidLayout)
+            );
+            result
+        });
+        assert_eq!(result, Err(AggregateStarkErrorV1::NonCanonicalField));
+        assert_eq!(
+            erased.iter().map(|entry| entry.cells).sum::<usize>(),
+            16 * 4
+        );
         assert!(erased.iter().all(|entry| entry.nonzero_after == 0));
     }
 }

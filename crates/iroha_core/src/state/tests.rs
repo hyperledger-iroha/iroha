@@ -877,7 +877,7 @@ fn world_with_privacy_updates(
         next_limits: next_protocol_limits,
     });
     world.privacy_protocol_policies.insert(
-        crate::privacy_state::PrivacyProtocolPolicyKeyV1::new(
+        iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
             PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
         ),
         protocol_policy,
@@ -897,7 +897,7 @@ state_test! { sync privacy_policy_and_protocol_updates_apply_atomically_at_block
     assert_eq!(block.privacy_budget_in_block.limits(), &next_limits);
     assert_eq!(block.privacy_budget_in_block.actions(), 0);
     assert_eq!(block.privacy_budget_in_block.bytes(), 0);
-    let_row! { key = crate::privacy_state::PrivacyProtocolPolicyKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
+    let_row! { key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
     let_row! { protocol_policy = *block .world .privacy_protocol_policies .get(&key) .expect("protocol_policy with updated limits") };
     assert_eq!(protocol_policy.current_limits, next_protocol_limits);
     assert_eq!(protocol_policy.pending_update, None);
@@ -924,7 +924,7 @@ state_test! { sync missed_protocol_schedule_rolls_back_a_due_policy_start_hook
     use std::panic::{AssertUnwindSafe, catch_unwind};
     let (world, _, _) = world_with_privacy_updates(99, 399);
     let original_policy = *world.privacy_consensus_policy.view().get();
-    let_row! { protocol_policy_key = crate::privacy_state::PrivacyProtocolPolicyKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
+    let_row! { protocol_policy_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
     let_row! { original_protocol_policy = *world .privacy_protocol_policies .view() .get(&protocol_policy_key) .expect("scheduled protocol_policy") };
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let header = BlockHeader::new(nonzero!(400_u64), None, None, 0, 0);
@@ -951,7 +951,7 @@ state_test! { sync failed_pristine_stage_skips_start_effects_and_releases_overla
 
     let (world, next_limits, next_protocol_limits) = world_with_privacy_updates(100, 400);
     let original_policy = *world.privacy_consensus_policy.view().get();
-    let protocol_policy_key = crate::privacy_state::PrivacyProtocolPolicyKeyV1::new(
+    let protocol_policy_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
         PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
     );
     let original_protocol_policy = *world
@@ -1401,11 +1401,11 @@ state_test! { sync insert_domain_for_testing_moves_owner_membership_row
             .cloned()
             .collect::<BTreeSet<_>>()
     };
-    assert_eq!(owned(&world, &*ALICE_ID), BTreeSet::from([domain_id.clone()]));
+    assert_eq!(owned(&world, &ALICE_ID), BTreeSet::from([domain_id.clone()]));
     let_row! { previous = world .insert_domain_for_testing( domain_id.clone(), Domain::new(domain_id.clone()).build(&BOB_ID), ) .expect("existing fixture domain is replaced") };
     assert_eq!(previous.owned_by(), &*ALICE_ID);
-    assert!(owned(&world, &*ALICE_ID).is_empty());
-    assert_eq!(owned(&world, &*BOB_ID), BTreeSet::from([domain_id]));
+    assert!(owned(&world, &ALICE_ID).is_empty());
+    assert_eq!(owned(&world, &BOB_ID), BTreeSet::from([domain_id]));
 }
 state_test! { sync trigger_batch_gas_budget_is_shared_across_items
     assert_eq!(
@@ -1473,6 +1473,18 @@ ledger::nft::create_for_all_users();
     let_row! { invocation = ContractInvocation { contract_address, expected_code_hash: code_hash, entrypoint: "run".to_owned(), arguments: None, } };
     let_row! { executable = ExecutableRef::Batch(ConstVec::from(vec![ ExecutableBatchItem::ContractCall(invocation.clone()), ExecutableBatchItem::ContractCall(invocation), ])) };
     let trigger_id: TriggerId = "sequential_nft_batch".parse().expect("valid trigger id");
+    let ExecutableRef::Batch(items) = &executable else { unreachable!("fixture is a batch") };
+    let mut trigger = crate::smartcontracts::isi::triggers::specialized::SpecializedTrigger::new(
+        trigger_id.clone(),
+        crate::smartcontracts::isi::triggers::specialized::SpecializedAction::new(
+            Executable::Batch(items.clone()),
+            Repeats::Exactly(1),
+            contract_authority.clone(),
+            ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+        ).expect("valid registered batch fixture"),
+    );
+    capture_fixture_trigger_runtime(&mut trigger, &state_transaction.world);
+    assert!(state_transaction.world.triggers.add_by_call_trigger(trigger).unwrap());
     let_row! { event = ExecuteTriggerEvent { trigger_id: trigger_id.clone(), authority: contract_authority.clone(), args: Json::default(), } };
     let accounts = state_transaction.accounts_snapshot();
     let nft_seq_base = 100_u64;
@@ -3870,6 +3882,40 @@ fn set_nexus_alias_relabel_preserves_catalog_and_lane_identity() {
     assert_eq!(
         state.lane_incarnation_activation_heights_snapshot(),
         activation_heights
+    );
+}
+state_test! { sync set_nexus_keeps_committed_rows_naming_a_dataspace_outside_an_unchanged_catalog
+    // Taira held a test account's alias permissions in a dataspace no catalog lists: dropping them
+    // at a restart left the restarted node's World one entry short of the one its blocks certify.
+    let mut state = blank_test_state();
+    let holder = (*ALICE_ID).clone();
+    let outside = DataSpaceId::new(17_301_767_951_379_993_708);
+    assert!(
+        !state
+            .nexus_snapshot()
+            .dataspace_catalog
+            .entries()
+            .iter()
+            .any(|entry| entry.id == outside)
+    );
+    let permission = Permission::from(
+        iroha_executor_data_model::permission::query::CanReadRestrictedDataspace {
+            dataspace: outside,
+        },
+    );
+    state
+        .world
+        .account_permissions
+        .insert(holder.clone(), BTreeSet::from([permission.clone()]));
+    state.push_block_hash_for_testing(HashOf::from_untyped_unchecked(Hash::new(
+        b"committed-post-genesis-height",
+    )));
+    let unchanged = state.nexus_snapshot();
+    state.set_nexus(unchanged).expect("an unchanged catalog installs");
+    assert_eq!(
+        state.world.account_permissions.view().get(&holder),
+        Some(&BTreeSet::from([permission])),
+        "a committed row survives a restart's catalog install"
     );
 }
 state_test! { sync set_nexus_rejects_post_genesis_catalog_mutation_atomically
@@ -21199,19 +21245,20 @@ state_test! { sync state_restore_rejects_inexact_nested_proposal_number
         proposer: ALICE_ID.clone(),
         kind: ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
             proposal_operator: ALICE_ID.clone(),
-            manifest: iroha_data_model::runtime::RuntimeUpgradeManifest {
-                name: "hostile restore".to_owned(),
-                description: "inexact runtime height".to_owned(),
-                abi_version: 1,
-                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-                added_syscalls: Vec::new(),
-                added_pointer_types: Vec::new(),
-                start_height: maximum + 1,
-                end_height: maximum + 2,
-                sbom_digests: Vec::new(),
-                slsa_attestation: Vec::new(),
-                provenance: Vec::new(),
+            action: crate::runtime::change_set::test_support::schedule(
+                iroha_data_model::NetworkId::from_genesis_hash(
+                    iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+                        [0x11; 32],
+                    )),
+                ),
+                maximum + 1,
+            ),
+            notice: iroha_data_model::runtime::lifecycle::RuntimeNoticeV1 {
+                blocks: 1,
+                ms: 0,
+                approval_cushion_ms: 0,
             },
+            proposed_ms: 0,
         }),
         created_height: 0,
         status: GovernanceProposalStatus::Proposed,
@@ -21229,7 +21276,9 @@ state_test! { sync state_restore_rejects_inexact_nested_proposal_number
         .err()
         .expect("an inexact nested proposal number must fail closed");
     assert!(
-        error.to_string().contains("runtime-upgrade proposal start height"),
+        error
+            .to_string()
+            .contains("runtime-upgrade proposal effective height"),
         "unexpected nested proposal error: {error}"
     );
 }
@@ -25429,7 +25478,7 @@ state_test! { sync strict_snapshot_index_finalization_rejects_mis_homed_kaigi_re
     let mut wrong_domain = Domain::new(wrong.clone()).build(&ALICE_ID);
     let registration = KaigiRelayRegistration {
         relay_id: relay_id.clone(),
-        hpke_public_key: vec![0xAA],
+        hpke_public_key: crate::smartcontracts::isi::kaigi::test_relay_hpke_key(0xAA),
         bandwidth_class: 1,
     };
     wrong_domain.metadata_mut().insert(
@@ -25480,7 +25529,7 @@ state_test! { sync derived_state_rebuild_rejects_future_kaigi_relay_feedback
         kaigi_relay_metadata_key(&relay_id).expect("relay metadata key"),
         Json::try_new(KaigiRelayRegistration {
             relay_id: relay_id.clone(),
-            hpke_public_key: vec![0xAA],
+            hpke_public_key: crate::smartcontracts::isi::kaigi::test_relay_hpke_key(0xAA),
             bandwidth_class: 1,
         })
         .expect("serialize relay registration"),
@@ -26565,7 +26614,7 @@ vec![
     }
     for index in 0..=MAX_DATA_TRIGGER_FIRINGS_PER_TRANSACTION {
         let authority = authorities[index / 64].clone();
-        let trigger = Trigger::new(
+        let mut trigger = Trigger::new(
             format!("bounded_fanout_{index}")
                 .parse()
                 .expect("valid trigger id"),
@@ -26584,6 +26633,7 @@ vec![
         )
         .try_into()
         .expect("data trigger specializes");
+        capture_fixture_trigger_runtime(&mut trigger, &transaction.world);
         assert!(
             transaction
                 .world
@@ -26640,7 +26690,7 @@ vec![
         }
         .into(),
     );
-    let trigger = Trigger::new(
+    let mut trigger = Trigger::new(
         "multi_drain_firing_cap"
             .parse()
             .expect("valid trigger id"),
@@ -26659,6 +26709,7 @@ vec![
     )
     .try_into()
     .expect("data trigger specializes");
+    capture_fixture_trigger_runtime(&mut trigger, &transaction.world);
     assert!(
         transaction
             .world
@@ -26757,7 +26808,7 @@ state_test! { sync data_trigger_matching_scans_large_event_batches_lazily
         .into(),
     );
     for index in 0..64 {
-        let trigger = Trigger::new(
+        let mut trigger = Trigger::new(
             format!("lazy_scan_{index}").parse().expect("valid trigger id"),
             Action::new(
                 Vec::<InstructionBox>::new(),
@@ -26774,6 +26825,7 @@ state_test! { sync data_trigger_matching_scans_large_event_batches_lazily
         )
         .try_into()
         .expect("data trigger specializes");
+        capture_fixture_trigger_runtime(&mut trigger, &transaction.world);
         assert!(
             transaction
                 .world
@@ -26843,7 +26895,7 @@ state_test! { sync data_trigger_index_scan_is_charged_before_max_population_allo
             .into(),
         );
         for trigger_index in 0_u8..64 {
-            let trigger = Trigger::new(
+            let mut trigger = Trigger::new(
                 format!("metered_population_{authority_seed}_{trigger_index}")
                     .parse()
                     .expect("valid trigger id"),
@@ -26864,6 +26916,7 @@ state_test! { sync data_trigger_index_scan_is_charged_before_max_population_allo
             )
             .try_into()
             .expect("data trigger specializes");
+            capture_fixture_trigger_runtime(&mut trigger, &transaction.world);
             assert!(
                 transaction
                     .world
@@ -26918,7 +26971,7 @@ state_test! { sync data_trigger_filter_recheck_and_firing_share_the_block_gas_bu
         }
         .into(),
     );
-    let trigger = Trigger::new(
+    let mut trigger = Trigger::new(
         "gas_bounded_data_trigger"
             .parse()
             .expect("valid trigger id"),
@@ -26937,6 +26990,7 @@ state_test! { sync data_trigger_filter_recheck_and_firing_share_the_block_gas_bu
     )
     .try_into()
     .expect("data trigger specializes");
+    capture_fixture_trigger_runtime(&mut trigger, &transaction.world);
     assert!(
         transaction
             .world
@@ -26986,7 +27040,7 @@ state_test! { sync native_trigger_instructions_are_not_an_unmetered_execution_pa
         }
         .into(),
     );
-    let trigger = Trigger::new(
+    let mut trigger = Trigger::new(
         "native_instruction_gas_trigger"
             .parse()
             .expect("valid trigger id"),
@@ -27008,6 +27062,7 @@ state_test! { sync native_trigger_instructions_are_not_an_unmetered_execution_pa
     )
     .try_into()
     .expect("data trigger specializes");
+    capture_fixture_trigger_runtime(&mut trigger, &transaction.world);
     assert!(
         transaction
             .world

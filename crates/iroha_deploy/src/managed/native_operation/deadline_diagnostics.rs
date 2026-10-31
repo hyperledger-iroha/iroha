@@ -403,6 +403,7 @@ pub(in crate::managed) fn retained_error(error: &crate::managed::Error) {
         let (class, io) = match error {
             Error::Io(error) => ("Io", Some((error.kind(), error.raw_os_error()))),
             Error::Invalid(_) => ("Invalid", None),
+            Error::RuntimeMismatch(_) => ("RuntimeMismatch", None),
             Error::Bootstrap(_) => ("Bootstrap", None),
             Error::NativeDeadline => ("NativeDeadline", None),
             Error::NoSelection => ("NoSelection", None),

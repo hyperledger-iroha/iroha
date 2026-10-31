@@ -49,7 +49,7 @@ fn stored_root(chain: &CertifiedTestChain) -> iroha_crypto::Hash {
         .state_accumulator
         .view()
         .get()
-        .root()
+        .baseline_root()
         .unwrap()
 }
 
@@ -59,7 +59,7 @@ fn certified_results_bind_the_complete_world_and_the_emitted_events() {
     let genesis = chain.committed(1);
     assert_eq!(
         genesis.commitment().execution.parent_world_state_root,
-        WorldStateAccumulator::empty().root().unwrap(),
+        WorldStateAccumulator::empty().baseline_root().unwrap(),
         "genesis starts from the empty World"
     );
     let after_genesis = chain.state().verify_world_state_accumulator().unwrap();

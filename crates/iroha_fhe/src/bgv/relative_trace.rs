@@ -13,6 +13,8 @@
 //! X^(-2^j). The public normalized transform applies one unit inverse d^-1
 //! before the tree. Coefficient extraction alone uses a private unit-scaled
 //! entry into that same tree and combines normalization into its inverse map.
+//! Its private bank-zero selection follows only even children; geometric `d`
+//! remains unchanged, and no odd sibling arithmetic is executed.
 //!
 //! Each output bank encodes the evaluations of `g_r` at the existing slot
 //! roots; it is not the vector of coefficients of `g_r`. Recomposition is the
@@ -40,6 +42,10 @@ use zeroize::Zeroizing;
 /// overhead, including private plan-wrapper tags and public bank shape metadata,
 /// are excluded. These are not a whole-process resource limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Every resource ceiling names its explicit byte unit; public fields and payload scopes stay unambiguous."
+)]
 pub struct RelativeTraceBudget {
     /// Retained output ciphertext residue bytes.
     pub output_residue_bytes: usize,
@@ -87,7 +93,7 @@ pub enum RelativeTraceError {
     Bgv(#[from] BgvError),
 }
 
-/// Exact high-level operation counts and existing CostModel multiplication units.
+/// Exact high-level operation counts and existing `CostModel` multiplication units.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RelativeTraceOperations {
     /// Plaintext products, including public identity monomials.
@@ -96,7 +102,7 @@ pub struct RelativeTraceOperations {
     pub galois_applications: usize,
     /// Ciphertext additions and subtractions.
     pub ciphertext_additions: usize,
-    /// Canonical CostModel units; excludes additions, allocation, clearing and copies.
+    /// Canonical `CostModel` units; excludes additions, allocation, clearing and copies.
     pub arithmetic_units: u64,
 }
 
@@ -135,7 +141,10 @@ impl Geometry {
             .try_reserve_exact(banks.ilog2() as usize)
             .map_err(|_| RelativeTraceError::Allocation)?;
         for depth in 0..banks.ilog2() {
-            generators.push((1 + (degree >> depth)) as u32);
+            generators.push(
+                u32::try_from(1 + (degree >> depth))
+                    .map_err(|_| RelativeTraceError::SizeOverflow)?,
+            );
         }
         Ok(Self {
             precision,
@@ -280,6 +289,42 @@ pub(super) enum BankRetention {
     Streaming,
 }
 
+/// Private coefficient selection, independent of geometric stride and retention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CoefficientBankSelection {
+    All,
+    Zero,
+}
+
+impl CoefficientBankSelection {
+    pub(super) const fn count(self, banks: usize) -> usize {
+        match self {
+            Self::All => banks,
+            Self::Zero => 1,
+        }
+    }
+
+    /// Exact next ordinal in the canonical even-first traversal.
+    pub(super) fn expected_ordinal(self, completed: usize, banks: usize) -> Option<usize> {
+        if banks == 0 || !banks.is_power_of_two() || completed >= self.count(banks) {
+            return None;
+        }
+        let bits = banks.ilog2();
+        Some(if self == Self::Zero || bits == 0 {
+            0
+        } else {
+            completed.reverse_bits() >> (usize::BITS - bits)
+        })
+    }
+
+    const fn frontier_capacity(self, banks: usize) -> usize {
+        match self {
+            Self::All => banks.ilog2() as usize + 1,
+            Self::Zero => 1,
+        }
+    }
+}
+
 struct ParityFrame {
     value: Ciphertext,
     depth: usize,
@@ -307,7 +352,13 @@ impl ParityCursor<'_> {
         }) = self.frontier.pop()
         {
             if depth == geometry.generators.len() {
-                if current.shape() != self.plan.output || ordinal >= geometry.banks {
+                if current.shape() != self.plan.output
+                    || self
+                        .plan
+                        .selection
+                        .expected_ordinal(self.visited, geometry.banks)
+                        != Some(ordinal)
+                {
                     return Err(RelativeTraceError::InputShape);
                 }
                 self.visited += 1;
@@ -328,6 +379,18 @@ impl ParityCursor<'_> {
             tests::observe_add();
             #[cfg(test)]
             tests::split_checkpoint()?;
+            if self.plan.selection == CoefficientBankSelection::Zero {
+                // Only the even branch exists. Do not compute an odd sibling,
+                // subtraction or monomial and discard it afterward.
+                drop(current);
+                drop(image);
+                self.frontier.push(ParityFrame {
+                    value: even,
+                    depth: depth + 1,
+                    ordinal,
+                });
+                continue;
+            }
             let odd = profile.sub(&current, &image)?;
             #[cfg(test)]
             tests::observe_add();
@@ -362,7 +425,7 @@ impl ParityCursor<'_> {
                 ordinal,
             });
         }
-        if self.visited != geometry.banks {
+        if self.visited != self.plan.selection.count(geometry.banks) {
             return Err(RelativeTraceError::InputShape);
         }
         Ok(None)
@@ -391,6 +454,7 @@ struct ParityDecompositionPlan {
     geometry: Geometry,
     normalization: Normalization,
     retention: BankRetention,
+    selection: CoefficientBankSelection,
     input: CiphertextShape,
     output: CiphertextShape,
     payload: RelativeTraceBudget,
@@ -409,6 +473,7 @@ impl ParityDecompositionPlan {
         budget: RelativeTraceBudget,
         normalization: Normalization,
         retention: BankRetention,
+        selection: CoefficientBankSelection,
     ) -> Result<Self, RelativeTraceError> {
         input.check_profile(profile)?;
         let geometry = Geometry::new(profile, input.plaintext_precision())?;
@@ -423,12 +488,19 @@ impl ParityDecompositionPlan {
         for _ in &geometry.generators {
             let image = profile.plan_galois(&output)?;
             let sum = profile.plan_add(&output, &image)?;
-            // Both +/- branches have this bound; the odd monomial has norm1.
-            output = profile.plan_mul_plain(&sum, PlaintextBound { linf: 1, l1: 1 })?;
+            // All-mode odd monomials have norm1. Zero follows only real sums.
+            output = if selection == CoefficientBankSelection::All {
+                profile.plan_mul_plain(&sum, PlaintextBound { linf: 1, l1: 1 })?
+            } else {
+                sum
+            };
         }
-        let (outputs, scratch) = match retention {
-            BankRetention::Collected => (geometry.banks, usize::from(geometry.banks > 1) * 2),
-            BankRetention::Streaming => (
+        let (outputs, scratch) = match (selection, retention) {
+            (CoefficientBankSelection::Zero, _) => (1, usize::from(geometry.banks > 1) * 2),
+            (CoefficientBankSelection::All, BankRetention::Collected) => {
+                (geometry.banks, usize::from(geometry.banks > 1) * 2)
+            }
+            (CoefficientBankSelection::All, BankRetention::Streaming) => (
                 1,
                 if geometry.banks > 1 {
                     geometry.generators.len() + 2
@@ -438,18 +510,22 @@ impl ParityDecompositionPlan {
             ),
         };
         let payload = geometry.payload(profile, input.level(), outputs, scratch, budget)?;
-        let applications = geometry.banks - 1;
-        let operations = operations(
-            profile,
-            input.level(),
-            geometry.banks,
-            applications,
-            checked_mul(applications, 2)?,
-        )?;
+        let (products, applications, additions) = match selection {
+            CoefficientBankSelection::All => (
+                geometry.banks,
+                geometry.banks - 1,
+                checked_mul(geometry.banks - 1, 2)?,
+            ),
+            CoefficientBankSelection::Zero => {
+                (1, geometry.generators.len(), geometry.generators.len())
+            }
+        };
+        let operations = operations(profile, input.level(), products, applications, additions)?;
         Ok(Self {
             geometry,
             normalization,
             retention,
+            selection,
             input: input.clone(),
             output,
             payload,
@@ -523,7 +599,7 @@ impl ParityDecompositionPlan {
         self.preflight(profile, input, keys)?;
         let mut frontier = Vec::new();
         frontier
-            .try_reserve_exact(self.geometry.generators.len() + 1)
+            .try_reserve_exact(self.selection.frontier_capacity(self.geometry.banks))
             .map_err(|_| RelativeTraceError::Allocation)?;
         // Both modes perform the same real initial product. This borrows input;
         // the consuming coefficient caller drops its root immediately on return.
@@ -557,7 +633,7 @@ impl ParityDecompositionPlan {
         self.preflight(profile, input, keys)?;
         let mut output = Vec::new();
         output
-            .try_reserve_exact(self.banks())
+            .try_reserve_exact(self.selection.count(self.banks()))
             .map_err(|_| RelativeTraceError::Allocation)?;
         let mut cursor = self.start(profile, input, keys)?;
         while let Some((value, _ordinal, rest)) = cursor.advance(profile, keys)? {
@@ -595,6 +671,7 @@ impl RelativeTraceDecompositionPlan {
                 budget,
                 Normalization::InverseBanks,
                 BankRetention::Collected,
+                CoefficientBankSelection::All,
             )?,
         })
     }
@@ -623,7 +700,7 @@ impl RelativeTraceDecompositionPlan {
     pub const fn payload(&self) -> RelativeTraceBudget {
         self.core.payload()
     }
-    /// Exact public operations and shared CostModel multiplication units.
+    /// Exact public operations and shared `CostModel` multiplication units.
     #[must_use]
     pub const fn operations(&self) -> RelativeTraceOperations {
         self.core.operations()
@@ -653,6 +730,8 @@ pub(super) struct UnnormalizedCoefficientBanks {
     values: Vec<Ciphertext>,
     shape: CiphertextShape,
     slots: usize,
+    banks: usize,
+    selection: CoefficientBankSelection,
 }
 
 #[cfg(test)]
@@ -672,7 +751,12 @@ impl UnnormalizedCoefficientBanks {
         banks: usize,
     ) -> Result<Vec<Ciphertext>, RelativeTraceError> {
         self.shape.check_profile(profile)?;
-        if self.shape != *shape || self.slots != slots || self.values.len() != banks {
+        if self.shape != *shape
+            || self.slots != slots
+            || self.banks != banks
+            || self.selection != CoefficientBankSelection::All
+            || self.values.len() != banks
+        {
             return Err(RelativeTraceError::InputShape);
         }
         for value in &self.values {
@@ -705,6 +789,7 @@ impl CoefficientTracePlan {
         input: &CiphertextShape,
         budget: RelativeTraceBudget,
         retention: BankRetention,
+        selection: CoefficientBankSelection,
     ) -> Result<Self, RelativeTraceError> {
         Ok(Self {
             core: ParityDecompositionPlan::new(
@@ -713,6 +798,7 @@ impl CoefficientTracePlan {
                 budget,
                 Normalization::Unit,
                 retention,
+                selection,
             )?,
         })
     }
@@ -721,6 +807,12 @@ impl CoefficientTracePlan {
     }
     pub(super) const fn banks(&self) -> usize {
         self.core.banks()
+    }
+    pub(super) const fn selection(&self) -> CoefficientBankSelection {
+        self.core.selection
+    }
+    pub(super) const fn selected_banks(&self) -> usize {
+        self.core.selection.count(self.core.banks())
     }
     pub(super) fn galois_elements(&self) -> &[u32] {
         self.core.galois_elements()
@@ -754,6 +846,8 @@ impl CoefficientTracePlan {
             values,
             shape: self.core.output.clone(),
             slots: self.core.slots(),
+            banks: self.core.banks(),
+            selection: self.core.selection,
         })
     }
 }
@@ -761,6 +855,7 @@ impl CoefficientTracePlan {
 pub(super) fn cursor_metadata_bytes(
     profile: &BgvProfile,
     banks: usize,
+    selection: CoefficientBankSelection,
 ) -> Result<usize, RelativeTraceError> {
     if banks == 0 || !banks.is_power_of_two() {
         return Err(RelativeTraceError::InputShape);
@@ -774,7 +869,7 @@ pub(super) fn cursor_metadata_bytes(
         .checked_add(2 * size_of::<super::poly::RnsPoly>())
         .and_then(|x| x.checked_add(words.checked_mul(size_of::<u64>())?))
         .ok_or(RelativeTraceError::SizeOverflow)?;
-    checked_mul(banks.ilog2() as usize + 1, each)?
+    checked_mul(selection.frontier_capacity(banks), each)?
         .checked_add(size_of::<CoefficientTraceCursor<'_>>())
         .ok_or(RelativeTraceError::SizeOverflow)
 }
@@ -788,6 +883,7 @@ pub(super) struct UnnormalizedCoefficientBank {
     ordinal: usize,
     slots: usize,
     banks: usize,
+    selection: CoefficientBankSelection,
 }
 impl UnnormalizedCoefficientBank {
     pub(super) fn into_value(
@@ -796,12 +892,15 @@ impl UnnormalizedCoefficientBank {
         shape: &CiphertextShape,
         slots: usize,
         banks: usize,
+        selection: CoefficientBankSelection,
     ) -> Result<(Ciphertext, usize), RelativeTraceError> {
         self.value.check_profile(profile)?;
         if self.value.shape() != *shape
             || self.slots != slots
             || self.banks != banks
             || self.ordinal >= banks
+            || self.selection != selection
+            || (selection == CoefficientBankSelection::Zero && self.ordinal != 0)
         {
             return Err(RelativeTraceError::InputShape);
         }
@@ -816,6 +915,7 @@ impl CoefficientTraceCursor<'_> {
     ) -> Result<Option<(UnnormalizedCoefficientBank, Self)>, RelativeTraceError> {
         let slots = self.core.plan.slots();
         let banks = self.core.plan.banks();
+        let selection = self.core.plan.selection;
         Ok(self
             .core
             .advance(profile, keys)?
@@ -826,6 +926,7 @@ impl CoefficientTraceCursor<'_> {
                         ordinal,
                         slots,
                         banks,
+                        selection,
                     },
                     Self { core },
                 )
@@ -912,15 +1013,25 @@ impl RelativeTraceRecompositionPlan {
         inputs: &[CiphertextShape],
         budget: RelativeTraceBudget,
     ) -> Result<Self, RelativeTraceError> {
+        Self::prepare(profile, inputs, budget, CoefficientBankSelection::All)
+    }
+
+    pub(super) fn prepare(
+        profile: &BgvProfile,
+        inputs: &[CiphertextShape],
+        budget: RelativeTraceBudget,
+        selection: CoefficientBankSelection,
+    ) -> Result<Self, RelativeTraceError> {
         let first = inputs.first().ok_or(BgvError::LengthMismatch {
             expected: 1,
             found: 0,
         })?;
         first.check_profile(profile)?;
         let geometry = Geometry::new(profile, first.plaintext_precision())?;
-        if inputs.len() != geometry.banks {
+        let selected = selection.count(geometry.banks);
+        if inputs.len() != selected {
             return Err(BgvError::LengthMismatch {
-                expected: geometry.banks,
+                expected: selected,
                 found: inputs.len(),
             }
             .into());
@@ -945,16 +1056,10 @@ impl RelativeTraceRecompositionPlan {
             profile,
             output.level(),
             1,
-            usize::from(geometry.banks > 1) * 2,
+            usize::from(selected > 1) * 2,
             budget,
         )?;
-        let operations = operations(
-            profile,
-            output.level(),
-            geometry.banks,
-            0,
-            geometry.banks - 1,
-        )?;
+        let operations = operations(profile, output.level(), selected, 0, selected - 1)?;
         let mut owned = Vec::new();
         owned
             .try_reserve_exact(inputs.len())
@@ -1057,9 +1162,7 @@ mod tests {
         if call == at {
             SPLIT_FAULT.set((usize::MAX, false));
             CLEARED_AT_FAULT.set(super::super::poly::tests::cleared_words());
-            if panic {
-                panic!("owned parity split unwind");
-            }
+            assert!(!panic, "owned parity split unwind");
             return Err(BgvError::Kernel.into());
         }
         Ok(())
@@ -1136,13 +1239,17 @@ mod tests {
         )
         .unwrap()
     }
-    fn signed_shift(a: &[u64], exponent: usize, scale: u64, p: u64) -> Vec<u64> {
-        let n = a.len();
-        let mut out = vec![0; n];
-        for (i, &v) in a.iter().enumerate() {
-            let j = (i + exponent) % (2 * n);
-            let c = v * scale % p;
-            out[j % n] = if j < n { c } else { (p - c) % p };
+    fn signed_shift(values: &[u64], exponent: usize, scale: u64, modulus: u64) -> Vec<u64> {
+        let degree = values.len();
+        let mut out = vec![0; degree];
+        for (index, &value) in values.iter().enumerate() {
+            let shifted = (index + exponent) % (2 * degree);
+            let scaled = value * scale % modulus;
+            out[shifted % degree] = if shifted < degree {
+                scaled
+            } else {
+                (modulus - scaled) % modulus
+            };
         }
         out
     }
@@ -1300,7 +1407,7 @@ mod tests {
                 a[j] = 1;
                 let tree = scalar_tree(&a, &geometry, p);
                 let mut recomposed = vec![0; n];
-                for r in 0..d {
+                for (r, tree_bank) in tree[..d].iter().enumerate() {
                     let mut bank = signed_shift(&a, (2 * n - r) % (2 * n), geometry.inverse, p);
                     for &g in &geometry.generators {
                         let image = sigma(&bank, g as usize, p);
@@ -1309,7 +1416,7 @@ mod tests {
                         }
                     }
                     assert_eq!(bank, expected_bank(&a, r, d));
-                    assert_eq!(tree[r], bank);
+                    assert_eq!(*tree_bank, bank);
                     for (x, y) in recomposed.iter_mut().zip(signed_shift(&bank, r, 1, p)) {
                         *x = (*x + y) % p;
                     }
@@ -1319,20 +1426,20 @@ mod tests {
         }
     }
 
-    fn encrypted_roundtrip(profile: BgvProfile, kinds: usize) {
-        let encoding = SlotEncoding::new(&profile, profile.master_plaintext()).unwrap();
+    fn encrypted_roundtrip(profile: &BgvProfile, kinds: usize) {
+        let encoding = SlotEncoding::new(profile, profile.master_plaintext()).unwrap();
         let plan = RelativeTraceDecompositionPlan::new(
-            &profile,
+            profile,
             &profile.plan_fresh(profile.master_plaintext()).unwrap(),
             unlimited(),
         )
         .unwrap();
-        let keys = make_keys(&profile, plan.galois_elements());
+        let keys = make_keys(profile, plan.galois_elements());
         let n = profile.degree();
         assert_eq!(plan.slots(), encoding.slots());
         assert_eq!(plan.banks(), encoding.stride());
         let recompose = RelativeTraceRecompositionPlan::new(
-            &profile,
+            profile,
             &vec![plan.output_shape().clone(); plan.banks()],
             unlimited(),
         )
@@ -1364,16 +1471,16 @@ mod tests {
                     }
                 })
                 .collect();
-            let ciphertext = encrypted(&profile, &keys, input.clone());
+            let ciphertext = encrypted(profile, &keys, input.clone());
             reset();
             let banks = plan
-                .evaluate(&profile, &ciphertext, &keys.evaluation)
+                .evaluate(profile, &ciphertext, &keys.evaluation)
                 .unwrap();
             assert_counts(plan.operations(), plan.banks());
             for (r, bank) in banks.iter().enumerate() {
                 assert_eq!(bank.shape(), *plan.output_shape());
                 let expected = expected_bank(&input, r, plan.banks());
-                let opened = keys.secret.decrypt(&profile, bank).unwrap();
+                let opened = keys.secret.decrypt(profile, bank).unwrap();
                 assert_eq!(opened.coefficients(), expected.as_slice());
                 let slots = encoding.decode(&opened).unwrap();
                 for (j, &slot) in slots.iter().enumerate() {
@@ -1383,20 +1490,20 @@ mod tests {
                         .fold(0, |v, k| (v * beta + input[k * plan.banks() + r]) % 257);
                     assert_eq!(slot, want);
                 }
-                physical_noise(&profile, &keys, bank, &expected);
+                physical_noise(profile, &keys, bank, &expected);
             }
             reset();
-            let restored = recompose.evaluate(&profile, &banks).unwrap();
+            let restored = recompose.evaluate(profile, &banks).unwrap();
             assert_counts(recompose.operations(), plan.banks());
             assert_eq!(restored.shape(), *recompose.output_shape());
             assert_eq!(
                 keys.secret
-                    .decrypt(&profile, &restored)
+                    .decrypt(profile, &restored)
                     .unwrap()
                     .coefficients(),
                 input.as_slice()
             );
-            physical_noise(&profile, &keys, &restored, &input);
+            physical_noise(profile, &keys, &restored, &input);
             assert_eq!(restored.level(), ciphertext.level());
             if kind == 3 && plan.banks() > 1 {
                 // Different public input bounds are admitted without padding
@@ -1406,7 +1513,7 @@ mod tests {
                 let shapes: Vec<_> = altered.iter().map(Ciphertext::shape).collect();
                 assert_ne!(shapes[0], shapes[1]);
                 let heterogeneous =
-                    RelativeTraceRecompositionPlan::new(&profile, &shapes, unlimited()).unwrap();
+                    RelativeTraceRecompositionPlan::new(profile, &shapes, unlimited()).unwrap();
                 let expected: Vec<_> = input
                     .iter()
                     .enumerate()
@@ -1419,17 +1526,17 @@ mod tests {
                     })
                     .collect();
                 reset();
-                let result = heterogeneous.evaluate(&profile, &altered).unwrap();
+                let result = heterogeneous.evaluate(profile, &altered).unwrap();
                 assert_counts(heterogeneous.operations(), plan.banks());
                 assert_eq!(result.shape(), *heterogeneous.output_shape());
                 assert_eq!(
                     keys.secret
-                        .decrypt(&profile, &result)
+                        .decrypt(profile, &result)
                         .unwrap()
                         .coefficients(),
                     expected.as_slice()
                 );
-                physical_noise(&profile, &keys, &result, &expected);
+                physical_noise(profile, &keys, &result, &expected);
             }
         }
     }
@@ -1437,7 +1544,7 @@ mod tests {
     #[test]
     fn encrypted_full_ring_zero_dense_and_adversarial_vectors_roundtrip_at_d1_d2_d4() {
         for log_n in [7, 8, 9] {
-            encrypted_roundtrip(make_profile(log_n, 257, 3), 4);
+            encrypted_roundtrip(&make_profile(log_n, 257, 3), 4);
         }
     }
 
@@ -1454,9 +1561,12 @@ mod tests {
             .add(&k.mul_u64((d - 1) as u64));
         assert_eq!(plan.output_shape().bound(), &expected);
         let b = plan.payload();
-        let bytes = CostModel::new(&profile)
-            .ciphertext_residue_bytes(input.level(), 2)
-            .unwrap() as usize;
+        let bytes = usize::try_from(
+            CostModel::new(&profile)
+                .ciphertext_residue_bytes(input.level(), 2)
+                .unwrap(),
+        )
+        .expect("small fixture ciphertext");
         assert_eq!(
             b,
             RelativeTraceBudget {
@@ -1502,7 +1612,7 @@ mod tests {
                     RelativeTracePayload::Output => b.output_residue_bytes -= 1,
                     RelativeTracePayload::Scratch => b.scratch_residue_bytes -= 1,
                     RelativeTracePayload::Plaintext => b.plaintext_bytes -= 1,
-                };
+                }
                 b
             };
             assert!(
@@ -1738,7 +1848,7 @@ mod tests {
     fn n14_q6_full_geometry_roundtrip_with_physical_noise() {
         let start = std::time::Instant::now();
         encrypted_roundtrip(
-            BgvProfile::candidate(super::super::BgvCandidate::AffineF257).unwrap(),
+            &BgvProfile::candidate(super::super::BgvCandidate::AffineF257).unwrap(),
             2,
         );
         println!(
@@ -1753,9 +1863,14 @@ mod tests {
         let profile =
             BgvProfile::new(BgvParameters::derive(4, 5, 3, (50, 4), (60, 2), 2).unwrap()).unwrap();
         let shape = profile.plan_fresh(profile.master_plaintext()).unwrap();
-        let plan =
-            CoefficientTracePlan::new(&profile, &shape, unlimited(), BankRetention::Collected)
-                .unwrap();
+        let plan = CoefficientTracePlan::new(
+            &profile,
+            &shape,
+            unlimited(),
+            BankRetention::Collected,
+            CoefficientBankSelection::All,
+        )
+        .unwrap();
         let keys = make_keys(&profile, plan.galois_elements());
         let input = encrypted(&profile, &keys, vec![124; profile.degree()]);
         let expected_words = 2 * profile.degree() * (shape.level() + 1) * plan.banks();
@@ -1779,8 +1894,8 @@ mod tests {
             let result = raw.into_values(target_profile, target_shape, slots, banks);
             assert!(matches!(
                 result,
-                Err(RelativeTraceError::InputShape)
-                    | Err(RelativeTraceError::Bgv(BgvError::ProfileMismatch))
+                Err(RelativeTraceError::InputShape
+                    | RelativeTraceError::Bgv(BgvError::ProfileMismatch))
             ));
             assert_eq!(
                 super::super::poly::tests::cleared_words() - before,
@@ -1818,9 +1933,14 @@ mod tests {
         let profile =
             BgvProfile::new(BgvParameters::derive(4, 5, 3, (50, 4), (60, 2), 2).unwrap()).unwrap();
         let shape = profile.plan_fresh(profile.master_plaintext()).unwrap();
-        let plan =
-            CoefficientTracePlan::new(&profile, &shape, unlimited(), BankRetention::Collected)
-                .unwrap();
+        let plan = CoefficientTracePlan::new(
+            &profile,
+            &shape,
+            unlimited(),
+            BankRetention::Collected,
+            CoefficientBankSelection::All,
+        )
+        .unwrap();
         let keys = make_keys(&profile, plan.galois_elements());
         let input = encrypted(&profile, &keys, vec![124; profile.degree()]);
         for at in [1, plan.banks()] {
@@ -1858,9 +1978,14 @@ mod tests {
         let profile =
             BgvProfile::new(BgvParameters::derive(4, 5, 3, (50, 4), (60, 2), 2).unwrap()).unwrap();
         let shape = profile.plan_fresh(profile.master_plaintext()).unwrap();
-        let plan =
-            CoefficientTracePlan::new(&profile, &shape, unlimited(), BankRetention::Streaming)
-                .unwrap();
+        let plan = CoefficientTracePlan::new(
+            &profile,
+            &shape,
+            unlimited(),
+            BankRetention::Streaming,
+            CoefficientBankSelection::All,
+        )
+        .unwrap();
         let keys = make_keys(&profile, plan.galois_elements());
         let input = encrypted(&profile, &keys, vec![124; profile.degree()]);
         let h = plan.banks().ilog2() as usize;
@@ -1902,8 +2027,170 @@ mod tests {
                 );
             }
         }
-        assert!(cursor_metadata_bytes(&profile, 0).is_err());
-        assert!(cursor_metadata_bytes(&profile, 3).is_err());
+        assert!(cursor_metadata_bytes(&profile, 0, CoefficientBankSelection::All).is_err());
+        assert!(cursor_metadata_bytes(&profile, 3, CoefficientBankSelection::All).is_err());
+        reset();
+    }
+
+    #[test]
+    fn selected_zero_trace_has_one_real_even_path_and_exact_public_work() {
+        for (log_n, p) in [(7, 257), (8, 257), (4, 5)] {
+            let profile = make_profile(log_n, p, 4);
+            let shape = profile.plan_fresh(profile.master_plaintext()).unwrap();
+            for retention in [BankRetention::Collected, BankRetention::Streaming] {
+                let plan = CoefficientTracePlan::new(
+                    &profile,
+                    &shape,
+                    unlimited(),
+                    retention,
+                    CoefficientBankSelection::Zero,
+                )
+                .unwrap();
+                let d = plan.banks();
+                let h = d.ilog2() as usize;
+                assert_eq!(plan.selected_banks(), 1);
+                assert_eq!(plan.slots() * d, profile.degree());
+                assert_eq!(
+                    plan.operations(),
+                    operations(&profile, shape.level(), 1, h, h).unwrap()
+                );
+                let exact = plan.core.payload();
+                CoefficientTracePlan::new(
+                    &profile,
+                    &shape,
+                    exact,
+                    retention,
+                    CoefficientBankSelection::Zero,
+                )
+                .unwrap();
+                for kind in [
+                    RelativeTracePayload::Output,
+                    RelativeTracePayload::Scratch,
+                    RelativeTracePayload::Plaintext,
+                ] {
+                    let mut low = exact;
+                    let bound = match kind {
+                        RelativeTracePayload::Output => &mut low.output_residue_bytes,
+                        RelativeTracePayload::Scratch => &mut low.scratch_residue_bytes,
+                        RelativeTracePayload::Plaintext => &mut low.plaintext_bytes,
+                    };
+                    if *bound == 0 {
+                        continue;
+                    }
+                    *bound -= 1;
+                    assert!(
+                        matches!(CoefficientTracePlan::new(&profile, &shape, low, retention, CoefficientBankSelection::Zero), Err(RelativeTraceError::Budget { kind: found, .. }) if found == kind)
+                    );
+                }
+                let keys = make_keys(&profile, plan.galois_elements());
+                let values: Vec<_> = (0..profile.degree())
+                    .map(|i| (i as u64 * 7 + 3) % p)
+                    .collect();
+                let input = encrypted(&profile, &keys, values.clone());
+                reset();
+                let cursor = plan.start(&profile, input, &keys.evaluation).unwrap();
+                let (bank, rest) = cursor.advance(&profile, &keys.evaluation).unwrap().unwrap();
+                assert_eq!(bank.ordinal, 0);
+                assert_eq!(bank.banks, d);
+                assert_eq!(bank.selection, CoefficientBankSelection::Zero);
+                assert!(rest.advance(&profile, &keys.evaluation).unwrap().is_none());
+                assert_counts(plan.operations(), 1);
+                assert_eq!(SPLIT_CALLS.get(), 2 * h);
+                let expected: Vec<_> = values
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &v)| if i % d == 0 { v * d as u64 % p } else { 0 })
+                    .collect();
+                let (value, ordinal) = bank
+                    .into_value(
+                        &profile,
+                        plan.output_shape(),
+                        plan.slots(),
+                        d,
+                        CoefficientBankSelection::Zero,
+                    )
+                    .unwrap();
+                assert_eq!(ordinal, 0);
+                physical_noise(&profile, &keys, &value, &expected);
+                reset();
+            }
+        }
+        let selection = CoefficientBankSelection::All;
+        assert_eq!(
+            (0..8)
+                .map(|i| selection.expected_ordinal(i, 8).unwrap())
+                .collect::<Vec<_>>(),
+            [0, 4, 2, 6, 1, 5, 3, 7]
+        );
+        assert_eq!(selection.expected_ordinal(8, 8), None);
+        assert_eq!(CoefficientBankSelection::Zero.expected_ordinal(1, 8), None);
+        assert_eq!(CoefficientBankSelection::Zero.expected_ordinal(0, 0), None);
+        assert_eq!(CoefficientBankSelection::Zero.expected_ordinal(0, 3), None);
+    }
+
+    #[test]
+    fn selected_zero_trace_refuses_wrong_origin_and_clears_even_only_failures() {
+        let profile = make_profile(4, 5, 4);
+        let shape = profile.plan_fresh(profile.master_plaintext()).unwrap();
+        let plan = CoefficientTracePlan::new(
+            &profile,
+            &shape,
+            unlimited(),
+            BankRetention::Streaming,
+            CoefficientBankSelection::Zero,
+        )
+        .unwrap();
+        let keys = make_keys(&profile, plan.galois_elements());
+        let input = encrypted(&profile, &keys, vec![4; profile.degree()]);
+        let one_words = 2 * profile.degree() * (shape.level() + 1);
+        let (bank, rest) = plan
+            .start(&profile, input.clone(), &keys.evaluation)
+            .unwrap()
+            .advance(&profile, &keys.evaluation)
+            .unwrap()
+            .unwrap();
+        let before = super::super::poly::tests::cleared_words();
+        assert!(
+            bank.into_value(
+                &profile,
+                plan.output_shape(),
+                plan.slots(),
+                plan.banks(),
+                CoefficientBankSelection::All
+            )
+            .is_err()
+        );
+        assert_eq!(
+            super::super::poly::tests::cleared_words() - before,
+            one_words
+        );
+        drop(rest);
+        for at in 1..=2 * plan.banks().ilog2() as usize {
+            for panic in [false, true] {
+                reset();
+                SPLIT_FAULT.set((at, panic));
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    plan.core
+                        .start(&profile, &input, &keys.evaluation)
+                        .unwrap()
+                        .advance(&profile, &keys.evaluation)
+                }));
+                assert!(if panic {
+                    result.is_err()
+                } else {
+                    matches!(result, Ok(Err(RelativeTraceError::Bgv(BgvError::Kernel))))
+                });
+                // Exactly current+image, then current+image+even; no siblings.
+                assert_eq!(
+                    super::super::poly::tests::cleared_words() - CLEARED_AT_FAULT.get(),
+                    (2 + (at + 1) % 2) * one_words
+                );
+            }
+        }
+        assert!(
+            cursor_metadata_bytes(&profile, 8, CoefficientBankSelection::Zero).unwrap()
+                < cursor_metadata_bytes(&profile, 8, CoefficientBankSelection::All).unwrap()
+        );
         reset();
     }
 }

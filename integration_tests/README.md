@@ -256,6 +256,13 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   `cargo run -p integration_tests --features dev-tools --bin refresh_nexus_streaming_fixtures`.
 
 ## Notes
+- Prepared confidential-settlement fixtures retain caller-keyed
+  `FilePrivateSettlementFinality` custody alongside the original workflow journal.
+  Cold one-call recovery checks the same bounded prefix record through the SDK,
+  while `read_only_effects_unchanged` compares immutable context/proof artifacts,
+  wallet reservations and exact journal effect identities. Authenticated pending
+  prefixes may advance without authorizing another monetary effect. The evidence
+  contract has no retired custody-assertion alias.
 - The ignored N=3 smoke requires `atomic-private-settlement-smoke`.
   This test capability enables the common release harness and its CPU SHA3-384
   privacy proof, retaining every native proof and committee check. The ordinary
@@ -605,3 +612,20 @@ The continuation reports actual network execution. Registration, controller
 receipts, optional software adversarial inputs, and network settlement alone do
 not establish physical enrollment or phone latency; device custody and native
 consumer qualification are separately retained evidence.
+
+The cold private one-call fixture uses the production `FilePrivateSettlementWallet` with
+caller-retained runtime encryption key and bounded pending witness custody. Only explicit initial
+preparation stages its three real fixture-authorized legs. Every Recover makes zero policy-open,
+stage and input-reservation calls, and successful receipts trigger the production wallet's atomic
+all-leg cleanup. The parent pins the exact pending ciphertext across cold children, independently
+verifies native finality and the original receipt before permitting its one smaller consumed-marker
+envelope, then requires every later recovery to retain identical terminal bytes. Exact file roles,
+empty lock, the production 64 MiB index allowance and its two-envelope physical bound are checked;
+original transaction identities and encrypted prepared artifacts remain unchanged. Deterministic
+input/signature seeds remain confined to the test supplier; component tests alone do not qualify
+this full-network path. The parent creates hybrid audit keys once and sends the exact original
+governance and audit-policy openings through the bounded runtime-only child input. Its input
+binding covers those openings; cold children never regenerate hybrid keys from fixture seeds.
+The original-note component test reopens and validates those same openings in a separate process,
+retains identical reservation bytes, and refuses a valid opening for another authority context
+before publishing any wallet state.

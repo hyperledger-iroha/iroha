@@ -8,7 +8,9 @@
 //! hostname/SPKI policy digest before checkpoint state is opened and again before and after every
 //! feed operation.
 use super::provider::{GatewayProviderBindingErrorV1, GatewayProviderBindingV1};
-use crate::secure_file_metadata::{self, SecureMetadata};
+use crate::secure_file_metadata;
+#[cfg(not(windows))]
+use crate::secure_file_metadata::SecureMetadata;
 use blake3::Hasher;
 use flate2::read::GzDecoder;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
@@ -38,8 +40,8 @@ use sorafs_manifest::gateway_compliance::{
 use std::{
     collections::BTreeSet,
     fmt::Debug,
-    fs::{self, File, OpenOptions},
-    io::{self, Cursor, Read, Write as _},
+    fs::{self, File},
+    io::{self, Cursor, Read},
     net::IpAddr,
     path::{Component, Path, PathBuf},
     sync::{
@@ -48,6 +50,8 @@ use std::{
     },
     time::{Duration, Instant},
 };
+#[cfg(not(windows))]
+use std::{fs::OpenOptions, io::Write as _};
 use thiserror::Error;
 use url::{Host, Url};
 /// V1 schema version for durable controller checkpoints.
@@ -740,6 +744,8 @@ impl GatewayComplianceStoreLease for TestGatewayComplianceStoreLease {
 pub struct FileGatewayComplianceStore {
     path: PathBuf,
     max_bytes: usize,
+    #[cfg(windows)]
+    directory: Arc<iroha_fs::OwnerDirectory>,
     #[cfg(test)]
     test_hook: Arc<FileGatewayComplianceStoreTestHook>,
 }
@@ -767,7 +773,14 @@ impl FileGatewayComplianceStore {
             GatewayComplianceError::Persistence("compliance checkpoint path has no parent".into())
         })?;
         validate_checkpoint_parent(parent)?;
+        #[cfg(windows)]
+        let directory = Arc::new(
+            iroha_fs::OwnerDirectory::open(parent)
+                .map_err(|error| persistence_io("retain checkpoint directory", error))?,
+        );
         Ok(Self {
+            #[cfg(windows)]
+            directory,
             path,
             max_bytes: MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1,
             #[cfg(test)]
@@ -788,9 +801,17 @@ struct FileGatewayComplianceStoreLease {
     path: PathBuf,
     max_bytes: usize,
     _lock_file: File,
+    #[cfg(windows)]
+    directory: Arc<iroha_fs::OwnerDirectory>,
+    #[cfg(windows)]
+    lock_snapshot: iroha_fs::FileSnapshot,
     #[cfg(test)]
     test_hook: Arc<FileGatewayComplianceStoreTestHook>,
 }
+#[cfg(windows)]
+mod native_windows;
+
+#[cfg(not(windows))]
 impl GatewayComplianceStore for FileGatewayComplianceStore {
     fn try_acquire(&self) -> Result<Box<dyn GatewayComplianceStoreLease>, GatewayComplianceError> {
         let parent = self.path.parent().ok_or_else(|| {
@@ -855,6 +876,7 @@ impl GatewayComplianceStore for FileGatewayComplianceStore {
         }))
     }
 }
+#[cfg(not(windows))]
 impl GatewayComplianceStoreLease for FileGatewayComplianceStoreLease {
     fn load(&self) -> Result<GatewayComplianceStoreSnapshot, GatewayComplianceError> {
         read_checkpoint_snapshot(&self.path, self.max_bytes)
@@ -2650,6 +2672,7 @@ fn checkpoint_lock_path(path: &Path) -> Result<PathBuf, GatewayComplianceError> 
     lock_name.push(".lock");
     Ok(parent.join(lock_name))
 }
+#[cfg(not(windows))]
 fn read_checkpoint_snapshot(
     path: &Path,
     max_bytes: usize,
@@ -2720,6 +2743,10 @@ fn read_checkpoint_snapshot(
 }
 fn validate_checkpoint_parent(path: &Path) -> Result<(), GatewayComplianceError> {
     validate_existing_directory_chain(path)?;
+    #[cfg(windows)]
+    iroha_fs::OwnerDirectory::open(path)
+        .and_then(|directory| directory.revalidate())
+        .map_err(|error| persistence_io("validate checkpoint directory custody", error))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -2761,6 +2788,7 @@ fn validate_existing_directory_chain(path: &Path) -> Result<(), GatewayComplianc
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn validate_checkpoint_file_metadata(
     metadata: &SecureMetadata,
 ) -> Result<(), GatewayComplianceError> {
@@ -2773,6 +2801,7 @@ fn validate_checkpoint_file_metadata(
     }
     validate_file_permissions(metadata, "compliance checkpoint")
 }
+#[cfg(not(windows))]
 fn validate_output_file(path: &Path) -> Result<Option<SecureMetadata>, GatewayComplianceError> {
     match secure_file_metadata::from_path(path) {
         Ok(metadata) => {
@@ -2790,6 +2819,7 @@ fn validate_output_file(path: &Path) -> Result<Option<SecureMetadata>, GatewayCo
         Err(error) => Err(persistence_io("inspect checkpoint output", &(error))),
     }
 }
+#[cfg(not(windows))]
 fn validate_opened_file(
     path: &Path,
     file: &File,
@@ -2824,7 +2854,7 @@ fn validate_file_permissions(
     }
     Ok(())
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn validate_file_permissions(
     _metadata: &fs::Metadata,
     _label: &'static str,
@@ -2836,43 +2866,16 @@ fn set_no_follow(options: &mut OpenOptions) {
     use std::os::unix::fs::OpenOptionsExt as _;
     options.custom_flags(libc::O_NOFOLLOW);
 }
-#[cfg(windows)]
-fn set_no_follow(options: &mut OpenOptions) {
-    use std::os::windows::fs::OpenOptionsExt as _;
 
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-}
 #[cfg(not(any(unix, windows)))]
 fn set_no_follow(_options: &mut OpenOptions) {}
-#[cfg(windows)]
-fn set_lock_share_mode(options: &mut OpenOptions) {
-    use std::os::windows::fs::OpenOptionsExt as _;
 
-    const FILE_SHARE_READ: u32 = 0x0000_0001;
-    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
-    options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
-}
 #[cfg(not(windows))]
 fn set_lock_share_mode(_options: &mut OpenOptions) {}
-#[cfg(windows)]
-fn set_stable_read_share_mode(options: &mut OpenOptions) {
-    use std::os::windows::fs::OpenOptionsExt as _;
 
-    const FILE_SHARE_READ: u32 = 0x0000_0001;
-    const FILE_SHARE_DELETE: u32 = 0x0000_0004;
-    options.share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE);
-}
 #[cfg(not(windows))]
 fn set_stable_read_share_mode(_options: &mut OpenOptions) {}
-#[cfg(windows)]
-fn set_checkpoint_temp_share_mode(options: &mut OpenOptions) {
-    use std::os::windows::fs::OpenOptionsExt as _;
 
-    const FILE_SHARE_READ: u32 = 0x0000_0001;
-    const FILE_SHARE_DELETE: u32 = 0x0000_0004;
-    options.share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE);
-}
 #[cfg(not(windows))]
 fn set_checkpoint_temp_share_mode(_options: &mut OpenOptions) {}
 fn persistence_io(action: &'static str, error: &io::Error) -> GatewayComplianceError {

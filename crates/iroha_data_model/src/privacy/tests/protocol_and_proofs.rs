@@ -1130,6 +1130,38 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
     );
 }
 #[test]
+fn capability_catalog_cardinality_keeps_intrinsic_and_local_limits_distinct() {
+    use PrivacyCapabilityArchiveValidationStatusV1 as Status;
+
+    let mut manifest = exact12_capability_manifest();
+    assert_eq!(manifest.protocols.len(), PrivacyProtocolIdV1::COUNT);
+    let archive = norito::encode_canonical(&manifest).unwrap();
+    let local_limits =
+        |rows| norito::DecodeLimits::new(rows, usize::MAX, usize::MAX, usize::MAX, usize::MAX);
+    assert_eq!(
+        norito::with_decode_limits_scope(local_limits(PrivacyProtocolIdV1::COUNT), || {
+            validate_privacy_capability_archive_v1(&archive)
+        }),
+        Status::Valid
+    );
+    assert_eq!(
+        norito::with_decode_limits_scope(local_limits(PrivacyProtocolIdV1::COUNT - 1), || {
+            validate_privacy_capability_archive_v1(&archive)
+        }),
+        Status::DecodeResourceLimit,
+        "a valid twelve-row manifest can be refused by its original enclosing allowance"
+    );
+
+    manifest.protocols.push(manifest.protocols[0]);
+    let excessive_rows = norito::encode_canonical(&manifest).unwrap();
+    assert_eq!(
+        validate_privacy_capability_archive_v1(&excessive_rows),
+        Status::InvalidManifest,
+        "the fixed catalog cardinality is an intrinsic invariant, not a local allowance"
+    );
+}
+
+#[test]
 fn all_protocol_mappings_and_typed_variants_are_exact() {
     let statements = sample_statements();
     assert_eq!(statements.len(), PrivacyProtocolIdV1::COUNT);

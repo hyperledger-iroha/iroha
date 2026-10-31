@@ -1871,7 +1871,7 @@ fn parse_path(
     })
 }
 fn random_proof_scalar<F: ProofScalar>(
-    rng: &mut (impl TryRng + TryCryptoRng),
+    rng: &mut (impl TryCryptoRng),
 ) -> Result<ProverSecretScalarV1<F>, FcmpNativeErrorV1> {
     for _ in 0..MAX_PROVER_SCALAR_ATTEMPTS_V1 {
         if let Some(sampled) = random_scalar_from_fcmp_rng::<F, _>(rng)? {
@@ -2010,7 +2010,7 @@ struct PreparedInput {
     transcripted: TranscriptedInput,
 }
 fn prove_fcmp_plus_plus_once_v1(
-    rng: &mut (impl TryRng + TryCryptoRng),
+    rng: &mut (impl TryCryptoRng),
     context_hash: [u8; 32],
     inputs: &[FcmpProverInputV1],
     new_output_openings: &[FcmpOutputCommitmentOpeningV1],
@@ -2581,7 +2581,7 @@ fn preflight_fcmp_plus_plus_v1(
 /// # Errors
 /// Rejects invalid inputs or openings, unhealthy randomness, proof construction failures, or a failed complete prover self-check.
 pub fn prove_fcmp_plus_plus_v1(
-    rng: &mut (impl TryRng + TryCryptoRng),
+    rng: &mut (impl TryCryptoRng),
     context_hash: [u8; 32],
     inputs: &[FcmpProverInputV1],
     new_output_openings: &[FcmpOutputCommitmentOpeningV1],

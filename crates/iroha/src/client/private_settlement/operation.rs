@@ -6,26 +6,21 @@ use crate::workflow::{
     RoundRecovery, RoundReport, RoundStatusReport, SignedStepTransaction, StepContext,
     StepDescriptorV1, StepFailure, SystemWorkflowClock, TransactionIdentityV1, WorkflowAccount,
     WorkflowBindingV1, WorkflowDriver, WorkflowEngine, WorkflowError, WorkflowErrorCode,
-    WorkflowFuture, WorkflowHandle, WorkflowId, WorkflowJournalV1, WorkflowLedger, WorkflowPlanV1,
-    WorkflowProgressV1, WorkflowRunOptions, WorkflowStorage, WorkflowStorageDurability,
-    domain_digest,
+    WorkflowFuture, WorkflowHandle, WorkflowId, WorkflowIdentityV1, WorkflowJournalV1,
+    WorkflowLedger, WorkflowPlanV1, WorkflowProgressV1, WorkflowRunOptions, WorkflowStorage,
+    WorkflowStorageDurability, domain_digest,
 };
 use iroha_data_model::{
     block::consensus::SumeragiRootScope,
     sumeragi_finality::{FinalityError, FinalityReadError, SumeragiFinalityVerifier},
     transaction::FeeChargeKind,
 };
-use std::{
-    num::NonZeroU16,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 mod observation;
 mod phases;
-mod worker;
 use observation::SettlementLedger;
 use phases::{OnlinePhases, SettlementPhases};
-pub use worker::run_private_settlement_worker;
 
 const AVAILABILITY: usize = 0;
 const PREPARE: usize = 1;
@@ -103,8 +98,7 @@ impl PrivateSettlementRequest {
             }
             bindings.push((material.payload_digest()?, material.availability_body));
         }
-        let bytes =
-            norito::encode_canonical(&(first.manifest.clone(), bindings, max_carrier_bytes))?;
+        let bytes = norito::encode_canonical(&(first.manifest.clone(), bindings))?;
         let digest = domain_digest(b"iroha:private-settlement:prepared-request:v1\0", &[&bytes]);
         Ok(Self(Arc::new(Prepared {
             materials,
@@ -121,6 +115,22 @@ impl PrivateSettlementRequest {
     #[must_use]
     pub fn materials(&self) -> &[PrivateSettlementProvisionalLegMaterialV1] {
         &self.0.materials
+    }
+
+    /// Encode the original public/proved material vector as canonical Norito data.
+    ///
+    /// Counts the exact retained vector before allocating an output frame, without cloning
+    /// proof or capsule owners. These bytes have no successful-execution or receipt authority.
+    /// # Errors
+    /// The complete canonical frame exceeds the caller's local allowance, or encoding fails.
+    pub fn encode_materials(
+        &self,
+        maximum_bytes: usize,
+    ) -> std::result::Result<Vec<u8>, PrivateSettlementError> {
+        if norito::canonical_frame_len(&self.0.materials)? > maximum_bytes {
+            return Err(PrivateSettlementError::Capacity);
+        }
+        Ok(norito::encode_canonical(&self.0.materials)?)
     }
 
     /// Public intent skeleton bound to the exact original proof/capsule artifacts.
@@ -184,22 +194,23 @@ impl PrivateSettlementRequest {
 pub struct PrivateSettlementRunOptions {
     /// Existing durable workflow observation and exact-byte retransmission policy.
     pub workflow: WorkflowRunOptions,
-    /// Maximum finality reads, including authenticated-prefix catch-up.
-    pub max_finality_proof_reads: NonZeroU16,
+    /// Maximum new finality HTTP reads, including authenticated-prefix catch-up.
+    /// Zero permits authenticated cached recovery without acquiring another proof.
+    pub max_finality_proof_reads: u16,
 }
 impl Default for PrivateSettlementRunOptions {
     fn default() -> Self {
         Self {
             workflow: WorkflowRunOptions::default(),
-            max_finality_proof_reads: NonZeroU16::new(64).unwrap(),
+            max_finality_proof_reads: 64,
         }
     }
 }
-/// Successful original private settlement and this coordinator's carrier progress.
+/// Verified terminal outcome of the original payment and this coordinator's carrier progress.
 #[derive(Debug)]
 pub struct PrivateSettlementResult {
-    /// Independently authenticated final successful execution and original public receipt.
-    pub receipt: VerifiedPrivateSettlementReceipt,
+    /// Independently authenticated settlement or successful Abort of the original intent.
+    pub outcome: VerifiedPrivateSettlementOutcome,
     /// Durable phase and carrier state; completion never rewrites a rejected carrier as Applied.
     pub progress: WorkflowProgressV1,
 }
@@ -208,8 +219,8 @@ pub struct PrivateSettlementResult {
 pub struct PrivateSettlementRecovery {
     /// Existing durable workflow state, when one was created.
     pub progress: Option<WorkflowProgressV1>,
-    /// Original success only after fresh independent finality verification.
-    pub receipt: Option<VerifiedPrivateSettlementReceipt>,
+    /// Original terminal outcome only after fresh independent finality verification.
+    pub outcome: Option<VerifiedPrivateSettlementOutcome>,
 }
 /// A retryable observation, journal, or independently retained request failure.
 #[derive(Debug, thiserror::Error)]
@@ -220,6 +231,12 @@ pub enum PrivateSettlementError {
     /// Existing typed workflow failure, including progress and ambiguous writes.
     #[error(transparent)]
     Workflow(#[from] WorkflowError),
+    /// Original phase worker lease is busy or unavailable; no ledger failure is inferred.
+    #[error("private settlement original phase custody unavailable")]
+    Custody(#[source] crate::workflow::WorkflowStorageError),
+    /// Authenticated pending-finality custody refused its original file, bound or publication.
+    #[error(transparent)]
+    FinalityStorage(#[from] PrivateSettlementFinalityStorageError),
     /// Original certificate/transport error; never written into the journal.
     #[error("private settlement phase or transport unavailable")]
     Protocol(#[source] eyre::Report),
@@ -241,15 +258,26 @@ pub enum PrivateSettlementError {
     /// No verified successful business completion was established in this call.
     #[error("private settlement remains unresolved")]
     Unresolved,
-    /// Local worker/synchronization failure; no ledger failure is inferred.
-    #[error("private settlement local worker unavailable")]
-    Worker,
+    /// Original native worker lifecycle failed; no ledger failure is inferred.
+    #[error(transparent)]
+    Worker(#[from] NativeWorkerError),
+    /// The original local worker admission is already occupied.
+    #[error("private settlement local worker capacity unavailable")]
+    Capacity,
+    /// The original local synchronization owner was poisoned.
+    #[error("private settlement synchronization unavailable")]
+    Synchronization,
 }
 fn failure(error: &PrivateSettlementError) -> StepFailure {
     let code = match error {
-        PrivateSettlementError::Binding | PrivateSettlementError::Receipt(_) => {
+        PrivateSettlementError::Binding
+        | PrivateSettlementError::Receipt(_)
+        | PrivateSettlementError::FinalityStorage(PrivateSettlementFinalityStorageError::Binding) => {
             WorkflowErrorCode::BindingMismatch
         }
+        PrivateSettlementError::FinalityStorage(
+            PrivateSettlementFinalityStorageError::Conflict,
+        ) => WorkflowErrorCode::JournalConflict,
         _ => WorkflowErrorCode::LocalResourceUnavailable,
     };
     StepFailure::new(code, error.to_string())
@@ -257,7 +285,9 @@ fn failure(error: &PrivateSettlementError) -> StepFailure {
 fn lock<T>(
     value: &Mutex<T>,
 ) -> std::result::Result<std::sync::MutexGuard<'_, T>, PrivateSettlementError> {
-    value.lock().map_err(|_| PrivateSettlementError::Worker)
+    value
+        .lock()
+        .map_err(|_| PrivateSettlementError::Synchronization)
 }
 fn driver_identity() -> DriverIdentityV1 {
     DriverIdentityV1 {
@@ -288,11 +318,14 @@ fn transcript<T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'d
 /// Prepared confidential settlement using the existing journal and signing owners.
 ///
 /// Reopen with the same external prepared artifacts and storage. Only bounded public
-/// certificates and exact public carriers enter the journal. No plaintext witness,
-/// proof blob, capsule or secret handle is persisted by this operation. Committee
+/// certificates and exact public carriers enter the journal. The authenticated finality
+/// owner retains bounded public native checkpoints for the pending walk and its two
+/// carrier phases. Restricted proofs, plaintext witnesses, capsules and secret handles
+/// remain in the external prepared-artifact owner. Committee
 /// methods run on one bounded blocking worker per operation, preserving their existing
-/// four-endpoint fanout and transport deadlines. Cancellation may leave that original
-/// phase finishing; its permit remains held until it exits and recovery reads first.
+/// four-endpoint fanout and transport deadlines. A durable request lease excludes phases
+/// in reopened operations until the original worker and its thread-local cleanup exit.
+/// Cancellation retains that lease and its permit; recovery reads the original state first.
 pub struct PrivateSettlementOperation {
     handle: WorkflowHandle,
     driver: Arc<SettlementDriver>,
@@ -307,7 +340,7 @@ impl std::fmt::Debug for PrivateSettlementOperation {
     }
 }
 impl AccountClient {
-    /// Open a durable operation over exact caller-retained prepared artifacts.
+    /// Open a durable operation over exact caller-retained prepared artifacts and finality custody.
     ///
     /// The verifier must derive from independently authenticated signed genesis or an
     /// independently retained authenticated checkpoint, never trust supplied by Torii.
@@ -317,6 +350,7 @@ impl AccountClient {
         &self,
         request: PrivateSettlementRequest,
         storage: Arc<dyn WorkflowStorage>,
+        finality: Arc<FilePrivateSettlementFinality>,
         verifier: SumeragiFinalityVerifier,
     ) -> std::result::Result<PrivateSettlementOperation, PrivateSettlementError> {
         if storage.durability() != WorkflowStorageDurability::Durable
@@ -329,11 +363,15 @@ impl AccountClient {
             return Err(PrivateSettlementError::Binding);
         }
         let context = Arc::new(AccountWorkflowContext::new(self.clone())?);
+        let plan = request.plan();
+        let workflow = WorkflowIdentityV1::new(&plan, &context.binding())?.workflow_id()?;
+        let finality = finality.bind(workflow, request.0.digest, &verifier)?;
         let worker = Arc::new(tokio::sync::Semaphore::new(1));
         let phases = Arc::new(OnlinePhases::new(
             self.client().clone(),
             request.clone(),
             worker.clone(),
+            storage.clone(),
         ));
         let state = Arc::new(Mutex::new(None));
         let ledger = Arc::new(SettlementLedger::new(
@@ -342,6 +380,8 @@ impl AccountClient {
             state.clone(),
             verifier,
             worker,
+            storage.clone(),
+            finality,
         ));
         let driver = Arc::new(SettlementDriver {
             account: self.clone(),
@@ -350,7 +390,6 @@ impl AccountClient {
             state: state.clone(),
             ledger: ledger.clone(),
         });
-        let plan = request.plan();
         let account = Arc::new(SettlementAccount {
             account: context,
             request,
@@ -383,21 +422,21 @@ impl PrivateSettlementOperation {
         }
         Ok(journal)
     }
-    /// Run or resume and return only independently verified successful settlement.
+    /// Run or resume and return the independently verified original terminal outcome.
     /// # Errors
-    /// Typed journal/resource/observation failure or unresolved success; original identities remain.
+    /// Typed journal/resource/observation failure or unresolved outcome; original identities remain.
     pub async fn run(
         &self,
         options: &PrivateSettlementRunOptions,
     ) -> std::result::Result<PrivateSettlementResult, PrivateSettlementError> {
         let _call = self.call.lock().await;
         self.ledger
-            .begin_call(options.max_finality_proof_reads.get() as usize)?;
+            .begin_call(usize::from(options.max_finality_proof_reads))?;
         if let Some(journal) = self.load()?
-            && let Some(receipt) = self.ledger.recover_business(&journal).await?
+            && let Some(outcome) = self.ledger.recover_business(&journal).await?
         {
             return Ok(PrivateSettlementResult {
-                receipt,
+                outcome,
                 progress: journal.progress(),
             });
         }
@@ -412,9 +451,9 @@ impl PrivateSettlementOperation {
         } else {
             Ok(None)
         };
-        if let Ok(Some(receipt)) = recovered {
+        if let Ok(Some(outcome)) = recovered {
             return Ok(PrivateSettlementResult {
-                receipt,
+                outcome,
                 progress: journal.ok_or(PrivateSettlementError::Binding)?.progress(),
             });
         }
@@ -434,11 +473,19 @@ impl PrivateSettlementOperation {
     ) -> std::result::Result<PrivateSettlementRecovery, PrivateSettlementError> {
         let _call = self.call.lock().await;
         self.ledger
-            .begin_call(options.max_finality_proof_reads.get() as usize)?;
-        if self.load()?.is_none() {
+            .begin_call(usize::from(options.max_finality_proof_reads))?;
+        let Some(original) = self.load()? else {
             return Ok(PrivateSettlementRecovery {
                 progress: None,
-                receipt: None,
+                outcome: None,
+            });
+        };
+        // A verified Abort can precede Prepare. Observe the original terminal before any
+        // committee recovery so a final-tip Abort does not depend on live committee traffic.
+        if let Some(outcome) = self.ledger.recover_business(&original).await? {
+            return Ok(PrivateSettlementRecovery {
+                progress: Some(original.progress()),
+                outcome: Some(outcome),
             });
         }
         let result = self
@@ -448,10 +495,10 @@ impl PrivateSettlementOperation {
         let original_error = self.ledger.take_error()?;
         let journal = self.load()?.ok_or(PrivateSettlementError::Binding)?;
         let recovered = self.ledger.recover_business(&journal).await;
-        if let Ok(Some(receipt)) = recovered {
+        if let Ok(Some(outcome)) = recovered {
             return Ok(PrivateSettlementRecovery {
                 progress: Some(journal.progress()),
-                receipt: Some(receipt),
+                outcome: Some(outcome),
             });
         }
         if let Some(error) = original_error {
@@ -461,14 +508,42 @@ impl PrivateSettlementOperation {
         result?;
         Ok(PrivateSettlementRecovery {
             progress: Some(journal.progress()),
-            receipt: None,
+            outcome: None,
         })
     }
 }
 
-struct PublicContext {
-    barrier: PrivateSettlementPrepareBarrierV1,
-    phase: usize,
+enum PublicContext {
+    Available {
+        manifest: AtomicPrivateSettlementV1,
+    },
+    Prepared {
+        barrier: PrivateSettlementPrepareBarrierV1,
+        phase: usize,
+    },
+}
+impl PublicContext {
+    fn prepared(barrier: PrivateSettlementPrepareBarrierV1, phase: usize) -> Self {
+        Self::Prepared { barrier, phase }
+    }
+    fn manifest(&self) -> &AtomicPrivateSettlementV1 {
+        match self {
+            Self::Available { manifest } => manifest,
+            Self::Prepared { barrier, .. } => &barrier.manifest,
+        }
+    }
+    fn barrier(&self) -> Result<&PrivateSettlementPrepareBarrierV1, PrivateSettlementError> {
+        match self {
+            Self::Prepared { barrier, .. } => Ok(barrier),
+            Self::Available { .. } => Err(PrivateSettlementError::Binding),
+        }
+    }
+    fn phase(&self) -> usize {
+        match self {
+            Self::Prepared { phase, .. } => *phase,
+            Self::Available { .. } => PREPARE,
+        }
+    }
 }
 struct SettlementDriver {
     account: AccountClient,
@@ -483,9 +558,10 @@ impl SettlementDriver {
             return Err(PrivateSettlementError::Binding);
         }
         if journal.steps[AVAILABILITY].is_done() {
-            self.request.manifest_with(&transcript::<
+            let manifest = self.request.manifest_with(&transcript::<
                 Vec<PrivateSettlementSidecarAvailabilityV1>,
             >(journal, AVAILABILITY)?)?;
+            *lock(&self.state)? = Some(PublicContext::Available { manifest });
         }
         if journal.steps[PREPARE].is_done() {
             let barrier = self.request.barrier(journal)?;
@@ -501,7 +577,7 @@ impl SettlementDriver {
                 .iter()
                 .position(|step| !step.is_done())
                 .unwrap_or(FINALIZE);
-            *lock(&self.state)? = Some(PublicContext { barrier, phase });
+            *lock(&self.state)? = Some(PublicContext::prepared(barrier, phase));
         }
         Ok(())
     }
@@ -511,12 +587,12 @@ impl SettlementDriver {
         read_only: bool,
     ) -> std::result::Result<RoundReport, StepFailure> {
         self.load(context.journal)
-            .map_err(|error| failure(&error))?;
+            .map_err(|error| self.ledger.remember_error(error))?;
         if context.step_index as usize == COMMIT {
             self.ledger
                 .verify_registration(context.journal)
                 .await
-                .map_err(|error| failure(&error))?;
+                .map_err(|error| self.ledger.remember_error(error))?;
         }
         let transcript = self
             .phases
@@ -526,7 +602,7 @@ impl SettlementDriver {
                 read_only,
             )
             .await
-            .map_err(|error| failure(&error))?;
+            .map_err(|error| self.ledger.remember_error(error))?;
         let status = RoundStatusReport {
             round_id: context.round_id,
             context_digest: self.request.0.digest,
@@ -631,7 +707,8 @@ fn check_payload(
     signing: bool,
 ) -> std::result::Result<usize, PrivateSettlementError> {
     let context = context.ok_or(PrivateSettlementError::Binding)?;
-    verified::check_carrier_context(payload, &context.barrier.manifest)?;
+    let barrier = context.barrier()?;
+    verified::check_carrier_context(payload, context.manifest())?;
     let Executable::Instructions(instructions) = payload.instructions() else {
         return Err(PrivateSettlementError::Binding);
     };
@@ -643,7 +720,7 @@ fn check_payload(
         .downcast_ref::<RegisterAtomicPrivateSettlementPrepareV1>()
     {
         validate_prepare_barrier_v1(&register.barrier).map_err(PrivateSettlementError::Protocol)?;
-        if !register.barrier.quorum_equivalent_to(&context.barrier) {
+        if !register.barrier.quorum_equivalent_to(barrier) {
             return Err(PrivateSettlementError::Binding);
         }
         REGISTER
@@ -657,7 +734,7 @@ fn check_payload(
             .iter()
             .map(|leg| leg.commit.clone())
             .collect::<Vec<_>>();
-        let expected = build_private_settlement_commit_bundle_v1(&context.barrier, &commits)
+        let expected = build_private_settlement_commit_bundle_v1(barrier, &commits)
             .map_err(PrivateSettlementError::Protocol)?;
         // Exact checkpoint bytes are used for newly authorized effects. Original successful
         // recovery separately permits valid quorum-equivalent Prepare certificates.
@@ -668,7 +745,7 @@ fn check_payload(
     } else {
         return Err(PrivateSettlementError::Binding);
     };
-    if signing && context.phase != phase {
+    if signing && context.phase() != phase {
         return Err(PrivateSettlementError::Binding);
     }
     if norito::encode_canonical(instruction)?.len() as u64 > request.0.max_carrier_bytes {

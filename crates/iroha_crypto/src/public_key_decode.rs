@@ -16,11 +16,7 @@ fn invalid_key() -> Error {
 
 pub fn validate(algorithm: Algorithm, payload: &[u8]) -> Result<(), Error> {
     let valid = match algorithm {
-        Algorithm::Ed25519 => {
-            signature::ed25519::Ed25519Sha512::parse_public_key_uncached_for_decode(payload)
-                .map(drop)
-                .is_ok()
-        }
+        Algorithm::Ed25519 => super::ed25519_decode_cache::validate(payload).is_ok(),
         Algorithm::Secp256k1 => {
             signature::secp256k1::EcdsaSecp256k1Sha256::validate_public_key_for_decode(payload)
                 .is_ok()
@@ -119,7 +115,7 @@ impl PublicKeyCompact {
         // SAFETY: every payload pair is canonical and initializes one disjoint
         // byte; on failure the raw allocation is reclaimed with its exact layout.
         unsafe { allocation.as_ptr().write(Self::algorithm_tag(algorithm)) };
-        for (index, pair) in payload_hex.as_bytes().chunks_exact(2).enumerate() {
+        for (index, pair) in payload_hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             let Some(byte) = multihash::decode_public_key_payload_byte(pair) else {
                 // SAFETY: `allocation` still has the exact `layout` above.
                 unsafe { std::alloc::dealloc(allocation.as_ptr(), layout) };

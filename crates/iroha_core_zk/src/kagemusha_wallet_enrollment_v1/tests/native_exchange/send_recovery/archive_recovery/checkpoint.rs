@@ -156,10 +156,7 @@ fn retain_current_send_checkpoint_once_without_monetary_replay() {
         previous["previous_continuation_sha256"].as_str(),
         Some(sha(&prior_bytes).as_str())
     );
-    message_census::require_selected_send_session(
-        &census_originals[4],
-        &prior,
-    );
+    message_census::require_selected_send_session(&census_originals[4], &prior);
     let sources = Sources::admit(&output.join("source-admission"));
     let setup = LedgerSetup::read(&sources);
     let fixture = sources.fixture(&setup, 0);

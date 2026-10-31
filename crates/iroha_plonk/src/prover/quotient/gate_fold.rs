@@ -31,8 +31,8 @@ impl<F: PastaField> GateFold<F> {
         filter: &impl ConstraintFilter,
     ) -> F {
         let mut value = F::ZERO;
-        let mut groups = roots.chunks_exact(GROUP);
-        for (group, roots) in groups.by_ref().enumerate() {
+        let (groups, remaining) = roots.as_chunks::<GROUP>();
+        for (group, roots) in groups.iter().enumerate() {
             let mut sum = F::ZERO;
             for (offset, root) in roots.iter().enumerate() {
                 // Read every root, including omitted constraints, just as the
@@ -53,7 +53,6 @@ impl<F: PastaField> GateFold<F> {
             }
             value = value * self.powers[GROUP] + sum;
         }
-        let remaining = groups.remainder();
         let start = roots.len() - remaining.len();
         for (offset, root) in remaining.iter().enumerate() {
             let contribution = values[*root as usize];
@@ -165,7 +164,7 @@ impl<'a, F: PastaField> GatePlan<'a, F> {
         };
         plan.roots.clone_from(&original.gates);
         let mut any = false;
-        for (group, roots) in original.gates.chunks_exact(GROUP).enumerate() {
+        for (group, roots) in original.gates.as_chunks::<GROUP>().0.iter().enumerate() {
             let mut runs = Vec::new();
             let mut start = 0;
             while start < GROUP {

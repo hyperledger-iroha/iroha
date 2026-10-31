@@ -8,6 +8,9 @@ use std::{
     cell::Cell,
 };
 
+mod live_census;
+pub use live_census::{LiveAllocationStats, live_allocations_during};
+
 thread_local! {
     static TRACK_ALLOCATIONS: Cell<bool> = const { Cell::new(false) };
     static ALLOCATION_COUNT: Cell<usize> = const { Cell::new(0) };
@@ -65,6 +68,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
         let pointer = unsafe { System.alloc(layout) };
         if !pointer.is_null() {
             record_allocation();
+            live_census::allocated(pointer, layout.size());
         }
         pointer
     }
@@ -76,6 +80,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
         let pointer = unsafe { System.alloc_zeroed(layout) };
         if !pointer.is_null() {
             record_allocation();
+            live_census::allocated(pointer, layout.size());
         }
         pointer
     }
@@ -87,11 +92,13 @@ unsafe impl GlobalAlloc for CountingAllocator {
         let result = unsafe { System.realloc(pointer, layout, size) };
         if !result.is_null() {
             record_allocation();
+            live_census::reallocated(pointer, result, size);
         }
         result
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        live_census::deallocated(pointer);
         unsafe { System.dealloc(pointer, layout) };
     }
 }

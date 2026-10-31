@@ -1079,7 +1079,9 @@ fn fold_lookups<'a, F: PastaField + 'a>(
             cancellation,
         )?;
         for (offset, (columns, numerator)) in batch_columns
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .zip(batch_numerators)
             .enumerate()
         {

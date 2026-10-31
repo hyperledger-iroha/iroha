@@ -143,6 +143,10 @@
     "./privacy-x509": {
       "types": "./privacy-x509.d.ts",
       "import": "./dist/privacyX509Transaction.js"
+    },
+    "./private-settlement": {
+      "types": "./private-settlement.d.ts",
+      "import": "./dist/privateSettlement.js"
     }
   },
   "typesVersions": {
@@ -230,6 +234,9 @@
       ],
       "privacy-x509": [
         "./privacy-x509.d.ts"
+      ],
+      "private-settlement": [
+        "./private-settlement.d.ts"
       ]
     }
   },
@@ -296,6 +303,7 @@
     "privacy-capabilities.d.ts",
     "bootle-lantern-issuance.d.ts",
     "atomic-private-settlement.d.ts",
+    "private-settlement.d.ts",
     "canonical-request.d.ts",
     "ivm-artifact.d.ts",
     "transaction-codec.d.ts",

@@ -131,12 +131,47 @@ unique registered endpoints; independent components receive independent lineage
 work bounds. End releases active dependencies while retaining permanent call
 history. Full rekey/undo/lifecycle qualification remains a release gate.
 
+## Client flow
+
+The ledger owns every public input, so a client reads them before proving.
+`GET /v1/kaigi/calls/{call_id}/participation` is signed by the caller's account and
+reports only that account's standing, from one committed state: the retained
+original subject, the sequence, any live commitment, the roster root and the usage
+segment. It cannot be used to probe another account's membership. It reveals the
+original host only to the host and to retained participants, so a first join takes
+the host from the invitation. A private create binds the deterministic empty roster
+root and sequence zero, so it needs no read.
+
+`iroha app kaigi` runs this flow with `--secret-file` and proves locally. The file holds
+one owner-only scalar, is created on first use, and is required again to leave or
+end the call. Comparing the computed commitment with the stored one lets a wrong
+secret fail before any proof work or fee. `iroha_core_zk::kaigi_client_v1` owns the
+same construction for other Rust clients. JavaScript exposes
+`generateKaigiBlindingV1`, `KAIGI_EMPTY_ROSTER_ROOT_HEX_V1` and the two proof builders.
+
+A proof binds the exact pre-action roster root, so roster changes serialize per
+call: of several joins proved against one root, only the first to execute succeeds,
+and the rest are rejected with `KAIGI_STALE_ROSTER_ROOT_ERROR_V1`. That rejection
+leaves the call unchanged but is charged like any failed transaction, at the same fee
+as a success, so losing a race costs money: if N clients all retry at once, N joins can
+cost about N²/2 fees. A client should read its standing again after proving, submit only
+if it has not moved, and wait a random moment before proving again after a loss.
+The public status route carries no rejection reason: the signer reads it through the
+signed transaction-details route, or sees that the standing's root moved. The CLI
+does all of this and stops after three paid attempts. Usage proofs recover the same way from
+`KAIGI_STALE_USAGE_CONTEXT_ERROR_V1`.
+
 ## Bounds and accounting
 
 V1 allows at most 4,096 concurrent participants, 4,096 retained private subjects,
 8,194 action nullifiers, and 4,096 usage commitments. Counts are upper bounds:
 the encoded record must also fit the 1-MiB protocol JSON ceiling and configured
-metadata limit. History is never evicted to permit proof replay.
+metadata limit, and for a private call that ceiling comes first. Each participant's
+commitment, ledger entry, join nullifier and departure reservation take about 770 JSON
+bytes with an Ed25519 account, so a private call fills at about 1,350 live participants,
+or about 200 with ML-DSA accounts, whose literals are far longer. Rejoining and recorded
+usage lower that further. A join past that point is rejected with "Kaigi call record is
+full". History is never evicted to permit proof replay.
 
 Admission reserves one nullifier for every live departure and one for host end.
 Every active private record also reserves 256 JSON bytes per live departure and
@@ -147,20 +182,45 @@ totals use checked arithmetic. Governance must consider retained active state
 when changing storage limits; price policy and externally attested billing are
 separate qualification requirements.
 
+Each Kaigi instruction decodes the whole record from domain metadata, validates it and
+encodes it again, so its cost grows with the roster. On an Apple silicon development
+machine (`cargo bench -p iroha_core --features bench --bench kaigi`), a transparent join
+and leave together take about 1.4 ms with 64 participants, 37 ms with 1,024 and 290 ms
+with 4,096. Those figures rely on a per-thread memo of validated Ed25519 keys, which never
+changes a decode result; the first read on each thread still validates every key. What
+remains is mostly JSON decoding and encoding of the record, which only typed state would
+remove. A native authorization proof is 5,306 bytes and takes about 24 ms to verify the
+first time; proving took 250 ms on a quiet machine and about 850 ms on a heavily loaded one.
+
 ## Relay scope and remaining qualification
 
 A manifest contains 3–8 unique ordered relays with positive weights and future
-expiry. Relay descriptors require nonempty keys of at most 4 KiB and positive
-bandwidth class. V1 bounds registry and allowlist membership at 500 identities;
+expiry. A relay descriptor has a positive bandwidth class and a suite-tagged HPKE
+key: a two-byte little-endian suite identifier followed by the exact public key.
+The identifiers are those of `norito::streaming::HpkeSuite`: `0x0001` is
+ML-KEM-768 AuthPsk with a 1,184-byte key and `0x0002` is ML-KEM-1024 AuthPsk with a
+1,568-byte key. Native admission and restoration reject any other framing, so the
+relay fingerprint, which hashes the whole descriptor, also commits to the suite.
+`KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1` remains the 4-KiB wire bound that SDKs
+check locally. V1 bounds registry and allowlist membership at 500 identities;
 restoration rejects an over-cap registry. Registration, rotation, health reports
 and removal authenticate the relevant active account lineage. Exact repeated
 descriptors produce no mutation event. A relay's registered HPKE key cannot rotate
-or be removed while a live call references it. Host-authorized end releases the
+or be removed while a live call's unexpired manifest references it. An expired
+manifest cannot route traffic, so it stops pinning the relay; an abandoned call
+therefore cannot hold a compromised key in place. Host-authorized end releases the
 call's live dependencies. Historical manifests remain self-contained after
 retirement; future admission requires live registered descriptors.
 
-The current opaque HPKE key carrier still needs its final explicit suite tag and
-actual three-hop interoperability/transport recovery qualification. Circuit
+A host recovers from a failed relay by reporting its health and rotating the call's
+manifest. Both are host-signed, and a replacement manifest is admitted only from
+live registered descriptors. Participants learn of the rotation from the call event
+stream's `relay_manifest_updated`, then re-read the manifest from the call view.
+
+Nothing consumes the relay keys yet: routing over SoraNet remains disabled and its
+trust model undecided, as [kaigi_over_soranet.md](soranet/kaigi_over_soranet.md)
+records. Actual three-hop interoperability and transport recovery remain to be
+qualified with that work. Circuit
 and SDK unit results do not establish relay anonymity, hardware parity, an
 external cryptographic audit, pricing/settlement assurance, or four-validator
 release readiness. These gates remain open until their concrete evidence is

@@ -3,6 +3,7 @@
 //! Domain wrappers retain responsibility for validating the exact native instruction and its
 //! finalized-chain reconciliation result. This module owns only the reusable crash states and the
 //! hardened single-writer persistence protocol.
+use crate::governance_rooted_fs::{NativeMetadata, named_metadata, native_metadata};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 #[cfg(unix)]
 use std::os::unix::fs::{
@@ -13,16 +14,23 @@ use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
-    io::{Read, Write as _},
     path::{Path, PathBuf},
-    sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::Mutex,
+};
+#[cfg(not(windows))]
+use std::{
+    io::{Read, Write as _},
+    sync::atomic::{AtomicU64, Ordering},
 };
 use thiserror::Error;
+#[cfg(not(windows))]
 static CHECKPOINT_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static CHECKPOINT_PROCESS_LOCKS: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+#[cfg(all(windows, test))]
+thread_local! {
+    // Deterministic same-user interference after staging and before the final custody check.
+    static CHECKPOINT_BEFORE_PUBLISH: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0x0002_0000 | 0x0008_0000;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -298,6 +306,8 @@ pub(crate) enum CheckpointStoreError {
 #[derive(Debug)]
 pub(crate) struct AtomicCheckpointStore {
     root: PathBuf,
+    #[cfg(windows)]
+    directory: iroha_fs::PrivateDirectory,
     root_identity: StateDirectoryIdentity,
     checkpoint_path: PathBuf,
     lock_path: PathBuf,
@@ -308,12 +318,19 @@ pub(crate) struct AtomicCheckpointStore {
 type LoadedCheckpointBytesV1 = (Option<Vec<u8>>, Option<[u8; 32]>);
 impl AtomicCheckpointStore {
     /// Open or create a private state directory.
+    ///
+    /// Windows retains the canonical directory and its ancestors. Existing inherited or
+    /// foreign ACL grants are refused without repair; newly created objects are owner-private.
     pub(crate) fn new(
         root: &Path,
         checkpoint_file_name: &'static str,
         lock_file_name: &'static str,
         max_bytes: u64,
     ) -> Result<Self, CheckpointStoreError> {
+        #[cfg(windows)]
+        let directory = iroha_fs::PrivateDirectory::open_or_create(root)
+            .map_err(|_| CheckpointStoreError::Io)?;
+        #[cfg(not(windows))]
         ensure_private_state_directory(root)?;
         let root = fs::canonicalize(root).map_err(|_| CheckpointStoreError::Io)?;
         let root_identity = state_directory_identity(&root)?;
@@ -321,12 +338,18 @@ impl AtomicCheckpointStore {
             checkpoint_path: root.join(checkpoint_file_name),
             lock_path: root.join(lock_file_name),
             root,
+            #[cfg(windows)]
+            directory,
             root_identity,
             checkpoint_file_name,
             max_bytes,
         })
     }
     fn verify_root_identity(&self) -> Result<(), CheckpointStoreError> {
+        #[cfg(windows)]
+        self.directory
+            .revalidate()
+            .map_err(|_| CheckpointStoreError::Io)?;
         if state_directory_identity(&self.root)? != self.root_identity {
             return Err(CheckpointStoreError::Io);
         }
@@ -339,6 +362,8 @@ impl AtomicCheckpointStore {
         self.verify_root_identity()?;
         let bytes = read_checkpoint_bytes(&self.checkpoint_path, self.max_bytes)?;
         self.verify_root_identity()?;
+        #[cfg(windows)]
+        _writer.revalidate()?;
         let fingerprint = bytes
             .as_deref()
             .map(blake3::hash)
@@ -366,39 +391,103 @@ impl AtomicCheckpointStore {
         if fingerprint != expected_fingerprint {
             return Err(CheckpointStoreError::Stale);
         }
-        let temp_path = self.root.join(format!(
-            ".{}.{}.{}.tmp",
-            self.checkpoint_file_name,
-            std::process::id(),
-            CHECKPOINT_TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        let result = write_checkpoint_temp(&temp_path, bytes).and_then(|temp_file| {
-            self.verify_root_identity()
-                .map_err(|_| CheckpointStoreError::DurabilityUncertain)?;
-            let latest = read_checkpoint_bytes(&self.checkpoint_path, self.max_bytes)?;
-            self.verify_root_identity()
-                .map_err(|_| CheckpointStoreError::DurabilityUncertain)?;
-            let latest_fingerprint = latest
-                .as_deref()
-                .map(blake3::hash)
-                .map(|digest| *digest.as_bytes());
-            if latest_fingerprint != expected_fingerprint {
-                return Err(CheckpointStoreError::Stale);
-            }
-            self.verify_root_identity()
-                .map_err(|_| CheckpointStoreError::DurabilityUncertain)?;
-            validate_checkpoint_temp(&temp_path, &temp_file, bytes.len())?;
-            persist_atomic_replacement(&temp_path, &self.checkpoint_path)
+        #[cfg(windows)]
+        {
+            let publisher = iroha_fs::OwnerDirectory::open(self.directory.path())
                 .map_err(|_| CheckpointStoreError::Io)?;
-            validate_persisted_checkpoint(&self.checkpoint_path, &temp_file, bytes.len())
-                .map_err(|_| CheckpointStoreError::DurabilityUncertain)?;
-            self.verify_root_identity()
-                .map_err(|_| CheckpointStoreError::DurabilityUncertain)?;
-            sync_directory(&self.root).map_err(|_| CheckpointStoreError::DurabilityUncertain)?;
-            self.verify_root_identity()
-                .map_err(|_| CheckpointStoreError::DurabilityUncertain)
-        });
-        result?;
+            if publisher.identity().map_err(|_| CheckpointStoreError::Io)?
+                != self
+                    .directory
+                    .identity()
+                    .map_err(|_| CheckpointStoreError::Io)?
+            {
+                return Err(CheckpointStoreError::Io);
+            }
+            let mut published = false;
+            let mut refusal = None;
+            let result = publisher.write_atomic_observed(
+                self.checkpoint_file_name,
+                bytes,
+                iroha_fs::PublishMode::Replace,
+                8,
+                |step, _| {
+                    // Mark the actual rename before any post-publication observation can fail.
+                    published |= step == iroha_fs::AtomicWriteStep::Published;
+                    #[cfg(test)]
+                    if step == iroha_fs::AtomicWriteStep::Publish {
+                        CHECKPOINT_BEFORE_PUBLISH.with(|hook| {
+                            if let Some(hook) = hook.borrow_mut().take() {
+                                hook();
+                            }
+                        });
+                    }
+                    let checked = (|| {
+                        self.verify_root_identity()?;
+                        _writer.revalidate()?;
+                        if step == iroha_fs::AtomicWriteStep::Publish {
+                            let latest =
+                                read_checkpoint_bytes(&self.checkpoint_path, self.max_bytes)?;
+                            let fingerprint = latest
+                                .as_deref()
+                                .map(blake3::hash)
+                                .map(|digest| *digest.as_bytes());
+                            if fingerprint != expected_fingerprint {
+                                return Err(CheckpointStoreError::Stale);
+                            }
+                        }
+                        Ok(())
+                    })();
+                    checked.map_err(|error| {
+                        refusal = Some(error);
+                        std::io::Error::other("checkpoint publication custody changed")
+                    })
+                },
+            );
+            if result.is_err() {
+                return Err(if published {
+                    CheckpointStoreError::DurabilityUncertain
+                } else {
+                    refusal.unwrap_or(CheckpointStoreError::Io)
+                });
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let temp_path = self.root.join(format!(
+                ".{}.{}.{}.tmp",
+                self.checkpoint_file_name,
+                std::process::id(),
+                CHECKPOINT_TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
+            let result = write_checkpoint_temp(&temp_path, bytes).and_then(|temp_file| {
+                self.verify_root_identity()
+                    .map_err(|_| CheckpointStoreError::DurabilityUncertain)?;
+                let latest = read_checkpoint_bytes(&self.checkpoint_path, self.max_bytes)?;
+                self.verify_root_identity()
+                    .map_err(|_| CheckpointStoreError::DurabilityUncertain)?;
+                let latest_fingerprint = latest
+                    .as_deref()
+                    .map(blake3::hash)
+                    .map(|digest| *digest.as_bytes());
+                if latest_fingerprint != expected_fingerprint {
+                    return Err(CheckpointStoreError::Stale);
+                }
+                self.verify_root_identity()
+                    .map_err(|_| CheckpointStoreError::DurabilityUncertain)?;
+                validate_checkpoint_temp(&temp_path, &temp_file, bytes.len())?;
+                persist_atomic_replacement(&temp_path, &self.checkpoint_path)
+                    .map_err(|_| CheckpointStoreError::Io)?;
+                validate_persisted_checkpoint(&self.checkpoint_path, &temp_file, bytes.len())
+                    .map_err(|_| CheckpointStoreError::DurabilityUncertain)?;
+                self.verify_root_identity()
+                    .map_err(|_| CheckpointStoreError::DurabilityUncertain)?;
+                sync_directory(&self.root)
+                    .map_err(|_| CheckpointStoreError::DurabilityUncertain)?;
+                self.verify_root_identity()
+                    .map_err(|_| CheckpointStoreError::DurabilityUncertain)
+            });
+            result?;
+        }
         let persisted = read_checkpoint_bytes(&self.checkpoint_path, self.max_bytes)
             .map_err(|_| CheckpointStoreError::DurabilityUncertain)?
             .ok_or(CheckpointStoreError::DurabilityUncertain)?;
@@ -407,6 +496,10 @@ impl AtomicCheckpointStore {
         if persisted != bytes {
             return Err(CheckpointStoreError::DurabilityUncertain);
         }
+        #[cfg(windows)]
+        _writer
+            .revalidate()
+            .map_err(|_| CheckpointStoreError::DurabilityUncertain)?;
         Ok(*blake3::hash(bytes).as_bytes())
     }
 }
@@ -417,9 +510,7 @@ struct StateDirectoryIdentity {
     #[cfg(unix)]
     inode: u64,
     #[cfg(windows)]
-    volume_serial_number: u32,
-    #[cfg(windows)]
-    file_index: u64,
+    native: iroha_fs::FileIdentity,
     #[cfg(all(not(unix), not(windows)))]
     _unsupported: (),
 }
@@ -429,7 +520,7 @@ fn state_directory_identity(path: &Path) -> Result<StateDirectoryIdentity, Check
 }
 #[cfg(unix)]
 fn state_directory_identity_from_metadata(
-    metadata: &fs::Metadata,
+    metadata: &NativeMetadata,
 ) -> Result<StateDirectoryIdentity, CheckpointStoreError> {
     Ok(StateDirectoryIdentity {
         device: metadata.dev(),
@@ -438,18 +529,15 @@ fn state_directory_identity_from_metadata(
 }
 #[cfg(windows)]
 fn state_directory_identity_from_metadata(
-    metadata: &fs::Metadata,
+    metadata: &NativeMetadata,
 ) -> Result<StateDirectoryIdentity, CheckpointStoreError> {
     Ok(StateDirectoryIdentity {
-        volume_serial_number: metadata
-            .volume_serial_number()
-            .ok_or(CheckpointStoreError::Io)?,
-        file_index: metadata.file_index().ok_or(CheckpointStoreError::Io)?,
+        native: metadata.identity(),
     })
 }
 #[cfg(all(not(unix), not(windows)))]
 fn state_directory_identity_from_metadata(
-    _metadata: &fs::Metadata,
+    _metadata: &NativeMetadata,
 ) -> Result<StateDirectoryIdentity, CheckpointStoreError> {
     Err(CheckpointStoreError::Io)
 }
@@ -457,6 +545,8 @@ fn state_directory_identity_from_metadata(
 pub(crate) struct CheckpointWriterGuard {
     _process_guard: CheckpointProcessGuard,
     _file: File,
+    #[cfg(windows)]
+    _directory: iroha_fs::PrivateDirectory,
 }
 impl CheckpointWriterGuard {
     pub(crate) fn acquire(path: &Path) -> Result<Self, CheckpointStoreError> {
@@ -468,7 +558,7 @@ impl CheckpointWriterGuard {
         let result = (|| {
             let process_guard = CheckpointProcessGuard::acquire(path)?;
             stage = "inspect lock before open";
-            let before_open = match fs::symlink_metadata(path) {
+            let before_open = match named_metadata(path) {
                 Ok(metadata) => {
                     validate_lock_file_metadata(&metadata)?;
                     Some(metadata)
@@ -479,19 +569,33 @@ impl CheckpointWriterGuard {
                     return Err(CheckpointStoreError::Io);
                 }
             };
-            stage = "configure direct lock open";
-            let mut options = OpenOptions::new();
-            options.read(true).write(true).create(true);
-            #[cfg(unix)]
-            options.mode(0o600);
-            configure_direct_file_open(&mut options)?;
-            stage = "open lock";
-            let file = options.open(path).map_err(|error| {
-                os_error = error.raw_os_error();
-                CheckpointStoreError::Io
-            })?;
+            #[cfg(windows)]
+            let directory =
+                iroha_fs::PrivateDirectory::open(path.parent().ok_or(CheckpointStoreError::Io)?)
+                    .map_err(|_| CheckpointStoreError::Io)?;
+            #[cfg(windows)]
+            let file = directory
+                .open_lock(path.file_name().ok_or(CheckpointStoreError::Io)?)
+                .map_err(|error| {
+                    os_error = error.raw_os_error();
+                    CheckpointStoreError::Io
+                })?;
+            #[cfg(not(windows))]
+            let file = {
+                stage = "configure direct lock open";
+                let mut options = OpenOptions::new();
+                options.read(true).write(true).create(true);
+                #[cfg(unix)]
+                options.mode(0o600);
+                configure_direct_file_open(&mut options)?;
+                stage = "open lock";
+                options.open(path).map_err(|error| {
+                    os_error = error.raw_os_error();
+                    CheckpointStoreError::Io
+                })?
+            };
             stage = "inspect opened lock";
-            let opened = file.metadata().map_err(|error| {
+            let opened = native_metadata(&file).map_err(|error| {
                 os_error = error.raw_os_error();
                 CheckpointStoreError::Io
             })?;
@@ -504,7 +608,7 @@ impl CheckpointWriterGuard {
                 return Err(CheckpointStoreError::Io);
             }
             stage = "inspect linked lock";
-            let linked = fs::symlink_metadata(path).map_err(|error| {
+            let linked = named_metadata(path).map_err(|error| {
                 os_error = error.raw_os_error();
                 CheckpointStoreError::Io
             })?;
@@ -523,12 +627,12 @@ impl CheckpointWriterGuard {
                 }
             }
             stage = "inspect acquired lock handle";
-            let locked_file = file.metadata().map_err(|error| {
+            let locked_file = native_metadata(&file).map_err(|error| {
                 os_error = error.raw_os_error();
                 CheckpointStoreError::Io
             })?;
             stage = "inspect acquired lock path";
-            let locked_path = fs::symlink_metadata(path).map_err(|error| {
+            let locked_path = named_metadata(path).map_err(|error| {
                 os_error = error.raw_os_error();
                 CheckpointStoreError::Io
             })?;
@@ -542,15 +646,46 @@ impl CheckpointWriterGuard {
             {
                 return Err(CheckpointStoreError::Io);
             }
+            #[cfg(windows)]
+            directory
+                .revalidate()
+                .map_err(|_| CheckpointStoreError::Io)?;
             Ok(Self {
                 _process_guard: process_guard,
                 _file: file,
+                #[cfg(windows)]
+                _directory: directory,
             })
         })();
         if matches!(&result, Err(CheckpointStoreError::Io)) {
             iroha_logger::warn!(stage, ?os_error, "checkpoint writer acquisition failed");
         }
+        #[cfg(windows)]
+        if let Ok(guard) = &result {
+            guard.revalidate()?;
+        }
         result
+    }
+
+    #[cfg(windows)]
+    fn revalidate(&self) -> Result<(), CheckpointStoreError> {
+        self._directory
+            .revalidate()
+            .map_err(|_| CheckpointStoreError::Io)?;
+        let observer = iroha_fs::OwnerDirectory::open(self._directory.path())
+            .map_err(|_| CheckpointStoreError::Io)?;
+        observer
+            .require_same_lock(
+                self._process_guard
+                    .path
+                    .file_name()
+                    .ok_or(CheckpointStoreError::Io)?,
+                &self._file,
+            )
+            .map_err(|_| CheckpointStoreError::Io)?;
+        self._directory
+            .revalidate()
+            .map_err(|_| CheckpointStoreError::Io)
     }
 }
 struct CheckpointProcessGuard {
@@ -580,8 +715,15 @@ impl Drop for CheckpointProcessGuard {
         }
     }
 }
+#[cfg(all(windows, test))]
 fn ensure_private_state_directory(path: &Path) -> Result<(), CheckpointStoreError> {
-    match fs::symlink_metadata(path) {
+    iroha_fs::PrivateDirectory::open_or_create(path)
+        .map(drop)
+        .map_err(|_| CheckpointStoreError::Io)
+}
+#[cfg(not(windows))]
+fn ensure_private_state_directory(path: &Path) -> Result<(), CheckpointStoreError> {
+    match named_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
             return Err(CheckpointStoreError::Io);
         }
@@ -595,7 +737,7 @@ fn ensure_private_state_directory(path: &Path) -> Result<(), CheckpointStoreErro
         }
         Err(_) => return Err(CheckpointStoreError::Io),
     }
-    let metadata = fs::symlink_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
+    let metadata = named_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(CheckpointStoreError::Io);
     }
@@ -609,7 +751,7 @@ fn read_checkpoint_bytes(
     path: &Path,
     max_bytes: u64,
 ) -> Result<Option<Vec<u8>>, CheckpointStoreError> {
-    let path_metadata = match fs::symlink_metadata(path) {
+    let path_metadata = match named_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(CheckpointStoreError::Io),
@@ -618,45 +760,79 @@ fn read_checkpoint_bytes(
         return Err(CheckpointStoreError::TooLarge);
     }
     validate_regular_file_metadata(&path_metadata, max_bytes, false)?;
-    let mut options = OpenOptions::new();
-    options.read(true);
-    configure_direct_file_open(&mut options)?;
-    let mut file = options.open(path).map_err(|_| CheckpointStoreError::Io)?;
-    let opened = file.metadata().map_err(|_| CheckpointStoreError::Io)?;
-    validate_regular_file_metadata(&opened, max_bytes, false)?;
-    if !file_metadata_unchanged(&path_metadata, &opened) {
-        return Err(CheckpointStoreError::Io);
-    }
-    let linked = fs::symlink_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
-    validate_regular_file_metadata(&linked, max_bytes, false)?;
-    if !file_metadata_unchanged(&opened, &linked) {
-        return Err(CheckpointStoreError::Io);
-    }
-    let mut bytes = Vec::with_capacity(
-        usize::try_from(path_metadata.len())
-            .unwrap_or(usize::MAX)
-            .min(usize::try_from(max_bytes).unwrap_or(usize::MAX)),
-    );
-    Read::by_ref(&mut file)
-        .take(max_bytes.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|_| CheckpointStoreError::Io)?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
-        return Err(CheckpointStoreError::TooLarge);
-    }
-    let file_after = file.metadata().map_err(|_| CheckpointStoreError::Io)?;
-    let path_after = fs::symlink_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
-    validate_regular_file_metadata(&file_after, max_bytes, false)?;
-    validate_regular_file_metadata(&path_after, max_bytes, false)?;
-    if !file_metadata_unchanged(&opened, &file_after)
-        || !file_metadata_unchanged(&file_after, &path_after)
+    #[cfg(windows)]
     {
-        return Err(CheckpointStoreError::Io);
+        let directory =
+            iroha_fs::PrivateDirectory::open(path.parent().ok_or(CheckpointStoreError::Io)?)
+                .map_err(|_| CheckpointStoreError::Io)?;
+        let mut file = directory
+            .open_retained_private(path.file_name().ok_or(CheckpointStoreError::Io)?)
+            .map_err(|_| CheckpointStoreError::Io)?;
+        if file.identity().map_err(|_| CheckpointStoreError::Io)? != path_metadata.identity() {
+            return Err(CheckpointStoreError::Io);
+        }
+        use std::io::Read as _;
+        let before = file.snapshot().map_err(|_| CheckpointStoreError::Io)?;
+        let extent =
+            usize::try_from(path_metadata.len()).map_err(|_| CheckpointStoreError::TooLarge)?;
+        let mut bytes = Vec::with_capacity(extent);
+        file.file_mut()
+            .take(max_bytes.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|_| CheckpointStoreError::Io)?;
+        if bytes.len() as u64 > max_bytes {
+            return Err(CheckpointStoreError::TooLarge);
+        }
+        if before != file.snapshot().map_err(|_| CheckpointStoreError::Io)? {
+            return Err(CheckpointStoreError::Io);
+        }
+        directory
+            .revalidate()
+            .map_err(|_| CheckpointStoreError::Io)?;
+        Ok(Some(bytes))
     }
-    Ok(Some(bytes))
+    #[cfg(not(windows))]
+    {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        configure_direct_file_open(&mut options)?;
+        let mut file = options.open(path).map_err(|_| CheckpointStoreError::Io)?;
+        let opened = native_metadata(&file).map_err(|_| CheckpointStoreError::Io)?;
+        validate_regular_file_metadata(&opened, max_bytes, false)?;
+        if !file_metadata_unchanged(&path_metadata, &opened) {
+            return Err(CheckpointStoreError::Io);
+        }
+        let linked = named_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
+        validate_regular_file_metadata(&linked, max_bytes, false)?;
+        if !file_metadata_unchanged(&opened, &linked) {
+            return Err(CheckpointStoreError::Io);
+        }
+        let mut bytes = Vec::with_capacity(
+            usize::try_from(path_metadata.len())
+                .unwrap_or(usize::MAX)
+                .min(usize::try_from(max_bytes).unwrap_or(usize::MAX)),
+        );
+        Read::by_ref(&mut file)
+            .take(max_bytes.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|_| CheckpointStoreError::Io)?;
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
+            return Err(CheckpointStoreError::TooLarge);
+        }
+        let file_after = native_metadata(&file).map_err(|_| CheckpointStoreError::Io)?;
+        let path_after = named_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
+        validate_regular_file_metadata(&file_after, max_bytes, false)?;
+        validate_regular_file_metadata(&path_after, max_bytes, false)?;
+        if !file_metadata_unchanged(&opened, &file_after)
+            || !file_metadata_unchanged(&file_after, &path_after)
+        {
+            return Err(CheckpointStoreError::Io);
+        }
+        Ok(Some(bytes))
+    }
 }
 fn validate_regular_file_metadata(
-    metadata: &fs::Metadata,
+    metadata: &NativeMetadata,
     max_bytes: u64,
     allow_lock: bool,
 ) -> Result<(), CheckpointStoreError> {
@@ -674,11 +850,7 @@ fn validate_regular_file_metadata(
     }
     #[cfg(windows)]
     {
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-            || metadata.number_of_links() != Some(1)
-            || metadata.volume_serial_number().is_none()
-            || metadata.file_index().is_none()
-        {
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || metadata.links() != 1 {
             return Err(CheckpointStoreError::Io);
         }
     }
@@ -689,6 +861,7 @@ fn validate_regular_file_metadata(
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn write_checkpoint_temp(path: &Path, bytes: &[u8]) -> Result<File, CheckpointStoreError> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -696,9 +869,9 @@ fn write_checkpoint_temp(path: &Path, bytes: &[u8]) -> Result<File, CheckpointSt
     options.mode(0o600);
     configure_direct_file_open(&mut options)?;
     let mut file = options.open(path).map_err(|_| CheckpointStoreError::Io)?;
-    let opened = file.metadata().map_err(|_| CheckpointStoreError::Io)?;
+    let opened = native_metadata(&file).map_err(|_| CheckpointStoreError::Io)?;
     validate_regular_file_metadata(&opened, u64::MAX, false)?;
-    let linked = fs::symlink_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
+    let linked = named_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
     validate_regular_file_metadata(&linked, u64::MAX, false)?;
     if !file_metadata_unchanged(&opened, &linked) {
         return Err(CheckpointStoreError::Io);
@@ -706,8 +879,8 @@ fn write_checkpoint_temp(path: &Path, bytes: &[u8]) -> Result<File, CheckpointSt
     file.write_all(bytes)
         .map_err(|_| CheckpointStoreError::Io)?;
     file.sync_all().map_err(|_| CheckpointStoreError::Io)?;
-    let file_after = file.metadata().map_err(|_| CheckpointStoreError::Io)?;
-    let path_after = fs::symlink_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
+    let file_after = native_metadata(&file).map_err(|_| CheckpointStoreError::Io)?;
+    let path_after = named_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
     let expected_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     validate_regular_file_metadata(&file_after, expected_len, false)?;
     validate_regular_file_metadata(&path_after, expected_len, false)?;
@@ -720,13 +893,14 @@ fn write_checkpoint_temp(path: &Path, bytes: &[u8]) -> Result<File, CheckpointSt
     }
     Ok(file)
 }
+#[cfg(not(windows))]
 fn validate_checkpoint_temp(
     path: &Path,
     file: &File,
     expected_len: usize,
 ) -> Result<(), CheckpointStoreError> {
-    let opened = file.metadata().map_err(|_| CheckpointStoreError::Io)?;
-    let linked = fs::symlink_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
+    let opened = native_metadata(&file).map_err(|_| CheckpointStoreError::Io)?;
+    let linked = named_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
     let expected_len = u64::try_from(expected_len).unwrap_or(u64::MAX);
     validate_regular_file_metadata(&opened, expected_len, false)?;
     validate_regular_file_metadata(&linked, expected_len, false)?;
@@ -738,13 +912,14 @@ fn validate_checkpoint_temp(
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn validate_persisted_checkpoint(
     path: &Path,
     file: &File,
     expected_len: usize,
 ) -> Result<(), CheckpointStoreError> {
-    let opened = file.metadata().map_err(|_| CheckpointStoreError::Io)?;
-    let linked = fs::symlink_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
+    let opened = native_metadata(&file).map_err(|_| CheckpointStoreError::Io)?;
+    let linked = named_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
     let expected_len = u64::try_from(expected_len).unwrap_or(u64::MAX);
     validate_regular_file_metadata(&opened, expected_len, false)?;
     validate_regular_file_metadata(&linked, expected_len, false)?;
@@ -756,6 +931,7 @@ fn validate_persisted_checkpoint(
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn persist_atomic_replacement(temporary: &Path, destination: &Path) -> std::io::Result<()> {
     // `std::fs::rename` does not replace an existing Windows destination. `TempPath::persist`
     // selects native replacement semantics on all release targets. Cleanup remains disabled so a
@@ -764,30 +940,40 @@ fn persist_atomic_replacement(temporary: &Path, destination: &Path) -> std::io::
     temporary.disable_cleanup(true);
     temporary.persist(destination).map_err(|error| error.error)
 }
+#[cfg(any(not(windows), test))]
 fn sync_directory(path: &Path) -> Result<(), CheckpointStoreError> {
     let (directory, opened) = open_stable_state_directory(path)?;
-    directory.sync_all().map_err(|_| CheckpointStoreError::Io)?;
-    let file_after = directory.metadata().map_err(|_| CheckpointStoreError::Io)?;
-    let path_after = fs::symlink_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
+    crate::governance_rooted_fs::sync_directory(&directory)
+        .map_err(|_| CheckpointStoreError::Io)?;
+    let file_after = native_metadata(&directory).map_err(|_| CheckpointStoreError::Io)?;
+    let path_after = named_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
     validate_state_directory_metadata(&file_after)?;
     validate_state_directory_metadata(&path_after)?;
-    if !directory_metadata_unchanged(&opened, &file_after)
-        || !directory_metadata_unchanged(&file_after, &path_after)
-    {
+    #[cfg(not(windows))]
+    let original_matches = directory_metadata_unchanged(&opened, &file_after);
+    #[cfg(windows)]
+    // NTFS ordering deliberately advances the retained directory's last-write timestamp.
+    let original_matches = same_file_identity(&opened, &file_after)
+        && opened.file_size() == file_after.file_size()
+        && opened.creation_time() == file_after.creation_time()
+        && opened.file_attributes() == file_after.file_attributes();
+    if !original_matches || !directory_metadata_unchanged(&file_after, &path_after) {
         return Err(CheckpointStoreError::Io);
     }
     Ok(())
 }
-fn open_stable_state_directory(path: &Path) -> Result<(File, fs::Metadata), CheckpointStoreError> {
-    let before = fs::symlink_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
+fn open_stable_state_directory(
+    path: &Path,
+) -> Result<(File, NativeMetadata), CheckpointStoreError> {
+    let before = named_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
     validate_state_directory_metadata(&before)?;
     let mut options = OpenOptions::new();
     options.read(true);
     configure_direct_directory_open(&mut options)?;
     let directory = options.open(path).map_err(|_| CheckpointStoreError::Io)?;
-    let opened = directory.metadata().map_err(|_| CheckpointStoreError::Io)?;
+    let opened = native_metadata(&directory).map_err(|_| CheckpointStoreError::Io)?;
     validate_state_directory_metadata(&opened)?;
-    let after = fs::symlink_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
+    let after = named_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
     validate_state_directory_metadata(&after)?;
     if !directory_metadata_unchanged(&before, &opened)
         || !directory_metadata_unchanged(&opened, &after)
@@ -796,7 +982,9 @@ fn open_stable_state_directory(path: &Path) -> Result<(File, fs::Metadata), Chec
     }
     Ok((directory, opened))
 }
-fn validate_state_directory_metadata(metadata: &fs::Metadata) -> Result<(), CheckpointStoreError> {
+fn validate_state_directory_metadata(
+    metadata: &NativeMetadata,
+) -> Result<(), CheckpointStoreError> {
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(CheckpointStoreError::Io);
     }
@@ -808,10 +996,7 @@ fn validate_state_directory_metadata(metadata: &fs::Metadata) -> Result<(), Chec
     }
     #[cfg(windows)]
     {
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-            || metadata.volume_serial_number().is_none()
-            || metadata.file_index().is_none()
-        {
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
             return Err(CheckpointStoreError::Io);
         }
     }
@@ -832,7 +1017,7 @@ fn configure_direct_file_open(options: &mut OpenOptions) -> Result<(), Checkpoin
     options.custom_flags(SAFE_OPEN_FLAGS);
     Ok(())
 }
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 fn configure_direct_file_open(options: &mut OpenOptions) -> Result<(), CheckpointStoreError> {
     options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     Ok(())
@@ -859,9 +1044,9 @@ fn configure_direct_directory_open(options: &mut OpenOptions) -> Result<(), Chec
 }
 #[cfg(windows)]
 fn configure_direct_directory_open(options: &mut OpenOptions) -> Result<(), CheckpointStoreError> {
-    // `File::sync_all` maps to `FlushFileBuffers`, which requires a write-capable handle.
+    // A real metadata update on this write-through descriptor orders NTFS directory changes.
     options.write(true);
-    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS | 0x8000_0000);
     Ok(())
 }
 #[cfg(not(any(
@@ -875,32 +1060,29 @@ fn configure_direct_directory_open(_options: &mut OpenOptions) -> Result<(), Che
     Err(CheckpointStoreError::Io)
 }
 #[cfg(unix)]
-fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn same_file_identity(left: &NativeMetadata, right: &NativeMetadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
 #[cfg(windows)]
-fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
+fn same_file_identity(left: &NativeMetadata, right: &NativeMetadata) -> bool {
+    left.identity() == right.identity()
 }
 #[cfg(all(not(unix), not(windows)))]
-fn same_file_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+fn same_file_identity(_left: &NativeMetadata, _right: &NativeMetadata) -> bool {
     false
 }
 // A lock sentinel carries no checkpoint content. Its authority is the exclusive
 // OS lock on one direct, private, empty, singly linked inode. Metadata-only host
 // bookkeeping (including Darwin provenance xattrs) must not replace that identity
 // with the immutable checkpoint-content timestamp predicate below.
-fn validate_lock_file_metadata(metadata: &fs::Metadata) -> Result<(), CheckpointStoreError> {
+fn validate_lock_file_metadata(metadata: &NativeMetadata) -> Result<(), CheckpointStoreError> {
     validate_regular_file_metadata(metadata, u64::MAX, true)?;
     if metadata.len() != 0 {
         return Err(CheckpointStoreError::Io);
     }
     Ok(())
 }
-fn lock_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn lock_metadata_unchanged(left: &NativeMetadata, right: &NativeMetadata) -> bool {
     if validate_lock_file_metadata(left).is_err()
         || validate_lock_file_metadata(right).is_err()
         || !same_file_identity(left, right)
@@ -921,7 +1103,7 @@ fn lock_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     }
 }
 #[cfg(unix)]
-fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn file_metadata_unchanged(left: &NativeMetadata, right: &NativeMetadata) -> bool {
     same_file_identity(left, right)
         && left.nlink() == 1
         && right.nlink() == 1
@@ -931,21 +1113,12 @@ fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-#[cfg(windows)]
-fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    same_file_identity(left, right)
-        && left.number_of_links() == Some(1)
-        && right.number_of_links() == Some(1)
-        && left.file_size() == right.file_size()
-        && left.last_write_time() == right.last_write_time()
-        && left.creation_time() == right.creation_time()
-}
 #[cfg(all(not(unix), not(windows)))]
-fn file_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+fn file_metadata_unchanged(_left: &NativeMetadata, _right: &NativeMetadata) -> bool {
     false
 }
 #[cfg(unix)]
-fn directory_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn directory_metadata_unchanged(left: &NativeMetadata, right: &NativeMetadata) -> bool {
     same_file_identity(left, right)
         && left.mtime() == right.mtime()
         && left.mtime_nsec() == right.mtime_nsec()
@@ -953,31 +1126,54 @@ fn directory_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bo
         && left.ctime_nsec() == right.ctime_nsec()
 }
 #[cfg(windows)]
-fn directory_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn directory_metadata_unchanged(left: &NativeMetadata, right: &NativeMetadata) -> bool {
     same_file_identity(left, right)
         && left.file_size() == right.file_size()
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
 }
 #[cfg(all(not(unix), not(windows)))]
-fn directory_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+fn directory_metadata_unchanged(_left: &NativeMetadata, _right: &NativeMetadata) -> bool {
     false
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    fn state_tempdir() -> std::io::Result<TempDir> {
+        let temporary = TempDir::new()?;
+        #[cfg(windows)]
+        {
+            // Recreate this fresh empty fixture through the canonical private creator.
+            fs::remove_dir(temporary.path())?;
+            drop(iroha_fs::PrivateDirectory::open_or_create(
+                temporary.path(),
+            )?);
+        }
+        Ok(temporary)
+    }
     fn private_directory(path: &Path) {
         ensure_private_state_directory(path).expect("create private state directory");
+    }
+    #[cfg(windows)]
+    #[test]
+    fn checkpoint_directory_sync_preserves_exact_native_identity() {
+        let directory = state_tempdir().expect("temporary state directory");
+        private_directory(directory.path());
+        let before = named_metadata(directory.path()).unwrap();
+        sync_directory(directory.path()).expect("write-through retained NTFS directory sync");
+        let after = named_metadata(directory.path()).unwrap();
+        assert_eq!(before.identity(), after.identity());
+        assert!(after.last_write_time() > before.last_write_time());
     }
     #[cfg(unix)]
     #[test]
     fn checkpoint_lock_same_inode_metadata_change_preserves_writer_authority() {
-        let directory = TempDir::new().expect("temporary directory");
+        let directory = state_tempdir().expect("temporary directory");
         private_directory(directory.path());
         let path = directory.path().join("checkpoint.lock");
         drop(CheckpointWriterGuard::acquire(&path).expect("create original sentinel"));
-        let before = fs::symlink_metadata(&path).expect("original pre-open inspection");
+        let before = named_metadata(&path).expect("original pre-open inspection");
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -993,7 +1189,7 @@ mod tests {
         options.read(true).write(true).create(true).mode(0o600);
         configure_direct_file_open(&mut options).unwrap();
         let opened = options.open(&path).expect("same original sentinel");
-        let after = opened.metadata().unwrap();
+        let after = native_metadata(&opened).unwrap();
         assert!(same_file_identity(&before, &after));
         assert!(
             !file_metadata_unchanged(&before, &after),
@@ -1017,15 +1213,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn checkpoint_lock_metadata_predicate_rejects_replacement_and_unsafe_sentinels() {
-        let directory = TempDir::new().expect("temporary directory");
+        let directory = state_tempdir().expect("temporary directory");
         private_directory(directory.path());
         let path = directory.path().join("checkpoint.lock");
         drop(CheckpointWriterGuard::acquire(&path).unwrap());
-        let original = fs::symlink_metadata(&path).unwrap();
+        let original = named_metadata(&path).unwrap();
         let displaced = directory.path().join("displaced.lock");
         fs::rename(&path, &displaced).unwrap();
         drop(CheckpointWriterGuard::acquire(&path).unwrap());
-        let replacement = fs::symlink_metadata(&path).unwrap();
+        let replacement = named_metadata(&path).unwrap();
         assert!(!lock_metadata_unchanged(&original, &replacement));
         for contents in [b"x".as_slice(), b"unexpected checkpoint content".as_slice()] {
             fs::write(&path, contents).unwrap();
@@ -1066,7 +1262,7 @@ mod tests {
     }
 
     fn assert_distinct_directory_identities() {
-        let outer = TempDir::new().expect("temporary directory");
+        let outer = state_tempdir().expect("temporary directory");
         let first = outer.path().join("first");
         let second = outer.path().join("second");
         private_directory(&first);
@@ -1077,12 +1273,18 @@ mod tests {
         );
     }
     fn assert_hardlinked_checkpoint_is_rejected() {
-        let directory = TempDir::new().expect("temporary directory");
+        let directory = state_tempdir().expect("temporary directory");
         let store =
             AtomicCheckpointStore::new(directory.path(), "checkpoint.to", "checkpoint.lock", 1024)
                 .expect("checkpoint store");
         let outside = directory.path().join("outside.to");
+        #[cfg(not(windows))]
         fs::write(&outside, b"outside").expect("outside file");
+        #[cfg(windows)]
+        iroha_fs::PrivateDirectory::open(directory.path())
+            .unwrap()
+            .write_atomic("outside.to", b"outside", iroha_fs::PublishMode::CreateNew)
+            .unwrap();
         #[cfg(unix)]
         fs::set_permissions(&outside, fs::Permissions::from_mode(0o600))
             .expect("private outside file");
@@ -1095,7 +1297,7 @@ mod tests {
         );
     }
     fn assert_hardlinked_lock_is_rejected() {
-        let directory = TempDir::new().expect("temporary directory");
+        let directory = state_tempdir().expect("temporary directory");
         private_directory(directory.path());
         let lock_path = directory.path().join("checkpoint.lock");
         drop(CheckpointWriterGuard::acquire(&lock_path).expect("create lock file"));
@@ -1111,28 +1313,50 @@ mod tests {
         drop(CheckpointWriterGuard::acquire(&lock_path).expect("failed claims release ownership"));
     }
     fn assert_root_path_substitution_is_rejected() {
-        let outer = TempDir::new().expect("temporary directory");
+        let outer = state_tempdir().expect("temporary directory");
         let state = outer.path().join("state");
         let displaced = outer.path().join("displaced");
         let store = AtomicCheckpointStore::new(&state, "checkpoint.to", "checkpoint.lock", 1024)
             .expect("checkpoint store");
+        #[cfg(windows)]
+        {
+            assert!(
+                fs::rename(&state, &displaced).is_err(),
+                "retained original directory must pin its namespace"
+            );
+            assert_eq!(store.load_bytes().unwrap().0, None);
+            drop(store);
+            fs::rename(&state, &displaced).expect("released directory may be moved");
+            return;
+        }
+        #[cfg(not(windows))]
         fs::rename(&state, &displaced).expect("displace state directory");
-        private_directory(&state);
-        assert_eq!(
-            store
-                .load_bytes()
-                .expect_err("reject substituted state root"),
-            CheckpointStoreError::Io
-        );
-        assert!(
-            !state.join("checkpoint.to").exists(),
-            "replacement root must not receive checkpoint bytes"
-        );
+        #[cfg(not(windows))]
+        {
+            private_directory(&state);
+            assert_eq!(
+                store
+                    .load_bytes()
+                    .expect_err("reject substituted state root"),
+                CheckpointStoreError::Io
+            );
+            assert!(
+                !state.join("checkpoint.to").exists(),
+                "replacement root must not receive checkpoint bytes"
+            );
+        }
     }
     fn assert_os_lock_contention_is_busy() {
-        let directory = TempDir::new().expect("temporary directory");
+        let directory = state_tempdir().expect("temporary directory");
         private_directory(directory.path());
         let lock_path = directory.path().join("checkpoint.lock");
+        #[cfg(windows)]
+        drop(
+            iroha_fs::PrivateDirectory::open(directory.path())
+                .unwrap()
+                .open_lock("checkpoint.lock")
+                .unwrap(),
+        );
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true);
         #[cfg(unix)]
@@ -1150,8 +1374,8 @@ mod tests {
     #[cfg(any(unix, windows))]
     #[test]
     fn checkpoint_writer_ownership_is_scoped_and_released_across_threads() {
-        let first_root = TempDir::new().expect("first state root");
-        let second_root = TempDir::new().expect("second state root");
+        let first_root = state_tempdir().expect("first state root");
+        let second_root = state_tempdir().expect("second state root");
         private_directory(first_root.path());
         private_directory(second_root.path());
         let first_path = first_root.path().join("checkpoint.lock");
@@ -1162,8 +1386,8 @@ mod tests {
         let cloned = first._file.try_clone().expect("clone owned lock handle");
         for handle in [&reopened, &cloned] {
             assert!(same_file_identity(
-                &first._file.metadata().unwrap(),
-                &handle.metadata().unwrap(),
+                &native_metadata(&first._file).unwrap(),
+                &native_metadata(&handle).unwrap(),
             ));
         }
         std::thread::scope(|scope| {
@@ -1190,7 +1414,7 @@ mod tests {
     #[cfg(any(unix, windows))]
     #[test]
     fn checkpoint_writer_reopens_and_preserves_custody_across_processes() {
-        let directory = TempDir::new().expect("temporary directory");
+        let directory = state_tempdir().expect("temporary directory");
         private_directory(directory.path());
         let lock_path = directory.path().join("checkpoint.lock");
         let executable = std::env::current_exe().expect("test executable");
@@ -1221,12 +1445,12 @@ mod tests {
         run_probe("busy");
         drop(held);
         run_probe("create");
-        let identity = fs::symlink_metadata(&lock_path).expect("original lock identity");
+        let identity = named_metadata(&lock_path).expect("original lock identity");
         for _ in 0..2 {
             run_probe("resume");
             assert!(lock_metadata_unchanged(
                 &identity,
-                &fs::symlink_metadata(&lock_path).expect("retained lock identity")
+                &named_metadata(&lock_path).expect("retained lock identity")
             ));
         }
     }
@@ -1274,7 +1498,7 @@ mod tests {
     #[cfg(any(unix, windows))]
     #[test]
     fn checkpoint_store_replaces_existing_destination() {
-        let directory = TempDir::new().expect("temporary directory");
+        let directory = state_tempdir().expect("temporary directory");
         let store =
             AtomicCheckpointStore::new(directory.path(), "checkpoint.to", "checkpoint.lock", 1024)
                 .expect("checkpoint store");
@@ -1296,7 +1520,7 @@ mod tests {
     #[test]
     fn unix_checkpoint_open_rejects_symlink_and_hardlink_targets() {
         use std::os::unix::fs::symlink;
-        let symlink_directory = TempDir::new().expect("temporary directory");
+        let symlink_directory = state_tempdir().expect("temporary directory");
         let store = AtomicCheckpointStore::new(
             symlink_directory.path(),
             "checkpoint.to",
@@ -1311,7 +1535,7 @@ mod tests {
             store.load_bytes().expect_err("reject symlink checkpoint"),
             CheckpointStoreError::Io
         );
-        let lock_directory = TempDir::new().expect("temporary directory");
+        let lock_directory = state_tempdir().expect("temporary directory");
         private_directory(lock_directory.path());
         let outside_lock = lock_directory.path().join("outside.lock");
         fs::write(&outside_lock, b"outside").expect("outside lock");
@@ -1333,6 +1557,110 @@ mod tests {
         assert_root_path_substitution_is_rejected();
         assert_os_lock_contention_is_busy();
     }
+    #[cfg(windows)]
+    fn native_acl(path: &Path) -> Vec<u8> {
+        let output = std::process::Command::new("icacls.exe")
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output.stdout
+    }
+
+    #[cfg(windows)]
+    fn grant_everyone_read(path: &Path) {
+        let output = std::process::Command::new("icacls.exe")
+            .arg(path)
+            .args(["/grant", "*S-1-1-0:(R)"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_checkpoint_rechecks_optimistic_content_after_staging() {
+        let directory = state_tempdir().unwrap();
+        let store =
+            AtomicCheckpointStore::new(directory.path(), "checkpoint.to", "checkpoint.lock", 1024)
+                .unwrap();
+        let fingerprint = store.commit_bytes(b"original", None).unwrap();
+        let target = store.checkpoint_path.clone();
+        CHECKPOINT_BEFORE_PUBLISH.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                fs::write(target, b"competing").unwrap();
+            }))
+        });
+        assert_eq!(
+            store
+                .commit_bytes(b"proposed", Some(fingerprint))
+                .unwrap_err(),
+            CheckpointStoreError::Stale
+        );
+        assert_eq!(store.load_bytes().unwrap().0.unwrap(), b"competing");
+        assert!(CHECKPOINT_BEFORE_PUBLISH.with(|hook| hook.borrow().is_none()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_checkpoint_refuses_inherited_directory_without_repair() {
+        let inherited = TempDir::new().unwrap();
+        let before = native_acl(inherited.path());
+        assert!(matches!(
+            AtomicCheckpointStore::new(inherited.path(), "checkpoint.to", "checkpoint.lock", 1024),
+            Err(CheckpointStoreError::Io)
+        ));
+        assert_eq!(native_acl(inherited.path()), before);
+        assert!(fs::read_dir(inherited.path()).unwrap().next().is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_checkpoint_refuses_foreign_file_grants_and_preserves_original_bytes() {
+        let directory = state_tempdir().unwrap();
+        let store =
+            AtomicCheckpointStore::new(directory.path(), "checkpoint.to", "checkpoint.lock", 1024)
+                .unwrap();
+        let fingerprint = store.commit_bytes(b"original", None).unwrap();
+        grant_everyone_read(&store.checkpoint_path);
+        let before = native_acl(&store.checkpoint_path);
+        assert_eq!(store.load_bytes().unwrap_err(), CheckpointStoreError::Io);
+        assert_eq!(
+            store
+                .commit_bytes(b"replacement", Some(fingerprint))
+                .unwrap_err(),
+            CheckpointStoreError::Io
+        );
+        assert_eq!(fs::read(&store.checkpoint_path).unwrap(), b"original");
+        assert_eq!(native_acl(&store.checkpoint_path), before);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_checkpoint_refuses_foreign_lock_grants_during_and_after_ownership() {
+        let directory = state_tempdir().unwrap();
+        let path = directory.path().join("checkpoint.lock");
+        let guard = CheckpointWriterGuard::acquire(&path).unwrap();
+        grant_everyone_read(&path);
+        let before = native_acl(&path);
+        assert_eq!(guard.revalidate().unwrap_err(), CheckpointStoreError::Io);
+        drop(guard);
+        assert!(matches!(
+            CheckpointWriterGuard::acquire(&path),
+            Err(CheckpointStoreError::Io)
+        ));
+        assert_eq!(native_acl(&path), before);
+        assert_eq!(fs::metadata(&path).unwrap().len(), 0);
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_direct_open_uses_reparse_safe_flags() {

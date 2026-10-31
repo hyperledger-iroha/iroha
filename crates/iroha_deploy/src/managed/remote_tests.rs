@@ -62,23 +62,26 @@ fn parent_checkpoint_diagnostic_preserves_installed_context_and_typed_cause() {
 fn attachment_deadline_optional_record_preserves_parent_errors_and_original_retry() {
     let temporary = tempfile::tempdir().unwrap();
     let directory = PrivateDirectory::open_or_create(temporary.path().join("attachment")).unwrap();
-    attachment_turn_deadline(&directory).unwrap();
+    attachment_turn_deadline(&directory, false).unwrap();
     let original = encode(&Activation { deadline_ms: 0 }).unwrap();
     directory
         .write_atomic(ACTIVATION, &original, PublishMode::CreateNew)
         .unwrap();
-    attachment_turn_deadline(&directory).unwrap();
+    attachment_turn_deadline(&directory, false).unwrap();
     #[cfg(unix)]
     {
         let displaced = temporary.path().join("original-attachment");
         std::fs::rename(directory.path(), &displaced).unwrap();
-        let result = attachment_turn_deadline(&directory);
+        let results =
+            [false, true].map(|confirmed| attachment_turn_deadline(&directory, confirmed));
         std::fs::rename(displaced, directory.path()).unwrap();
-        assert!(
-            matches!(result, Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
-        );
+        for result in results {
+            assert!(
+                matches!(result, Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
+            );
+        }
     }
-    attachment_turn_deadline(&directory).unwrap();
+    attachment_turn_deadline(&directory, false).unwrap();
     assert_eq!(
         directory.read(ACTIVATION, MAX_METADATA).unwrap().as_slice(),
         original
@@ -86,11 +89,13 @@ fn attachment_deadline_optional_record_preserves_parent_errors_and_original_retr
     directory
         .write_atomic(ACTIVATION, b"invalid activation", PublishMode::Replace)
         .unwrap();
-    assert!(attachment_turn_deadline(&directory).is_err());
+    for confirmed in [false, true] {
+        assert!(attachment_turn_deadline(&directory, confirmed).is_err());
+    }
     directory
         .write_atomic(ACTIVATION, &original, PublishMode::Replace)
         .unwrap();
-    attachment_turn_deadline(&directory).unwrap();
+    attachment_turn_deadline(&directory, false).unwrap();
 }
 
 fn profile(chain: &str, prefix: u16, url: &str) -> InstalledNetworkProfile {
@@ -518,14 +523,21 @@ fn failed_first_private_start_retains_exact_context_and_diagnostics_before_attac
         assert!(!network.path().join(WORKER).exists());
         // A Ready-triggered worker reads this same function before its request-lock
         // acquisition. It must already have the foreground budget, not RELAY_TURN.
-        let worker_deadline = attachment_turn_deadline(&directory).unwrap();
+        let worker_deadline = attachment_turn_deadline(&directory, false).unwrap();
         assert!(worker_deadline > Instant::now() + RELAY_TURN);
         assert!(worker_deadline <= original_deadline + Duration::from_millis(2));
         captured = Some(prepared.clone());
         Ok(())
     });
-    assert!(matches!(result, Err(Error::Timeout(timeout)) if timeout == request.startup_timeout));
-    let prepared = captured.expect("binding must precede the original-budget worker-start failure");
+    let expected_failure = format!(
+        "listener handoff failed: owned child exited before listener adoption completed; startup cleanup is unconfirmed: {}",
+        Error::Timeout(request.startup_timeout)
+    );
+    assert!(
+        matches!(&result, Err(Error::Invalid(message)) if message == &expected_failure),
+        "unexpected first worker startup result: {result:?}"
+    );
+    let prepared = captured.expect("binding must precede the worker-start refusal");
     drop(request_gate);
     assert_eq!(
         prepared, original,
@@ -605,7 +617,7 @@ fn attachment_turn_budget_uses_activation_and_bounds_background_retries() {
                 .unwrap();
         }
         let before = Instant::now();
-        let deadline = attachment_turn_deadline(&directory).unwrap();
+        let deadline = attachment_turn_deadline(&directory, false).unwrap();
         assert!(deadline >= before + RELAY_TURN);
         assert!(deadline <= Instant::now() + RELAY_TURN);
     }
@@ -621,13 +633,82 @@ fn attachment_turn_budget_uses_activation_and_bounds_background_retries() {
         )
         .unwrap();
     let before = Instant::now();
-    let bounded = attachment_turn_deadline(&directory).unwrap();
+    let bounded = attachment_turn_deadline(&directory, false).unwrap();
     assert!(bounded >= before + MAX_ATTACH);
     assert!(bounded <= Instant::now() + MAX_ATTACH);
     directory
         .write_atomic(ACTIVATION, b"invalid activation", PublishMode::Replace)
         .unwrap();
-    assert!(attachment_turn_deadline(&directory).is_err());
+    assert!(attachment_turn_deadline(&directory, false).is_err());
+}
+
+#[test]
+fn confirmed_registration_starts_a_full_relay_turn_before_activation_expires() {
+    let temporary = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::open_or_create(temporary.path().join("attachment")).unwrap();
+    let remaining_activation = RELAY_TURN / 3;
+    let original = encode(&Activation {
+        deadline_ms: now_ms().unwrap() + u64::try_from(remaining_activation.as_millis()).unwrap(),
+    })
+    .unwrap();
+    directory
+        .write_atomic(ACTIVATION, &original, PublishMode::CreateNew)
+        .unwrap();
+
+    let before = Instant::now();
+    let foreground = attachment_turn_deadline(&directory, false).unwrap();
+    assert!(foreground > before);
+    assert!(foreground < before + RELAY_TURN);
+    let before = Instant::now();
+    let background = attachment_turn_deadline(&directory, true).unwrap();
+    assert!(background >= before + RELAY_TURN);
+    assert!(background <= Instant::now() + RELAY_TURN);
+    assert_eq!(
+        directory.read(ACTIVATION, MAX_METADATA).unwrap().as_slice(),
+        original.as_slice()
+    );
+    // A new turn does not replace startup custody or turn an observation into authority.
+    assert!(attachment_turn_deadline(&directory, false).unwrap() < background);
+}
+
+#[test]
+fn restored_registration_defers_new_anchors_until_the_next_background_turn() {
+    let mut public = connecting("fixture".into());
+    let progress = ProvisioningProgress {
+        stage: ProvisioningStage::Attached,
+        wallet_status: None,
+        confirmed: Some(crate::attachment::ConfirmedAnchor {
+            parent_height: 13,
+            child: iroha_data_model::private_dataspace::PrivateDataspaceCursor {
+                height: 2,
+                consensus_hash: [1; 32],
+                result: [2; 32],
+            },
+        }),
+    };
+    let confirmed_at_start = public.parent_confirmed.is_some();
+    record_provisioning_progress(&mut public, progress, true);
+    assert_eq!(public.stage, ManagedAttachmentPhase::Anchoring);
+    assert!(!can_relay_in_turn(progress, confirmed_at_start));
+    assert!(can_relay_in_turn(
+        progress,
+        public.parent_confirmed.is_some()
+    ));
+
+    // Initial registration still runs under the foreground budget, and unrelated
+    // provisioning stages cannot relay even when a prior confirmation is retained.
+    let registering = ProvisioningProgress {
+        stage: ProvisioningStage::Registering,
+        confirmed: None,
+        ..progress
+    };
+    assert!(can_relay_in_turn(registering, false));
+    for stage in [ProvisioningStage::Funding, ProvisioningStage::Namespace] {
+        assert!(!can_relay_in_turn(
+            ProvisioningProgress { stage, ..progress },
+            true
+        ));
+    }
 }
 
 #[test]

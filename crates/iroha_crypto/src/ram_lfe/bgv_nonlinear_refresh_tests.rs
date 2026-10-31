@@ -10,16 +10,15 @@ use iroha_fhe::bgv::{BgvParameters, BgvProfile, SlotLinearBudget, cost::CostMode
 use std::cell::Cell;
 
 const SHAPE: RamLfeBgvNonlinearShapeV1 = RamLfeBgvNonlinearShapeV1::Refresh;
-const MODES: [RamLfeBgvRefreshMapV1; 4] = [
+const MODES: [RamLfeBgvRefreshMapV1; 3] = [
     RamLfeBgvRefreshMapV1::Initial,
     RamLfeBgvRefreshMapV1::Square,
-    RamLfeBgvRefreshMapV1::Unit,
     RamLfeBgvRefreshMapV1::Final,
 ];
 
 fn stage(gate: usize, mode: RamLfeBgvRefreshMapV1) -> RamLfeBgvNonlinearStageV1 {
     RamLfeBgvNonlinearStageV1::RefreshGate {
-        gate: gate as u16,
+        gate: u16::try_from(gate).unwrap(),
         mode,
     }
 }
@@ -29,7 +28,6 @@ fn mode(step: usize) -> RamLfeBgvRefreshMapV1 {
         0 => MODES[0],
         1..=7 => MODES[1],
         8 => MODES[2],
-        9 => MODES[3],
         _ => unreachable!(),
     }
 }
@@ -53,15 +51,16 @@ fn compile(program: &HiddenRamFheProgram) -> (RamLfeNormalFormV1, RamLfeBgvNonli
 
 fn memory(seed: u16) -> RamLfeInitialMemoryV1 {
     RamLfeInitialMemoryV1::from_lanes(&std::array::from_fn::<_, 32, _>(|i| {
-        ((i as u16 * 19) + seed) % 257
+        ((u16::try_from(i).unwrap() * 19) + seed) % 257
     }))
     .unwrap()
 }
 
 fn dot(form: &[u16], values: &[u16]) -> u16 {
-    (form.iter().zip(values).fold(0_u32, |sum, (&a, &b)| {
+    u16::try_from(form.iter().zip(values).fold(0_u32, |sum, (&a, &b)| {
         (sum + u32::from(a) * u32::from(b)) % 257
-    })) as u16
+    }))
+    .unwrap()
 }
 
 /// Direct canonical gate evaluation uses a branch for Select and identity for
@@ -98,7 +97,7 @@ fn boundary_values(
     values
 }
 
-/// All 3190 steps visit every one of 384 physical outputs and all A/B/C rows.
+/// All 2,871 steps visit every target bank's 128 outputs and all A/B/C rows.
 /// Every mixed boundary, including dead gates, is compared with the direct
 /// canonical oracle; all prior results and structural-zero futures are checked.
 fn scalar(
@@ -112,19 +111,21 @@ fn scalar(
     state[384..448].copy_from_slice(input.slots());
     state[448..480].copy_from_slice(memory.lanes());
     state[480] = 1;
-    let mut next = ClearingArray::<u16, 384>::try_zeroed().unwrap();
+    let mut next = ClearingArray::<u16, 128>::try_zeroed().unwrap();
     tests::ROW_VISITS.with(|x| x.set(0));
     for gate in 0..REFRESH_GATES {
-        for step in 0..10 {
-            for physical in 0..REFRESH_PHYSICAL {
+        for step in 0..9 {
+            let target_bank = gate / SLOTS;
+            let untouched = std::array::from_fn::<_, 512, _>(|index| state[index]);
+            for slot in 0..SLOTS {
                 let operands = std::array::from_fn::<_, 3, _>(|operand| {
                     let mut sum = 0_u32;
                     let (segments, count) =
-                        SHAPE.support(Some(stage(gate, mode(step))), operand * 384 + physical);
+                        SHAPE.support(Some(stage(gate, mode(step))), operand * SLOTS + slot);
                     compiler.emit_refresh_row(
                         gate,
                         mode(step),
-                        physical,
+                        slot,
                         operand,
                         |source, coefficient| {
                             if coefficient != 0 {
@@ -139,9 +140,18 @@ fn scalar(
                     );
                     sum
                 });
-                next[physical] = ((operands[0] * operands[1] + operands[2]) % 257) as u16;
+                next[slot] = ((operands[0] * operands[1] + operands[2]) % 257) as u16;
             }
-            state[..384].copy_from_slice(&next[..]);
+            state[target_bank * SLOTS..(target_bank + 1) * SLOTS].copy_from_slice(&next[..]);
+            for bank in 0..3 {
+                if bank != target_bank {
+                    assert_eq!(
+                        &state[bank * SLOTS..(bank + 1) * SLOTS],
+                        &untouched[bank * SLOTS..(bank + 1) * SLOTS]
+                    );
+                }
+            }
+            assert_eq!(&state[384..], &untouched[384..]);
             assert_eq!(&state[..gate], &expected[97..97 + gate]);
             assert!(state[gate + 1..384].iter().all(|&x| x == 0));
         }
@@ -151,13 +161,13 @@ fn scalar(
             "canonical mixed boundary {gate}"
         );
     }
-    assert_eq!(tests::ROW_VISITS.with(Cell::get), 319 * 10 * 384 * 3);
+    assert_eq!(tests::ROW_VISITS.with(Cell::get), 319 * 9 * 128 * 3);
     let actual = std::array::from_fn(|row| {
         let mut sum = 0_u32;
         compiler.emit_projection_row(row, |source, coefficient| {
             sum = (sum + u32::from(coefficient) * u32::from(state[source])) % 257
         });
-        sum as u16
+        u16::try_from(sum).unwrap()
     });
     let reference =
         ram_lfe_reference_execute_v1(RamLfeClassV1::Refresh, program, memory, input).unwrap();
@@ -177,7 +187,7 @@ fn scalar(
 fn fixed_refresh_geometry_support_and_all_public_stage_indices() {
     assert_eq!(SHAPE.class(), RamLfeClassV1::Refresh);
     assert_eq!(SHAPE.private_payload_bytes(), 850_110);
-    assert_eq!(SHAPE.maximum_layer_payload_bytes(), 7_528);
+    assert_eq!(SHAPE.maximum_layer_payload_bytes(), 5_232);
     assert_eq!(SHAPE.projection_payload_bytes(), 106_496);
     assert_eq!(SHAPE.preparation_scratch_bytes(), 2_052);
     let mut cells = 0;
@@ -185,23 +195,23 @@ fn fixed_refresh_geometry_support_and_all_public_stage_indices() {
     for gate in 0..319 {
         for mode in MODES {
             let stage = stage(gate, mode);
-            let bytes = SHAPE.layer_layout_metadata_bytes::<4, 9>(stage).unwrap();
-            let layout = SHAPE.layer_layout::<4, 9>(stage, bytes).unwrap();
+            let bytes = SHAPE.layer_layout_metadata_bytes::<4, 3>(stage).unwrap();
+            let layout = SHAPE.layer_layout::<4, 3>(stage, bytes).unwrap();
             assert!(matches!(
-                SHAPE.layer_layout::<4, 9>(stage, bytes - 1),
+                SHAPE.layer_layout::<4, 3>(stage, bytes - 1),
                 Err(RamLfeBgvNonlinearCompileErrorV1::Routing(
                     SlotLinearError::LayoutBudget { .. }
                 ))
             ));
             let expected = match mode {
-                RamLfeBgvRefreshMapV1::Initial => 4 * gate + 194,
-                RamLfeBgvRefreshMapV1::Square | RamLfeBgvRefreshMapV1::Unit => 2 * gate + 2,
-                RamLfeBgvRefreshMapV1::Final => 5 * gate + 292,
+                RamLfeBgvRefreshMapV1::Initial => 2 * gate + 194 + gate % 128,
+                RamLfeBgvRefreshMapV1::Square => 2 + gate % 128,
+                RamLfeBgvRefreshMapV1::Final => 3 * gate + 292 + gate % 128,
             };
             assert_eq!(layout.coefficient_count(), expected);
-            for row in 0..1152 {
-                let physical = row % 384;
-                if physical > gate {
+            for row in 0..384 {
+                let slot = row % 128;
+                if slot > gate % 128 {
                     assert!(layout.row_segments(row).unwrap().is_empty());
                 }
                 for segment in layout.row_segments(row).unwrap() {
@@ -214,15 +224,15 @@ fn fixed_refresh_geometry_support_and_all_public_stage_indices() {
     }
     let bytes = SHAPE.projection_layout_metadata_bytes::<4>().unwrap();
     let projection = SHAPE.projection_layout::<4>(bytes).unwrap();
-    assert_eq!(cells * 4 + projection.coefficient_count() * 4, 3_369_228);
-    assert_eq!(metadata + bytes, 25_759_944);
+    assert_eq!(cells * 4 + projection.coefficient_count() * 4, 1_962_112);
+    assert_eq!(metadata + bytes, 5_098_896);
     for row in 64..128 {
         assert!(projection.row_segments(row).unwrap().is_empty());
     }
     for gate in [319, u16::MAX] {
         assert_eq!(
             SHAPE
-                .layer_layout_metadata_bytes::<4, 9>(RamLfeBgvNonlinearStageV1::RefreshGate {
+                .layer_layout_metadata_bytes::<4, 3>(RamLfeBgvNonlinearStageV1::RefreshGate {
                     gate,
                     mode: MODES[0]
                 })
@@ -238,7 +248,7 @@ fn fixed_refresh_geometry_support_and_all_public_stage_indices() {
     );
     assert_eq!(
         SHAPE
-            .layer_layout_metadata_bytes::<4, 9>(RamLfeBgvNonlinearStageV1::BoundedLayer(1))
+            .layer_layout_metadata_bytes::<4, 3>(RamLfeBgvNonlinearStageV1::BoundedLayer(1))
             .unwrap_err(),
         RamLfeBgvNonlinearCompileErrorV1::ClassMismatch
     );
@@ -386,7 +396,10 @@ fn maximum319_mixed_boundaries_and64_ordered_output_snapshots() {
         &memory(17),
     );
     for (i, &value) in actual[..64].iter().enumerate() {
-        assert_eq!(value, (memory(17).lanes()[31] + i as u16) % 257);
+        assert_eq!(
+            value,
+            (memory(17).lanes()[31] + u16::try_from(i).unwrap()) % 257
+        );
     }
     let invalid =
         tape(std::iter::repeat_n(Op::SelectEqZero(0, 0, 0, 0), 66).chain([Op::Output(0)]));
@@ -412,7 +425,7 @@ fn every_select_condition_and_operand_alias_uses_eight_squares_and_copied_forms(
             state[449] = zero;
             state[450] = nonzero;
             state[480] = 1;
-            for step in 0..10 {
+            for step in 0..9 {
                 let operands = std::array::from_fn::<_, 3, _>(|operand| {
                     let mut sum = 0_u32;
                     compiler.emit_refresh_row(0, mode(step), 0, operand, |source, coefficient| {
@@ -457,13 +470,89 @@ fn every_select_condition_and_operand_alias_uses_eight_squares_and_copied_forms(
     }
 }
 
-fn plan(stage: RamLfeBgvNonlinearStageV1) -> SlotLinearPlan<4, 9> {
+#[test]
+fn uniform_unit_elision_requires_reachable_prefix_future_zero_and_base_one() {
+    // Independent clear algebra only. This does not inspect an encrypted state
+    // or provide an arbitrary-state constructor to the runtime. The class's
+    // Select condition rank remains ten despite nine physical update steps.
+    assert_eq!(crate::ram_lfe::RAM_LFE_V1_SELECT_CONDITION_RANK, 10);
+    for gate in [0, 127, 128, 255, 256, 318] {
+        for condition in 0_u16..257 {
+            let mut power = u32::from(condition);
+            for _ in 0..8 {
+                power = power * power % 257;
+            }
+            assert_eq!(power, u32::from(condition != 0));
+            for kind in [
+                RamLfeNormalGateKindV1::Mul,
+                RamLfeNormalGateKindV1::SelectEqZero,
+                RamLfeNormalGateKindV1::Refresh,
+            ] {
+                let mut before = [0_u16; 384];
+                for (index, value) in before[..gate].iter_mut().enumerate() {
+                    *value = ((u32::try_from(index).unwrap() * 17 + u32::from(condition) + 3) % 257)
+                        as u16;
+                }
+                before[gate] = if kind == RamLfeNormalGateKindV1::SelectEqZero {
+                    u16::try_from(power).unwrap()
+                } else {
+                    0
+                };
+                // The removed global Unit maps represented this scalar
+                // expression on every coefficient, including absent futures.
+                let base_one = 1_u32;
+                let with_unit = std::array::from_fn::<_, 384, _>(|index| {
+                    if index <= gate {
+                        (u32::from(before[index]) * base_one % 257) as u16
+                    } else {
+                        0
+                    }
+                });
+                assert_eq!(
+                    with_unit, before,
+                    "gate {gate} kind {kind:?} condition {condition}"
+                );
+            }
+        }
+        let mut nonzero_future = [0_u16; 384];
+        nonzero_future[gate + 1] = 7;
+        let filtered = std::array::from_fn::<_, 384, _>(|index| {
+            if index <= gate {
+                nonzero_future[index]
+            } else {
+                0
+            }
+        });
+        assert_ne!(
+            filtered, nonzero_future,
+            "future-zero invariant is necessary"
+        );
+        let mut wrong_one = [0_u16; 384];
+        wrong_one[gate] = 1;
+        let with_nonunit_base = std::array::from_fn::<_, 384, _>(|index| {
+            if index <= gate {
+                wrong_one[index] * 2 % 257
+            } else {
+                0
+            }
+        });
+        assert_ne!(
+            with_nonunit_base, wrong_one,
+            "base-one invariant is necessary"
+        );
+    }
+}
+
+fn plan(stage: RamLfeBgvNonlinearStageV1) -> SlotLinearPlan<4, 3> {
     let profile =
         BgvProfile::new(BgvParameters::derive(7, 257, 1, (40, 4), (41, 2), 2).unwrap()).unwrap();
     let shape = profile.plan_fresh(profile.master_plaintext()).unwrap();
-    let one = CostModel::new(&profile)
-        .ciphertext_residue_bytes(shape.level(), 2)
-        .unwrap() as usize;
+    let one = usize::try_from(
+        CostModel::new(&profile)
+            .ciphertext_residue_bytes(shape.level(), 2)
+            .unwrap(),
+    )
+    .unwrap();
     SlotLinearPlan::with_layout(
         &profile,
         &std::array::from_fn(|_| shape.clone()),
@@ -472,7 +561,7 @@ fn plan(stage: RamLfeBgvNonlinearStageV1) -> SlotLinearPlan<4, 9> {
             coefficient_bytes: SHAPE.maximum_layer_payload_bytes(),
             layout_metadata_bytes: 1 << 20,
             preparation_scratch_bytes: SHAPE.preparation_scratch_bytes(),
-            output_residue_bytes: 9 * one,
+            output_residue_bytes: 3 * one,
             scratch_residue_bytes: 128 * one,
         },
     )
@@ -522,8 +611,8 @@ fn exact_stage_support_and_class_preflight_precede_private_rows() {
     let prepared = compiler
         .prepare_layer(stage(0, MODES[0]), &initial)
         .unwrap();
-    assert_eq!(tests::ROW_VISITS.with(Cell::get), 1152);
-    assert_eq!(tests::WRITES.with(Cell::get).0, 1152 * 513);
+    assert_eq!(tests::ROW_VISITS.with(Cell::get), 384);
+    assert_eq!(tests::WRITES.with(Cell::get).0, 384 * 513);
     let private_trace = tests::WRITES.with(Cell::get);
     drop(prepared);
     tests::WRITES.with(|x| x.set((0, 0)));
@@ -538,14 +627,17 @@ fn exact_stage_support_and_class_preflight_precede_private_rows() {
             SlotLinearError::OutsideSupport { .. }
         ))
     ));
-    let last = plan(stage(318, MODES[3]));
-    compiler.prepare_layer(stage(318, MODES[3]), &last).unwrap();
+    let last = plan(stage(318, MODES[2]));
+    compiler.prepare_layer(stage(318, MODES[2]), &last).unwrap();
     let profile =
         BgvProfile::new(BgvParameters::derive(7, 257, 1, (40, 4), (41, 2), 2).unwrap()).unwrap();
     let shape = profile.plan_fresh(profile.master_plaintext()).unwrap();
-    let one = CostModel::new(&profile)
-        .ciphertext_residue_bytes(shape.level(), 2)
-        .unwrap() as usize;
+    let one = usize::try_from(
+        CostModel::new(&profile)
+            .ciphertext_residue_bytes(shape.level(), 2)
+            .unwrap(),
+    )
+    .unwrap();
     let projection = SlotLinearPlan::with_layout(
         &profile,
         &std::array::from_fn(|_| shape.clone()),
@@ -598,4 +690,228 @@ fn refresh_compiler_clears_class_sized_forms_on_success_error_and_unwind() {
         .is_err()
     );
     assert_eq!(cleared_cells() - before, REFRESH_PRIVATE_CELLS);
+}
+
+#[test]
+fn public_refresh_rows_cover_every_gate_without_reading_private_forms() {
+    let (_, mut compiler) = compile(&tape([Op::Output(0)]));
+    // Invalid private values must be irrelevant to the wholly public modes.
+    compiler.private.fill(u16::MAX);
+    for gate in 0..REFRESH_GATES {
+        for mode in [RamLfeBgvRefreshMapV1::Square] {
+            for slot in 0..SLOTS {
+                for operand in 0..3 {
+                    let expected = if slot < gate % SLOTS && operand == 2 {
+                        Some(gate / SLOTS * SLOTS + slot)
+                    } else if slot == gate % SLOTS && operand <= 1 {
+                        Some(gate)
+                    } else {
+                        None
+                    };
+                    let mut actual = None;
+                    assert!(emit_public_refresh_row(
+                        gate,
+                        mode,
+                        slot,
+                        operand,
+                        &mut |column, coefficient| {
+                            assert!(actual.replace((column, coefficient)).is_none());
+                        }
+                    ));
+                    assert_eq!(actual, expected.map(|column| (column, 1)));
+                    let mut from_private_owner = None;
+                    compiler.emit_refresh_row(gate, mode, slot, operand, |column, coefficient| {
+                        assert!(from_private_owner.replace((column, coefficient)).is_none());
+                    });
+                    assert_eq!(from_private_owner, actual);
+                }
+            }
+        }
+        for mode in [RamLfeBgvRefreshMapV1::Initial, RamLfeBgvRefreshMapV1::Final] {
+            assert!(!emit_public_refresh_row(
+                gate,
+                mode,
+                gate % SLOTS,
+                0,
+                &mut |_, _| panic!("private target emitted")
+            ));
+        }
+    }
+}
+
+#[test]
+fn public_refresh_preparation_refuses_private_modes_and_mismatches_before_rows() {
+    let square = plan(stage(0, RamLfeBgvRefreshMapV1::Square));
+    tests::ROW_VISITS.with(|x| x.set(0));
+    tests::WRITES.with(|x| x.set((0, 0)));
+    let before = cleared_cells();
+    for mode in [RamLfeBgvRefreshMapV1::Initial, RamLfeBgvRefreshMapV1::Final] {
+        assert_eq!(
+            SHAPE
+                .prepare_public_layer(stage(0, mode), &square)
+                .unwrap_err(),
+            RamLfeBgvNonlinearCompileErrorV1::ClassMismatch
+        );
+    }
+    for (shape, stage) in [
+        (
+            RamLfeBgvNonlinearShapeV1::Bounded,
+            stage(0, RamLfeBgvRefreshMapV1::Square),
+        ),
+        (SHAPE, RamLfeBgvNonlinearStageV1::BoundedLayer(1)),
+    ] {
+        assert_eq!(
+            shape.prepare_public_layer(stage, &square).unwrap_err(),
+            RamLfeBgvNonlinearCompileErrorV1::ClassMismatch
+        );
+    }
+    for gate in [319, usize::from(u16::MAX)] {
+        assert_eq!(
+            SHAPE
+                .prepare_public_layer(stage(gate, RamLfeBgvRefreshMapV1::Square), &square)
+                .unwrap_err(),
+            RamLfeBgvNonlinearCompileErrorV1::Layer
+        );
+    }
+    for other in [
+        stage(1, RamLfeBgvRefreshMapV1::Square),
+        stage(128, RamLfeBgvRefreshMapV1::Square),
+    ] {
+        assert_eq!(
+            SHAPE.prepare_public_layer(other, &square).unwrap_err(),
+            RamLfeBgvNonlinearCompileErrorV1::Routing(SlotLinearError::LayoutMismatch)
+        );
+    }
+    let profile =
+        BgvProfile::new(BgvParameters::derive(7, 769, 1, (40, 4), (41, 2), 2).unwrap()).unwrap();
+    let source = profile.plan_fresh(profile.master_plaintext()).unwrap();
+    let one = usize::try_from(
+        CostModel::new(&profile)
+            .ciphertext_residue_bytes(source.level(), 2)
+            .unwrap(),
+    )
+    .unwrap();
+    let alien = SlotLinearPlan::with_layout(
+        &profile,
+        &std::array::from_fn(|_| source.clone()),
+        SHAPE
+            .layer_layout::<4, 3>(stage(0, MODES[1]), 1 << 20)
+            .unwrap(),
+        SlotLinearBudget {
+            coefficient_bytes: SHAPE.maximum_layer_payload_bytes(),
+            layout_metadata_bytes: 1 << 20,
+            preparation_scratch_bytes: SHAPE.preparation_scratch_bytes(),
+            output_residue_bytes: 3 * one,
+            scratch_residue_bytes: 128 * one,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        SHAPE
+            .prepare_public_layer(stage(0, MODES[1]), &alien)
+            .unwrap_err(),
+        RamLfeBgvNonlinearCompileErrorV1::UnsupportedProfile
+    );
+    let projection = SlotLinearPlan::with_layout(
+        &profile,
+        &std::array::from_fn(|_| source.clone()),
+        SHAPE.projection_layout::<4>(1 << 20).unwrap(),
+        SlotLinearBudget {
+            coefficient_bytes: SHAPE.projection_payload_bytes(),
+            layout_metadata_bytes: 1 << 20,
+            preparation_scratch_bytes: SHAPE.preparation_scratch_bytes(),
+            output_residue_bytes: one,
+            scratch_residue_bytes: 128 * one,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        SHAPE
+            .prepare_public_layer(stage(0, MODES[1]), &projection)
+            .unwrap_err(),
+        RamLfeBgvNonlinearCompileErrorV1::ClassMismatch
+    );
+    assert_eq!(tests::ROW_VISITS.with(Cell::get), 0);
+    assert_eq!(tests::WRITES.with(Cell::get), (0, 0));
+    assert_eq!(cleared_cells(), before);
+}
+
+#[test]
+fn public_refresh_maps_match_private_preparation_and_direct_slot_values() {
+    use iroha_fhe::bgv::{
+        SlotEncoding,
+        fixtures::{self, FixtureEntropy},
+    };
+    let profile =
+        BgvProfile::new(BgvParameters::derive(7, 257, 1, (40, 4), (41, 2), 2).unwrap()).unwrap();
+    let encoding = SlotEncoding::new(&profile, profile.master_plaintext()).unwrap();
+    let (_, compiler) = compile(&tape([
+        Op::LoadState(0, 0),
+        Op::SelectEqZero(1, 0, 0, 0),
+        Op::Output(1),
+    ]));
+    for gate in [0, 128, 318] {
+        for mode in [RamLfeBgvRefreshMapV1::Square] {
+            let stage = stage(gate, mode);
+            let plan = plan(stage);
+            let before = cleared_cells();
+            tests::ROW_VISITS.with(|x| x.set(0));
+            tests::WRITES.with(|x| x.set((0, 0)));
+            let public = SHAPE.prepare_public_layer(stage, &plan).unwrap();
+            assert_eq!(cleared_cells(), before);
+            assert_eq!(tests::ROW_VISITS.with(Cell::get), 384);
+            assert_eq!(tests::WRITES.with(Cell::get).0, 384 * 513);
+            let public_trace = tests::WRITES.with(Cell::get);
+            tests::WRITES.with(|x| x.set((0, 0)));
+            let private = compiler.prepare_layer(stage, &plan).unwrap();
+            assert_eq!(tests::WRITES.with(Cell::get), public_trace);
+            let keys = fixtures::key_set(
+                &profile,
+                plan.galois_elements(),
+                &mut FixtureEntropy::new([74; 64]),
+            )
+            .unwrap();
+            let values = std::array::from_fn::<_, 4, _>(|bank| {
+                std::array::from_fn::<_, 128, _>(|slot| ((bank * 71 + slot * 19 + 3) % 257) as u64)
+            });
+            let inputs = std::array::from_fn(|bank| {
+                fixtures::encrypt(
+                    &profile,
+                    &keys.public,
+                    &encoding.encode(&profile, &values[bank]).unwrap(),
+                    &mut FixtureEntropy::new([u8::try_from(bank).unwrap() + 25; 64]),
+                )
+                .unwrap()
+            });
+            let actual = public
+                .evaluate(&profile, &plan, &inputs, &keys.evaluation)
+                .unwrap();
+            let comparison = private
+                .evaluate(&profile, &plan, &inputs, &keys.evaluation)
+                .unwrap();
+            for (bank, (left, right)) in actual.iter().zip(&comparison).enumerate() {
+                assert_eq!(
+                    left.to_bytes(&profile).unwrap(),
+                    right.to_bytes(&profile).unwrap()
+                );
+                let decoded = encoding
+                    .decode(&keys.secret.decrypt(&profile, left).unwrap())
+                    .unwrap();
+                let operand = bank;
+                for (slot, value) in decoded.iter().enumerate() {
+                    let expected = if slot < gate % 128 && operand == 2 {
+                        values[gate / 128][slot]
+                    } else if slot == gate % 128 && operand <= 1 {
+                        values[gate / 128][gate % 128]
+                    } else {
+                        0
+                    };
+                    assert_eq!(
+                        *value, expected,
+                        "gate {gate} mode {mode:?} bank {bank} slot {slot}"
+                    );
+                }
+            }
+        }
+    }
 }

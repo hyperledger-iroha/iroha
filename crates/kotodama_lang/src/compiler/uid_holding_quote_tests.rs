@@ -31,8 +31,10 @@ fn typed_uid_quote_compiles_as_one_native_read() {
             .expect("typed native quote compiles in views and transactions");
         let parsed = ProgramMetadata::parse(&bytes).unwrap();
         let quote_calls = bytes[parsed.code_offset..]
-            .chunks_exact(4)
-            .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|chunk| u32::from_le_bytes(*chunk))
             .filter(|word| {
                 instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
                     && encoding::wide::decode_syscallx(*word)

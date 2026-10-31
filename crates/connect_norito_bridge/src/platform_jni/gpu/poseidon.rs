@@ -15,8 +15,8 @@ fn run<T: Copy + Default>(
     row: impl Fn(&[i64]) -> T,
     operation: fn(&[T], &mut [u64]) -> bool,
 ) -> jboolean {
-    let length = match env.get_array_length(input) {
-        Ok(length) => length as usize,
+    let length = match input.len(env) {
+        Ok(length) => length,
         Err(error) => {
             throw_java_illegal_argument(env, format!("Poseidon input length: {error}"));
             return JNI_FALSE;
@@ -30,7 +30,7 @@ fn run<T: Copy + Default>(
         return JNI_FALSE;
     }
     let count = length / width;
-    if !super::ensure_min_array_length(env, out, count as i32, "Poseidon") {
+    if !super::ensure_min_array_length(env, out, count, "Poseidon") {
         return JNI_FALSE;
     }
     let mut inputs = match ivm::try_acceleration_output::<T>(count) {
@@ -49,9 +49,7 @@ fn run<T: Copy + Default>(
     };
     for (index, destination) in inputs.iter_mut().enumerate() {
         let mut words = [0i64; 6];
-        if let Err(error) =
-            env.get_long_array_region(input, (index * width) as i32, &mut words[..width])
-        {
+        if let Err(error) = input.get_region(env, (index * width) as i32, &mut words[..width]) {
             throw_java_illegal_state(env, format!("Poseidon input read failed: {error}"));
             return JNI_FALSE;
         }
@@ -66,7 +64,7 @@ fn run<T: Copy + Default>(
     // The common process input/output owners remain charged until Java owns all
     // initialized result words. No Rust Vec or CUDA-availability result is used.
     for (index, &value) in output.as_slice().iter().enumerate() {
-        if let Err(error) = env.set_long_array_region(out, index as i32, &[value as i64]) {
+        if let Err(error) = out.set_region(env, index as i32, &[value as i64]) {
             throw_java_illegal_state(env, format!("Poseidon output write failed: {error}"));
             return JNI_FALSE;
         }
@@ -92,9 +90,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_gpu_Accelerators_na
     inputs: JLongArray<'_>,
     out: JLongArray<'_>,
 ) -> jboolean {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         run(
-            &mut env,
+            env,
             &inputs,
             &out,
             2,
@@ -113,9 +111,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_gpu_Accelerators_na
     inputs: JLongArray<'_>,
     out: JLongArray<'_>,
 ) -> jboolean {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         run(
-            &mut env,
+            env,
             &inputs,
             &out,
             6,

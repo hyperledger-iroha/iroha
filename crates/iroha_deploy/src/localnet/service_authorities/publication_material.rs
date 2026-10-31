@@ -374,12 +374,12 @@ impl PublicationPlanV1 {
     ) -> actual::MusubiPublication {
         // slot has already been authenticated against the entire original inventory.
         let provider_root = generation
-            .join(LOCALNET_RUNTIME_DIRECTORY)
+            .join(RUNTIME_DIRECTORY)
             .join(DIRECTORY)
             .join(PROVIDERS_DIRECTORY)
             .join(self.slot.to_string());
         let network_root = generation
-            .join(LOCALNET_RUNTIME_DIRECTORY)
+            .join(RUNTIME_DIRECTORY)
             .join(DIRECTORY)
             .join(NETWORK_DIRECTORY);
         actual::MusubiPublication {
@@ -431,7 +431,7 @@ impl PublicationPlanV1 {
 
 impl GeneratedPublication {
     pub(super) fn generate(
-        network: &[(NetworkServiceAuthorityRole, LocalnetClientIdentity)],
+        network: &[(NetworkServiceAuthorityRole, Identity)],
         providers: &[GeneratedProviderAuthorities; PROVIDER_COUNT],
         creation_time_ms: u64,
     ) -> Result<Self> {

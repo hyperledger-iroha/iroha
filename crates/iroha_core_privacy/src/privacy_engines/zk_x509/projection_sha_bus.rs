@@ -8,13 +8,13 @@ use crate::privacy_engines::zk_x509::sha_call_bus_stark::{
 };
 
 /// Product columns appended after all original projection auxiliaries.
-pub(crate) const AUX_START_V1: usize = 32;
+pub const AUX_START_V1: usize = 32;
 /// Typed zero-padded message word, distinct from SHA compression padding.
-pub(crate) const PADDED_MESSAGE_KIND_V1: u64 = 3;
+pub const PADDED_MESSAGE_KIND_V1: u64 = 3;
 /// Exact message length; trailing zero bytes must not disappear.
-pub(crate) const MESSAGE_LENGTH_KIND_V1: u64 = 4;
+pub const MESSAGE_LENGTH_KIND_V1: u64 = 4;
 /// The existing SHA digest word type.
-pub(crate) const DIGEST_KIND_V1: u64 = 1;
+pub const DIGEST_KIND_V1: u64 = 1;
 const FIX_PACK: usize = 25;
 const FIX_PACK_FIRST: usize = 26;
 const FIX_PACK_LAST: usize = 27;
@@ -24,7 +24,7 @@ const FIX_LENGTH: usize = 30;
 pub(super) const FIX_END_V1: usize = 31;
 
 /// The gamma coefficient is exactly one for every typed factor.
-pub(crate) fn factor_v1<A: PolynomialAirFieldV1>(
+pub fn factor_v1<A: PolynomialAirFieldV1>(
     invocation: A,
     kind: A,
     index: A,

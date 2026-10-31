@@ -738,7 +738,7 @@ mod simd {
             }
         }
         impl Eq for Simd {}
-        pub use Simd as PlatformSimd;
+        pub use self::Simd as PlatformSimd;
     }
     #[cfg(target_arch = "aarch64")]
     mod arch {
@@ -759,10 +759,8 @@ mod simd {
             #[inline]
             #[target_feature(enable = "neon")]
             unsafe fn into_poly64s(self) -> [u64; 2] {
-                unsafe {
-                    let lanes = vreinterpretq_p64_u8(self.0);
-                    [vgetq_lane_p64(lanes, 0), vgetq_lane_p64(lanes, 1)]
-                }
+                let lanes = vreinterpretq_p64_u8(self.0);
+                [vgetq_lane_p64(lanes, 0), vgetq_lane_p64(lanes, 1)]
             }
         }
         impl super::SimdOps for Simd {
@@ -807,18 +805,14 @@ mod simd {
             #[inline]
             #[target_feature(enable = "neon")]
             unsafe fn high_64(self) -> u64 {
-                unsafe {
-                    let lanes = vreinterpretq_p64_u8(self.0);
-                    vgetq_lane_p64(lanes, 1)
-                }
+                let lanes = vreinterpretq_p64_u8(self.0);
+                vgetq_lane_p64(lanes, 1)
             }
             #[inline]
             #[target_feature(enable = "neon")]
             unsafe fn low_64(self) -> u64 {
-                unsafe {
-                    let lanes = vreinterpretq_p64_u8(self.0);
-                    vgetq_lane_p64(lanes, 0)
-                }
+                let lanes = vreinterpretq_p64_u8(self.0);
+                vgetq_lane_p64(lanes, 0)
             }
         }
         impl BitXor for Simd {
@@ -840,7 +834,7 @@ mod simd {
             }
         }
         impl Eq for Simd {}
-        pub use Simd as PlatformSimd;
+        pub use self::Simd as PlatformSimd;
     }
     #[cfg(target_arch = "x86_64")]
     use arch::PlatformSimd as Simd;

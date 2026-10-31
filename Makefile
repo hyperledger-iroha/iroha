@@ -1,4 +1,4 @@
-.PHONY: dev-workflow check-agents-guardrails check-dependency-discipline check-status-sync check-std-only check-missing-docs check-tests-guard check-todo-guard check-env-config-surface check-serde-guard check-telemetry-redaction-guard check-proc-macro-ui check-iroha-monitor-docs check-iroha-monitor-screenshots monitor-screenshots agents-preflight check-axt-fixtures check-docs-tests-metrics
+.PHONY: doctor dev-workflow check-agents-guardrails check-dependency-discipline check-status-sync check-std-only check-missing-docs check-tests-guard check-todo-guard check-env-config-surface check-serde-guard check-telemetry-redaction-guard check-proc-macro-ui check-iroha-monitor-docs check-iroha-monitor-screenshots monitor-screenshots agents-preflight check-axt-fixtures check-docs-tests-metrics
 .PHONY: examples examples-run examples-inspect docs-syscalls docs-da-threat-model check-docs guards swift-dashboards swift-docs-lint
 .PHONY: gost-bench gost-bench-update gost-dudect
 .PHONY: docs-cli docs-kagami-cli
@@ -17,7 +17,7 @@
 .PHONY: kotodama-goldens kotodama-goldens-check
 
 KOTO?=koto
-IVM?=ivm_run
+IROHA?=iroha
 # Default downstream crate for Norito feature matrix local runs
 CRATE?=iroha_data_model
 
@@ -37,6 +37,10 @@ SWIFT_PIPELINE_METADATA_FEED?=dashboards/data/mobile_pipeline_metadata.sample.js
 
 build:
 	@bash scripts/build_canonical_binaries.sh
+
+# Check that this machine has what the build and the contributor checks need.
+doctor:
+	@python3 scripts/dev_doctor.py
 
 dev-workflow:
 	@bash scripts/dev_workflow.sh
@@ -118,23 +122,25 @@ examples:
 	@echo "Available examples:"
 	@echo "  - examples/hello/hello.ko"
 	@echo "  - examples/transfer/transfer.ko"
+	@echo "  - examples/nft/nft.ko"
+	@echo "  - examples/coffee-club (Musubi package)"
 
+# Compile each example and run an entrypoint locally where one works without a network.
 examples-run:
-	@command -v $(KOTO) >/dev/null 2>&1 || { echo "Missing $(KOTO). Set KOTO=<path> or install on PATH."; exit 1; }
-	@command -v $(IVM) >/dev/null 2>&1 || { echo "Missing $(IVM). Set IVM=<path> or install on PATH."; exit 1; }
+	@command -v $(KOTO) >/dev/null 2>&1 || { echo "Missing $(KOTO). Build it with cargo build -p kotodama_toolchain --bin koto, then set KOTO=<path> or add it to PATH."; exit 1; }
+	@command -v $(IROHA) >/dev/null 2>&1 || { echo "Missing $(IROHA). Build it with cargo build -p iroha_cli --bin iroha, then set IROHA=<path> or add it to PATH."; exit 1; }
 	@mkdir -p target/examples
 	$(KOTO) build examples/hello/hello.ko --out target/examples/hello.to
-	$(IVM) target/examples/hello.to --args '{}'
-	$(KOTO) build examples/transfer/transfer.ko --out target/examples/transfer.to
-	$(IVM) target/examples/transfer.to --args '{}'
+	$(IROHA) --config defaults/client.toml contract debug-call --code-file target/examples/hello.to --entrypoint hajimari
 	$(KOTO) build examples/nft/nft.ko --out target/examples/nft.to
-	$(IVM) target/examples/nft.to --args '{}'
+	$(IROHA) --config defaults/client.toml contract debug-call --code-file target/examples/nft.to --entrypoint create
+	$(KOTO) build examples/transfer/transfer.ko --out target/examples/transfer.to
 
+# Print the code and ABI hashes each compiled example would deploy with.
 examples-inspect: examples-run
-	@command -v ivm_tool >/dev/null 2>&1 || { echo "Missing ivm_tool. Install or set IVM_TOOL_BIN and run the ignored integration test."; exit 1; }
-	ivm_tool inspect target/examples/hello.to
-	ivm_tool inspect target/examples/transfer.to
-	ivm_tool inspect target/examples/nft.to
+	$(IROHA) tools ivm manifest-gen --file target/examples/hello.to
+	$(IROHA) tools ivm manifest-gen --file target/examples/nft.to
+	$(IROHA) tools ivm manifest-gen --file target/examples/transfer.to
 
 docs-syscalls:
 	@python3 scripts/gen_syscall_doc.py --write
@@ -175,25 +181,9 @@ bridge-checksum:
 		shasum -a 256 "$$NORITO_BRIDGE_ARCHIVE_OUTPUT" | awk '{print $$1}'; \
 	fi
 
-# Run serialization guards locally (deny direct serde/serde_json, ad-hoc AoS/NCB helpers)
+# Run every source guard and report all failures (see scripts/run_guards.py).
 guards:
-	@bash scripts/deny_serde_json.sh
-	@bash scripts/check_no_direct_serde.sh
-	@bash scripts/deny_handrolled_aos.sh
-	@bash scripts/check_no_legacy_codec.sh
-	@python3 scripts/check_first_release_history.py
-	@python3 scripts/check_zk_x509_presentation_interval.py
-	@python3 scripts/check_zk_resource_contract.py
-	@python3 scripts/fhe_bgv_cost_model.py
-	@python3 crates/iroha_fhe/tests/vectors/bgv_reference.py --check
-	@python3 scripts/check_zk_runtime_validity.py
-	@python3 scripts/check_zk_operation_inventory.py
-	@python3 scripts/check_durable_workflow_contract.py
-	@python3 scripts/check_operation_contract.py
-	@python3 scripts/check_zk_economic_invariants.py
-	@python3 scripts/check_zk_primitive_workloads.py
-	@python3 scripts/check_state_commitment_candidates.py
-	@bash scripts/check_contract_address_chain_identity.sh
+	@python3 scripts/run_guards.py
 
 # Check the FHE ownership inventory (specs/fhe_ownership_inventory.json) against the tree.
 check-fhe-ownership:

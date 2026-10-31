@@ -317,15 +317,13 @@ pub(crate) fn mul_scalar_mod_with(
     #[cfg(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64")))]
     let accelerated = {
         let prefix = values.len() / 8 * 8;
-        if let Some(constants) = product_kernel_constants(prefix, fixed.modulus) {
+        product_kernel_constants(prefix, fixed.modulus).map_or(0, |constants| {
             if simd::try_mul_scalar_mod(&mut values[..prefix], scalar, constants) {
                 prefix
             } else {
                 0
             }
-        } else {
-            0
-        }
+        })
     };
     #[cfg(not(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64"))))]
     let accelerated = 0;
@@ -341,7 +339,7 @@ pub(crate) fn mul_scalar_mod_with(
 ))]
 fn first_stage(values: &mut [u64], modulus: u64) {
     use crate::constant_time::{add_mod_canonical_u64, sub_mod_canonical_u64};
-    for pair in values.chunks_exact_mut(2) {
+    for pair in values.as_chunks_mut::<2>().0 {
         let (left, right) = (pair[0], pair[1]);
         pair[0] = add_mod_canonical_u64(left, right, modulus);
         pair[1] = sub_mod_canonical_u64(left, right, modulus);
@@ -656,6 +654,27 @@ mod tests {
         }
     }
 
+    /// Qualification must execute the actual x86-64 kernels, never the lane model or fallback.
+    #[test]
+    #[ignore = "requires an x86-64 AVX2 runner; run explicitly for hardware qualification"]
+    #[expect(
+        clippy::assertions_on_constants,
+        reason = "This ignored qualification test must refuse runtime invocation on a non-x86-64 host without breaking ordinary cross-platform compilation."
+    )]
+    fn required_avx2_execution() {
+        assert!(
+            cfg!(target_arch = "x86_64"),
+            "AVX2 qualification requires native x86-64 instructions, not the lane model"
+        );
+        assert_eq!(
+            active_backend(),
+            Backend::Avx2,
+            "AVX2 qualification requires the simd feature and an AVX2-capable CPU"
+        );
+        avx2_kernel_sums_and_products_equal_the_scalar_references();
+        avx2_kernel_transform_equals_the_scalar_reference();
+    }
+
     #[test]
     fn mismatched_lengths_use_the_common_prefix_like_the_scalar_reference() {
         let modulus = 30_593_u64;
@@ -704,13 +723,21 @@ mod tests {
                         .map(|i| match i % 4 {
                             0 => 0,
                             1 => modulus - 1,
-                            _ => (i as u64 * 104_729 + 31) % modulus,
+                            _ => {
+                                (u64::try_from(i).expect("nonnegative bounded fixture index")
+                                    * 104_729
+                                    + 31)
+                                    % modulus
+                            }
                         })
                         .collect();
                     let expected: Vec<_> = input
                         .iter()
                         .map(|&v| {
-                            ((u128::from(v) * u128::from(scalar)) % u128::from(modulus)) as u64
+                            u64::try_from(
+                                (u128::from(v) * u128::from(scalar)) % u128::from(modulus),
+                            )
+                            .expect("residue below u64 modulus")
                         })
                         .collect();
                     let mut actual = input.clone();

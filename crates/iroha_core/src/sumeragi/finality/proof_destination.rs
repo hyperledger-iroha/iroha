@@ -60,6 +60,41 @@ impl OwnedProof {
             .expect("completed proof destination")
             .owned)
     }
+    /// Move the exact source frame after the native query verifier completed every predicate.
+    /// The backing and original physical charge never separate into public ownership.
+    #[allow(unsafe_code)]
+    pub(super) fn from_native_frame(
+        frame: crate::kura::NativeFrameBytes,
+        header: iroha_data_model::block::BlockHeader,
+        members: &[iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1],
+        budget: &AllocationBudget,
+        deadline: Instant,
+    ) -> Result<Self, ProofDestinationError> {
+        check(deadline)?;
+        if !frame.belongs_to(budget)
+            || frame.len() > MAX_FINALITY_BLOCK_BYTES
+            || members.is_empty()
+            || members.len() > iroha_sumeragi::types::MAX_COMMITTEE_SIZE
+        {
+            return Err(ProofDestinationError::Source);
+        }
+        let mut charges = ChargedBuffer::new(members.len() * 2 + 2, budget)?;
+        // SAFETY: bytes move into this private proof, whose fields drop before the
+        // original charge ledger, exactly as the canonical writer destination does.
+        let (wire, charge) = unsafe { frame.into_charged().into_allocation_parts() };
+        charges.push_reserved(charge);
+        let mut owned = Self {
+            proof: SumeragiFinalityProof {
+                block_header: header,
+                block_wire: wire,
+                committee: Vec::new(),
+            },
+            charges,
+        };
+        let mut pop = None;
+        fill_committee(&mut pop, &mut owned, members, budget, deadline)?;
+        Ok(owned)
+    }
 }
 
 // The retrying caller retains this construction; one-shot consumers use the same kernel
@@ -178,66 +213,73 @@ impl Construction {
             }
             *wire_complete = true;
         }
-        check(deadline)?;
-        if owned.proof.committee.capacity() == 0 {
-            owned.proof.committee =
-                charged_vec::<FinalityValidator>(members.len(), budget, &mut owned.charges)?;
-        }
-        while owned.proof.committee.len() < members.len() {
-            check(deadline)?;
-            let member = &members[owned.proof.committee.len()];
-            if pop.is_none() {
-                let mut original = charged_vec::<u8>(
-                    member.proof_of_possession.len(),
-                    budget,
-                    &mut owned.charges,
-                )?;
-                original.extend_from_slice(&member.proof_of_possession);
-                *pop = Some(original);
-            }
-            #[cfg(test)]
-            super::cursor::probe_pending_key(
-                block.header().height().get(),
-                owned.proof.committee.len(),
-                members.len(),
-                member
-                    .validator
-                    .public_key()
-                    .retained_allocation_layout()
-                    .size(),
-                owned.proof.block_wire.as_ptr() as usize,
-                pop.as_ref().expect("original PoP").as_ptr() as usize,
-            );
-            #[cfg(all(test, sumeragi_core_mutation = "HC213"))]
-            let key = member.validator.public_key().clone();
-            #[cfg(not(all(test, sumeragi_core_mutation = "HC213")))]
-            let key = {
-                let original_key = member.validator.public_key();
-                let layout = original_key.retained_allocation_layout();
-                let mut reservation = budget
-                    .try_reserve(layout)
-                    .map_err(ProofDestinationError::Admission)?;
-                let charge = reservation
-                    .try_split(layout)
-                    .expect("exact admitted key layout");
-                let retained = original_key
-                    .try_clone_from_charge(budget, charge)
-                    .map_err(|(_original_charge, error)| ProofDestinationError::Key(error))?;
-                // SAFETY: the compact key moves directly into this private owned proof.
-                // Its graph and pending PoP retire before this exact original charge ledger.
-                let (key, charge) = unsafe { retained.into_allocation_parts() };
-                owned.charges.push_reserved(charge);
-                key
-            };
-            owned.proof.committee.push(FinalityValidator {
-                public_key: key,
-                proof_of_possession: pop.take().expect("original complete PoP"),
-            });
-        }
-        Ok(())
+        fill_committee(pop, owned, members, budget, deadline)
     }
 }
 
+#[allow(unsafe_code)]
+fn fill_committee(
+    pop: &mut Option<Vec<u8>>,
+    owned: &mut OwnedProof,
+    members: &[iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1],
+    budget: &AllocationBudget,
+    deadline: Instant,
+) -> Result<(), ProofDestinationError> {
+    check(deadline)?;
+    if owned.proof.committee.capacity() == 0 {
+        owned.proof.committee =
+            charged_vec::<FinalityValidator>(members.len(), budget, &mut owned.charges)?;
+    }
+    while owned.proof.committee.len() < members.len() {
+        check(deadline)?;
+        let member = &members[owned.proof.committee.len()];
+        if pop.is_none() {
+            let mut original =
+                charged_vec::<u8>(member.proof_of_possession.len(), budget, &mut owned.charges)?;
+            original.extend_from_slice(&member.proof_of_possession);
+            *pop = Some(original);
+        }
+        #[cfg(test)]
+        super::cursor::probe_pending_key(
+            owned.proof.block_header.height().get(),
+            owned.proof.committee.len(),
+            members.len(),
+            member
+                .validator
+                .public_key()
+                .retained_allocation_layout()
+                .size(),
+            owned.proof.block_wire.as_ptr() as usize,
+            pop.as_ref().expect("original PoP").as_ptr() as usize,
+        );
+        #[cfg(all(test, sumeragi_core_mutation = "HC213"))]
+        let key = member.validator.public_key().clone();
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC213")))]
+        let key = {
+            let original_key = member.validator.public_key();
+            let layout = original_key.retained_allocation_layout();
+            let mut reservation = budget
+                .try_reserve(layout)
+                .map_err(ProofDestinationError::Admission)?;
+            let charge = reservation
+                .try_split(layout)
+                .expect("exact admitted key layout");
+            let retained = original_key
+                .try_clone_from_charge(budget, charge)
+                .map_err(|(_original_charge, error)| ProofDestinationError::Key(error))?;
+            // SAFETY: the compact key moves directly into this private owned proof.
+            // Its graph and pending PoP retire before this exact original charge ledger.
+            let (key, charge) = unsafe { retained.into_allocation_parts() };
+            owned.charges.push_reserved(charge);
+            key
+        };
+        owned.proof.committee.push(FinalityValidator {
+            public_key: key,
+            proof_of_possession: pop.take().expect("original complete PoP"),
+        });
+    }
+    Ok(())
+}
 fn charged_vec<T>(
     capacity: usize,
     budget: &AllocationBudget,

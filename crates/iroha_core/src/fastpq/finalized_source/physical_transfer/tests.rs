@@ -172,7 +172,7 @@ fn physical_transfer_joins_actual_native_d7_success_and_every_physical_transfer(
                 location.delta_index = delta_index.try_into().unwrap();
                 location.pair_ordinal = pair;
                 let fact = original.physical_transfer(location, limits).unwrap();
-                assert!(std::ptr::eq(fact.original(), &original));
+                assert!(std::ptr::eq(fact.original(), &raw const original));
                 assert!(std::ptr::eq(
                     fact.input(),
                     original
@@ -187,11 +187,11 @@ fn physical_transfer_joins_actual_native_d7_success_and_every_physical_transfer(
                 );
                 assert!(std::ptr::eq(
                     fact.source_entry(),
-                    &original.entries()[network_index as usize]
+                    &raw const original.entries()[network_index as usize]
                 ));
                 assert!(std::ptr::eq(
                     fact.statement(),
-                    &original.leaves()[location.statement_index as usize]
+                    &raw const original.leaves()[location.statement_index as usize]
                 ));
                 assert!(std::ptr::eq(
                     fact.output(),
@@ -397,7 +397,7 @@ fn physical_transfer_retains_exact_local_work_refusal_and_retries_original() {
         );
         assert_eq!(original.pool().reserved_bytes(), baseline);
         let retry = original.physical_transfer(location, enough).unwrap();
-        assert!(std::ptr::eq(retry.original(), &original));
+        assert!(std::ptr::eq(retry.original(), &raw const original));
         assert_eq!(retry.location(), location);
         assert_eq!(original.pool().reserved_bytes(), baseline);
     }
@@ -499,7 +499,7 @@ fn physical_transfer_needs_no_optional_archive_or_fresh_allocation_capacity() {
     let blocker = pool.try_reserve_bytes(remaining).unwrap();
     assert_eq!(pool.reserved_bytes(), pool.limit_bytes());
     let fact = original.physical_transfer(location, enough).unwrap();
-    assert!(std::ptr::eq(fact.original(), &original));
+    assert!(std::ptr::eq(fact.original(), &raw const original));
     assert_eq!(pool.reserved_bytes(), pool.limit_bytes());
     drop(fact);
     drop(blocker);

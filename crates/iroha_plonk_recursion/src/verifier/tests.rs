@@ -813,13 +813,11 @@ impl<C: PastaCurve> Circuit<C::Base> for CompactProgram<C> {
                 let key = chip.constant_key(&mut region, &source.plan, &source.key)?;
                 let proof = source
                     .proof
-                    .chunks_exact(32)
+                    .as_chunks::<32>()
+                    .0
+                    .iter()
                     .map(|bytes| {
-                        LeElement::assign(
-                            &mut chip.uint(),
-                            &mut region,
-                            source.witness(bytes.try_into().unwrap()),
-                        )
+                        LeElement::assign(&mut chip.uint(), &mut region, source.witness(*bytes))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 let raw = source.instance.to_canonical_limbs();

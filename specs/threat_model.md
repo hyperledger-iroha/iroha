@@ -186,7 +186,7 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 
 | Risk | Status | Mitigation Plan | Owner | Target |
 | --- | --- | --- | --- | --- |
-| Upgrade SBOM provenance gap | Closed | Runtime admission enforces SBOM/SLSA provenance policy and trusted signer thresholds (see `specs/runtime_upgrades.md`). | Security WG | 2025-11-30 |
+| Upgrade SBOM provenance gap | Open | Every validator attests a runtime change set with its release digest before it activates (`specs/runtime_upgrades.md`); the node-configuration SBOM/SLSA check is deleted, and a committed provenance policy of the root replaces it (`specs/live_runtime_upgrades.md` §6, roadmap N14). | Security WG | Taira adoption |
 | Aggregator fairness audit | Open | Commission third-party review; publish before Milestone 2 GA (`SUM-203`) | Consensus WG | 2025-12-15 |
 | Torii operator auth hardening | Closed | WebAuthn/mTLS operator auth shipped with credential persistence, session tokens, and telemetry. | Torii WG | 2025-11-15 |
 | Hardware-accelerated hashing | Open | Implement multiversion hashing with deterministic fallback (`RNT-092`) | Runtime WG | 2025-12-01 |

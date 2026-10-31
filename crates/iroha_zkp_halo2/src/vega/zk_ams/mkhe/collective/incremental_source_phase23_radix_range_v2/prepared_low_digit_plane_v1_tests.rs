@@ -8,7 +8,13 @@ fn empty_group_values_v1() -> ZeroizingT256ScalarVecV1 {
 
 fn source_chunk_v1(block: usize) -> ZkAmsPhase23RnsLinkSecretChunkV1 {
     let mut chunk = ZkAmsPhase23RnsLinkSecretChunkV1::new_main_block_zeroed_v1().unwrap();
-    for (coefficient, bytes) in chunk.as_mut_bytes_v1().chunks_exact_mut(32).enumerate() {
+    for (coefficient, bytes) in chunk
+        .as_mut_bytes_v1()
+        .as_chunks_mut::<32>()
+        .0
+        .iter_mut()
+        .enumerate()
+    {
         let value = (block * 256 + coefficient) as u64;
         bytes[24..].copy_from_slice(&value.to_be_bytes());
     }
@@ -174,7 +180,7 @@ fn source_order_transposes_once_and_emits_all_canonical_coordinates() {
     for chunk in 0..32 {
         let emitted = values.emit_next_v1(chunk).unwrap();
         assert_eq!(emitted.len_v1(), 16_384);
-        for (local, encoded) in emitted.as_slice_v1().chunks_exact(32).enumerate() {
+        for (local, encoded) in emitted.as_slice_v1().as_chunks::<32>().0.iter().enumerate() {
             assert!(encoded[..30].iter().all(|byte| *byte == 0));
             let v = usize::from(chunk) * 512 + local;
             let expected = ((v % 64) * 256 + v / 64) as u16;

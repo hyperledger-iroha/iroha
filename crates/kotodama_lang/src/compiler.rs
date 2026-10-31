@@ -1954,8 +1954,10 @@ mod test_mode_tests {
             schemas.push(run.argument_schema.clone().expect("typed argument schema"));
             let parsed = ProgramMetadata::parse(&output.artifact).expect("artifact metadata");
             let syscalls = output.artifact[parsed.code_offset..]
-                .chunks_exact(4)
-                .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|chunk| u32::from_le_bytes(*chunk))
                 .filter(|word| {
                     instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
                 })
@@ -2172,8 +2174,10 @@ mod test_mode_tests {
         let syscall = encoding::wide::encode_syscallx(syscalls::SYSCALL_CORE_QUERY_PAGE);
         assert_eq!(
             artifact[parsed.code_offset..]
-                .chunks_exact(4)
-                .map(|word| u32::from_le_bytes(word.try_into().expect("instruction word")))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|word| u32::from_le_bytes(*word))
                 .filter(|word| *word == syscall)
                 .count(),
             5,
@@ -2653,8 +2657,10 @@ mod test_mode_tests {
                 .unwrap_or_else(|| panic!("missing budget for {name}"));
             artifact[metadata.code_offset + budget.pc_start as usize
                 ..metadata.code_offset + budget.pc_end as usize]
-                .chunks_exact(4)
-                .map(|word| u32::from_le_bytes(word.try_into().expect("instruction word")))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|word| u32::from_le_bytes(*word))
                 .collect::<Vec<_>>()
         };
         let choose = function_words("choose");
@@ -2829,8 +2835,10 @@ mod test_mode_tests {
                 .unwrap_or_else(|| panic!("missing budget report for {name}"));
             let words = artifact[metadata.code_offset + budget.pc_start as usize
                 ..metadata.code_offset + budget.pc_end as usize]
-                .chunks_exact(4)
-                .map(|word| u32::from_le_bytes(word.try_into().expect("instruction word")))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|word| u32::from_le_bytes(*word))
                 .collect::<Vec<_>>();
             let mut conditional_count = 0;
             for (index, word) in words.iter().enumerate() {
@@ -2876,8 +2884,10 @@ mod test_mode_tests {
         let metadata = ProgramMetadata::parse(&artifact).expect("parse dead-code artifact");
         let words = artifact[metadata.code_offset + answer.pc_start as usize
             ..metadata.code_offset + answer.pc_end as usize]
-            .chunks_exact(4)
-            .map(|word| u32::from_le_bytes(word.try_into().expect("instruction word")))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|word| u32::from_le_bytes(*word))
             .collect::<Vec<_>>();
         assert_eq!(
             words.iter().filter(|word| instruction::wide::opcode(**word) == instruction::wide::memory::LDLIT).count(), 1,
@@ -12129,8 +12139,8 @@ fn detect_vector_usage(code: &[u8]) -> bool {
         instruction::wide::memory::LOAD128,
         instruction::wide::memory::STORE128,
     ];
-    code.chunks_exact(4).any(|chunk| {
-        let word = u32::from_le_bytes(chunk.try_into().expect("word chunk"));
+    code.as_chunks::<4>().0.iter().any(|chunk| {
+        let word = u32::from_le_bytes(*chunk);
         let opcode = instruction::wide::opcode(word);
         VECTOR_OPS.contains(&opcode)
     })
@@ -12145,8 +12155,8 @@ fn detect_zk_usage(code: &[u8]) -> bool {
         instruction::wide::zk::FINV,
         instruction::wide::zk::ASSERT_RANGE,
     ];
-    code.chunks_exact(4).any(|chunk| {
-        let word = u32::from_le_bytes(chunk.try_into().expect("word chunk"));
+    code.as_chunks::<4>().0.iter().any(|chunk| {
+        let word = u32::from_le_bytes(*chunk);
         let opcode = instruction::wide::opcode(word);
         ZK_OPS.contains(&opcode)
     })

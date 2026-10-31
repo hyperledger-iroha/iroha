@@ -37,8 +37,10 @@ fn reference_permutation<F: PastaField>(
 ) -> [[u8; 32]; 3] {
     // Uses Core's distinct field implementation and a separate direct loop.
     let constants: Vec<F> = encoded
-        .chunks_exact(32)
-        .map(|bytes| Option::<F>::from(F::from_repr(bytes.try_into().unwrap())).unwrap())
+        .as_chunks::<32>()
+        .0
+        .iter()
+        .map(|bytes| Option::<F>::from(F::from_repr(*bytes)).unwrap())
         .collect();
     let mut state = input.map(|bytes| Option::<F>::from(F::from_repr(bytes)).unwrap());
     for round in 0..64 {
@@ -126,7 +128,7 @@ fn all_upstream_permutation_vectors_match_both_native_field_libraries() {
         ),
     ] {
         assert_eq!(bytes.len(), 11 * 192);
-        for vector in bytes.chunks_exact(192) {
+        for vector in bytes.as_chunks::<192>().0 {
             let input = fields::<3>(&vector[..96]);
             let expected = fields::<3>(&vector[96..]);
             let mut state = input;
@@ -154,7 +156,7 @@ fn all_upstream_hash_vectors_match_both_native_field_libraries() {
         ),
     ] {
         assert_eq!(bytes.len(), 11 * 96);
-        for vector in bytes.chunks_exact(96) {
+        for vector in bytes.as_chunks::<96>().0 {
             let input = fields::<2>(&vector[..64]);
             let expected: [u8; 32] = vector[64..].try_into().unwrap();
             assert_eq!(native(&input).unwrap(), expected);

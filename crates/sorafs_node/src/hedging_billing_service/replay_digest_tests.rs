@@ -1,6 +1,6 @@
 #[test]
 fn cross_peer_old_page_replay_is_exact_and_equivocation_safe() {
-    let root = tempfile::tempdir().expect("state root");
+    let root = private_state_tempdir().expect("state root");
     let (service, _feed_policy, _reference, _verifier, _publisher, _ack_authority) =
         ready_service(root.path());
     let first = page(vec![event(1, "storage:event:1", "10")]);

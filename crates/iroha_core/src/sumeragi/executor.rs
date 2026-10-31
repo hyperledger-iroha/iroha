@@ -364,6 +364,7 @@ enum Request {
         Qc,
         mpsc::SyncSender<Result<(), PublicationError>>,
     ),
+    ExecutedResult(Hash32, mpsc::SyncSender<Result<CertifiedResultV1, String>>),
     Build(
         u64,
         u64,
@@ -668,6 +669,17 @@ impl StateExecutor {
         commit_qc: &Qc,
     ) -> Result<Option<Hash32>, PublicationError> {
         self.prepare_with_origin(block, commit_qc, CommitTelemetryOrigin::HistoricalReplay)
+    }
+
+    /// The execution result the retained execution of `block_hash` produced, for diagnosing a
+    /// replayed block whose result differs from its certificate (`iroha3d --check-replay`).
+    /// Read only: the execution, its overlay and its publication phase are unchanged.
+    ///
+    /// # Errors
+    /// No execution of `block_hash` is retained, or the worker stopped.
+    pub(crate) fn executed_result(&self, block_hash: Hash32) -> Result<CertifiedResultV1, String> {
+        self.call(|reply| Request::ExecutedResult(block_hash, reply))
+            .unwrap_or_else(|| Err("original execution Worker stopped".into()))
     }
 
     #[expect(
@@ -1012,7 +1024,15 @@ struct SignatureDecodeAttempt {
     returned_refusal: Option<ReturnedDecodedRefusal>,
     /// Completed leg graphs and decoder controls from this exact original proposal.
     amx_legs: Option<super::amx::NativeAmxLegPreparations>,
+    /// Original captured UID binding rows and decoder prefixes survive overlay rollback.
+    /// TODO: retain the unfinished execution's other actual resources; their rollback
+    /// can still wake this job's original shared-pool refusal before external release.
+    uid_bindings: Option<crate::state::asset_uid::binding_custody::retry::BindingPreparations>,
     parent_service: super::certified_chain::ParentServicePreparation,
+    /// Original parent receipt and signed genesis survive pristine overlay retries.
+    successor_context: super::certified_chain::SuccessorContextPreparation,
+    /// Original policy decoder counters are admitted before disposable World state.
+    policy_decode_controls: Option<crate::execution_attempt::PolicyDecodeControls>,
 }
 
 /// Original failure retained beside the same graph after the validator returned ownership.
@@ -1408,6 +1428,9 @@ impl<'s> Worker<'s> {
             Request::Replay(block, qc, reply) => {
                 let _ = reply.send(self.replay(&block, &qc));
             }
+            Request::ExecutedResult(block_hash, reply) => {
+                let _ = reply.send(self.executed_result(block_hash));
+            }
             Request::Build(height, view, max_bytes, exec_budget_ms, reply) => {
                 let _ = reply.send(self.build(height, view, max_bytes, exec_budget_ms));
             }
@@ -1785,6 +1808,9 @@ impl<'s> Worker<'s> {
                 decoded: None,
                 returned_refusal: None,
                 amx_legs: None,
+                uid_bindings: None,
+                successor_context: Default::default(),
+                policy_decode_controls: None,
                 parent_service: super::certified_chain::ParentServicePreparation::default(),
             });
         }
@@ -1814,6 +1840,19 @@ impl<'s> Worker<'s> {
                     Ok(None)
                 };
             }
+        }
+        // Finish an already captured binding before reacquiring disposable World
+        // allocations. This is source preparation only; actual reads still verify
+        // their current row, path and occurrence before any UID can escape.
+        if let Some(original) = attempt.uid_bindings.as_ref() {
+            original
+                .prepare_captured(
+                    self.state
+                        .world
+                        .sccp_committee_generations
+                        .allocation_budget(),
+                )
+                .map_err(|original| PublicationError::Deferred(original.into()))?;
         }
         // One original nonblocking cut supplies the parent, scheduled authority and
         // retained parent-service preparation. Busy keeps the original decoded source.
@@ -2028,6 +2067,35 @@ impl<'s> Worker<'s> {
             .map(|member| member.validator.clone())
             .collect::<Vec<_>>();
         let topology = Topology::new(committee.clone());
+        // Admit the original shared binding bank before moving the decoded source.
+        // Every actual transaction/finalizer borrows it through the World block.
+        let attempt = self
+            .signature_decode
+            .as_mut()
+            .expect("original native binding attempt");
+        if attempt.uid_bindings.is_none() {
+            attempt.uid_bindings = Some(
+                crate::state::asset_uid::binding_custody::retry::BindingPreparations::try_new(
+                    self.state
+                        .world
+                        .sccp_committee_generations
+                        .allocation_budget(),
+                )
+                .map_err(|original| PublicationError::Deferred(original.into()))?,
+            );
+        }
+        // Admit the actual shared policy counters once before disposable World state.
+        if attempt.policy_decode_controls.is_none() {
+            attempt.policy_decode_controls = Some(
+                crate::execution_attempt::PolicyDecodeControls::try_new(
+                    self.state
+                        .world
+                        .sccp_committee_generations
+                        .allocation_budget(),
+                )
+                .map_err(|original| PublicationError::Deferred(original.into()))?,
+            );
+        }
         // All current authority/source gates ran on the borrowed original. The expansion
         // borrows only State; transfer that same graph to the real validator once.
         let iroha_block = self
@@ -2085,7 +2153,16 @@ impl<'s> Worker<'s> {
                 block.payload().as_slice(),
                 state,
                 amx_legs,
+                attempt
+                    .uid_bindings
+                    .as_ref()
+                    .expect("original native binding bank"),
                 (height > 2).then_some(&attempt.parent_service),
+                &mut attempt.successor_context,
+                attempt
+                    .policy_decode_controls
+                    .as_ref()
+                    .expect("original policy controls"),
             )
         }));
         let validated = validation_result(validated)?;
@@ -2111,6 +2188,15 @@ impl<'s> Worker<'s> {
                 }
                 let outcome = classify(height, *error);
                 if outcome.is_err() {
+                    // SPEC: §13.4 HC976 drops only the binding preparation owner on
+                    // a real local refusal, recreating self-refunded decoder retries.
+                    #[cfg(all(test, sumeragi_core_mutation = "HC976"))]
+                    {
+                        self.signature_decode
+                            .as_mut()
+                            .expect("original validation attempt")
+                            .uid_bindings = None;
+                    }
                     // Keep the actual original graph for a local validation refusal.
                     // Completed intrinsic rejection explicitly retires it as before.
                     self.signature_decode
@@ -2730,6 +2816,21 @@ impl<'s> Worker<'s> {
                         | PublicationPhase::Consuming
                 )
             })
+    }
+
+    /// Clone the canonical result of the retained execution of `block_hash`. Read only: no
+    /// phase, overlay or witness changes, so preparation and discard proceed as before.
+    fn executed_result(&self, block_hash: Hash32) -> Result<CertifiedResultV1, String> {
+        let live = self
+            .live
+            .as_ref()
+            .filter(|live| live.block_hash == block_hash)
+            .ok_or_else(|| "no retained execution of this block".to_owned())?;
+        let Live {
+            _commitment: commitment,
+            ..
+        } = live;
+        Ok(commitment.get().clone())
     }
 
     /// Pin the original execution and exactly one certified frame for durable append.
@@ -4344,6 +4445,10 @@ mod payload_refusal_tests;
 #[cfg(test)]
 #[path = "executor_local_signature_preparation_tests.rs"]
 mod local_signature_preparation_tests;
+
+#[cfg(test)]
+#[path = "executor_uid_binding_retry_tests.rs"]
+mod uid_binding_retry_tests;
 
 #[cfg(test)]
 #[path = "executor_amx_retry_tests.rs"]

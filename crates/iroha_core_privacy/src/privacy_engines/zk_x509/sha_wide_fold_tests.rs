@@ -36,6 +36,7 @@ fn widened_sha_relation_preserves_every_residue_segment_and_terminal() {
                 )
                 .unwrap();
                 if full {
+                    residues.clear();
                     evaluate_sha_batch_relation_with_fold_v1(
                         &current,
                         &next,
@@ -49,6 +50,7 @@ fn widened_sha_relation_preserves_every_residue_segment_and_terminal() {
                     )
                     .unwrap();
                 } else {
+                    residues.clear();
                     evaluate_sha_batch_local_with_powers_into_v1(
                         &current,
                         &next,
@@ -229,6 +231,7 @@ fn widened_sha_relation_cost_preserves_all_constraints_and_outputs() {
                         .for_each(|(worker, residues)| {
                             for _ in (worker..ROWS).step_by(workers) {
                                 if wide {
+                                    residues.clear();
                                     evaluate_sha_batch_relation_with_fold_v1(
                                         black_box(&current),
                                         black_box(&next),
@@ -242,13 +245,15 @@ fn widened_sha_relation_cost_preserves_all_constraints_and_outputs() {
                                     )
                                     .unwrap();
                                 } else {
-                                    evaluate_zk_x509_sha_batch_local_residues_into_v1(
+                                    residues.clear();
+                                    emit_sha_batch_relation_v1(
                                         black_box(&current),
                                         black_box(&next),
                                         word,
                                         challenges(),
                                         &rfc_challenges(),
                                         0,
+                                        None,
                                         residues,
                                     )
                                     .unwrap();

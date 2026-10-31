@@ -1853,6 +1853,46 @@ function normalizeOptionalBase64(value, name) {
   return normalizeBase64(value, name);
 }
 
+/** HPKE suites a Kaigi relay key may use, with the transport's suite identifiers. */
+export const KAIGI_RELAY_HPKE_SUITES_V1 = Object.freeze({
+  mlKem768AuthPsk: Object.freeze({ suiteId: 0x0001, publicKeyBytes: 1184 }),
+  mlKem1024AuthPsk: Object.freeze({ suiteId: 0x0002, publicKeyBytes: 1568 }),
+});
+
+/**
+ * Frame a raw public key as the descriptor a relay registers and a manifest hop
+ * carries: a little-endian suite identifier, then the exact key. The ledger rejects
+ * anything else, and the relay fingerprint commits to the suite this way.
+ *
+ * @param {keyof typeof KAIGI_RELAY_HPKE_SUITES_V1} suite
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} publicKey
+ * @returns {Buffer}
+ */
+export function buildKaigiRelayHpkeKeyV1(suite, publicKey) {
+  const selected = Object.hasOwn(KAIGI_RELAY_HPKE_SUITES_V1, suite)
+    ? KAIGI_RELAY_HPKE_SUITES_V1[suite]
+    : null;
+  if (selected === null) {
+    fail(
+      V_CODE_INVALID_STRING,
+      `suite must be one of ${Object.keys(KAIGI_RELAY_HPKE_SUITES_V1).join(", ")}`,
+      "suite",
+    );
+  }
+  const key = toBinaryBuffer(publicKey, "publicKey");
+  if (key.length !== selected.publicKeyBytes) {
+    fail(
+      V_CODE_VALUE_OUT_OF_RANGE,
+      `publicKey must contain exactly ${selected.publicKeyBytes} bytes for ${suite}`,
+      "publicKey",
+    );
+  }
+  const descriptor = Buffer.alloc(2 + key.length);
+  descriptor.writeUInt16LE(selected.suiteId, 0);
+  key.copy(descriptor, 2);
+  return descriptor;
+}
+
 function normalizeKaigiHpkePublicKey(value, name) {
   const key =
     typeof value === "string"

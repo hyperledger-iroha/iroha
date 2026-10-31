@@ -407,7 +407,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 ## `iroha.instruction.v1::smart_contract_code::CancelSmartContractCodeUpload`
 
-> Schema summary: struct fields: code_hash: Hash.
+> Schema summary: struct fields: artifact_id: ContractArtifactId.
 
 - Rust type: `iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload`
 - Schema hash: `ea496a080ec700168bae4fae3e679d2b`
@@ -416,7 +416,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 | Field | Type |
 |-------|------|
-| `code_hash` | `Hash` |
+| `artifact_id` | `ContractArtifactId` |
 
 ## `iroha.instruction.v1::smart_contract_code::CommitContractDeployment`
 
@@ -463,7 +463,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 ## `iroha.instruction.v1::smart_contract_code::FinalizeSmartContractCodeUpload`
 
-> Schema summary: struct fields: code_hash: Hash, total_size: u64, chunk_count: u32.
+> Schema summary: struct fields: artifact_id: ContractArtifactId, total_size: u64, chunk_count: u32.
 
 - Rust type: `iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload`
 - Schema hash: `0406dbcf58c0c157bdc2c690d3faba54`
@@ -472,7 +472,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 | Field | Type |
 |-------|------|
-| `code_hash` | `Hash` |
+| `artifact_id` | `ContractArtifactId` |
 | `total_size` | `u64` |
 | `chunk_count` | `u32` |
 
@@ -497,7 +497,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 ## `iroha.instruction.v1::smart_contract_code::RegisterSmartContractBytes`
 
-> Schema summary: struct fields: code_hash: Hash, code: Vec<u8>.
+> Schema summary: struct fields: artifact_id: ContractArtifactId, code: Vec<u8>.
 
 - Rust type: `iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes`
 - Schema hash: `a78be8fe926a797ea6c73e651427118c`
@@ -506,7 +506,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 | Field | Type |
 |-------|------|
-| `code_hash` | `Hash` |
+| `artifact_id` | `ContractArtifactId` |
 | `code` | `Vec<u8>` |
 
 **Smart-contract notes:**
@@ -516,7 +516,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 ## `iroha.instruction.v1::smart_contract_code::RegisterSmartContractCode`
 
-> Schema summary: struct fields: manifest: ContractManifest.
+> Schema summary: struct fields: artifact_id: ContractArtifactId, manifest: ContractManifest.
 
 - Rust type: `iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode`
 - Schema hash: `fa62c9f0a5a3f8b756eef62b689e2a32`
@@ -525,6 +525,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 | Field | Type |
 |-------|------|
+| `artifact_id` | `ContractArtifactId` |
 | `manifest` | `ContractManifest` |
 
 ### Manifest field details
@@ -595,7 +596,7 @@ Entrypoint callback target referenced by a trigger declaration.
 
 ## `iroha.instruction.v1::smart_contract_code::RemoveSmartContractBytes`
 
-> Schema summary: struct fields: code_hash: Hash, reason: Option<String>.
+> Schema summary: struct fields: artifact_id: ContractArtifactId, reason: Option<String>.
 
 - Rust type: `iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes`
 - Schema hash: `86da3d62bcefa84711d95e3fea332689`
@@ -604,7 +605,7 @@ Entrypoint callback target referenced by a trigger declaration.
 
 | Field | Type |
 |-------|------|
-| `code_hash` | `Hash` |
+| `artifact_id` | `ContractArtifactId` |
 | `reason` | `Option<String>` |
 
 **Smart-contract notes:**
@@ -633,7 +634,7 @@ Entrypoint callback target referenced by a trigger declaration.
 
 ## `iroha.instruction.v1::smart_contract_code::UploadSmartContractCodeChunk`
 
-> Schema summary: struct fields: code_hash: Hash, total_size: u64, chunk_index: u32, chunk_count: u32, chunk: Vec<u8>.
+> Schema summary: struct fields: artifact_id: ContractArtifactId, total_size: u64, chunk_index: u32, chunk_count: u32, chunk: Vec<u8>.
 
 - Rust type: `iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk`
 - Schema hash: `41ca98d8d78d9d8113909941490f8612`
@@ -642,7 +643,7 @@ Entrypoint callback target referenced by a trigger declaration.
 
 | Field | Type |
 |-------|------|
-| `code_hash` | `Hash` |
+| `artifact_id` | `ContractArtifactId` |
 | `total_size` | `u64` |
 | `chunk_index` | `u32` |
 | `chunk_count` | `u32` |
@@ -1121,44 +1122,32 @@ Alias binding payload approved alongside a manifest.
 | `Role` | 1 | `Revoke<RoleId, Account>` |
 | `RolePermission` | 2 | `Revoke<Permission, Role>` |
 
-## `iroha.runtime_upgrade.activate`
+## `iroha.runtime.contain.v1`
 
-> Schema summary: struct fields: id: RuntimeUpgradeId.
+> Schema summary: struct fields: containment: ContainmentV1, endorsements: Vec<EndorsementV1>.
 
-- Rust type: `iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade`
-- Schema hash: `dd0f2fac36ae80eba91c5a521bd012db`
-
-**Layout:** `struct`
-
-| Field | Type |
-|-------|------|
-| `id` | `RuntimeUpgradeId` |
-
-## `iroha.runtime_upgrade.cancel`
-
-> Schema summary: struct fields: id: RuntimeUpgradeId.
-
-- Rust type: `iroha_data_model::isi::runtime_upgrade::CancelRuntimeUpgrade`
-- Schema hash: `d563aa37d8f4b53d9de7e5330ff76f94`
+- Rust type: `iroha_data_model::isi::runtime_upgrade::ContainRuntimeV1`
+- Schema hash: `2185d7d3ffb0d77faf317ad7a1689ca3`
 
 **Layout:** `struct`
 
 | Field | Type |
 |-------|------|
-| `id` | `RuntimeUpgradeId` |
+| `containment` | `ContainmentV1` |
+| `endorsements` | `Vec<EndorsementV1>` |
 
-## `iroha.runtime_upgrade.propose`
+## `iroha.runtime.support.attest.v1`
 
-> Schema summary: struct fields: manifest_bytes: Vec<u8>.
+> Schema summary: struct fields: attestation: SignedSupportAttestationV1.
 
-- Rust type: `iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade`
-- Schema hash: `d3f95f8f392d31da0c3b1528c13b2d08`
+- Rust type: `iroha_data_model::isi::runtime_upgrade::AttestRuntimeSupportV1`
+- Schema hash: `d27c011cee3b2ca2eeb97231c06242d8`
 
 **Layout:** `struct`
 
 | Field | Type |
 |-------|------|
-| `manifest_bytes` | `Vec<u8>` |
+| `attestation` | `SignedSupportAttestationV1` |
 
 ## `iroha.set_key_value`
 

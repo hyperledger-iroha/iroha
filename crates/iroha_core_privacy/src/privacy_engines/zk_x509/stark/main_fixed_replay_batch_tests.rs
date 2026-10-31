@@ -143,7 +143,7 @@ fn initial_fixed_inverse_validates_every_column_and_exact_root_before_mutation()
     assert_eq!(columns, before);
 }
 
-fn with_maximum_fixed_source_v1(
+pub(super) fn with_maximum_fixed_source_v1(
     consume: impl FnOnce(
         &AggregateProofLayoutV1,
         &MainLog19BoundTraceGroupSourceV1<'_>,

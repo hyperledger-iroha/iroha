@@ -9,11 +9,11 @@
 //!
 //! This stage alone is conditional arithmetic, not authentication or a bootstrap.
 //! [`super::LocalBootstrapKey`] composes it with a locally generated matching
-//! encrypted secret and the complete coefficient transforms. TODO(C.8, R.9):
+//! encrypted secret and fixed coefficient-bank selection. TODO(C.8, R.9):
 //! complete external source/key proofs, application resource and parameter
 //! qualification, and circuit privacy.
 
-use super::relative_trace::BankRetention;
+use super::relative_trace::{BankRetention, CoefficientBankSelection};
 use super::{
     BgvError, BgvProfile, Ciphertext, CiphertextShape, CoefficientSlotBanks, Plaintext,
     PlaintextBound, SwitchingKey, SwitchingKeyKind, cost::CostModel, poly::RnsPoly,
@@ -46,7 +46,7 @@ pub struct UpperDigitsBudget {
     pub plaintext_bytes: usize,
     /// Additional canonical tensor/key-switch/plaintext kernel residue scratch.
     pub backend_scratch_bytes: usize,
-    /// Conservative preallocation ceiling in existing shared CostModel units.
+    /// Conservative preallocation ceiling in existing shared `CostModel` units.
     pub canonical_arithmetic_units: u64,
     /// Conservative preallocation ceiling for add/negate/private-division words.
     pub scalar_word_operations: u64,
@@ -90,7 +90,7 @@ pub struct UpperDigitsPayload {
     pub preallocation_arithmetic_units: u64,
     /// Word-operation bound checked before node/shape array allocation.
     pub preallocation_scalar_word_operations: u64,
-    /// Exact CostModel arithmetic units of all banks at their selected levels.
+    /// Exact `CostModel` arithmetic units of all banks at their selected levels.
     pub canonical_arithmetic_units: u64,
     /// Exact add/negate/private-division word operations across all banks.
     pub scalar_word_operations: u64,
@@ -140,6 +140,7 @@ pub struct EncryptedUpperDigitsPlan {
     banks: usize,
     slots: usize,
     retention: BankRetention,
+    selection: CoefficientBankSelection,
     nodes: Vec<Node>,
     order: Vec<usize>,
     uses: Vec<usize>,
@@ -165,8 +166,9 @@ impl core::fmt::Debug for EncryptedUpperDigitsPlan {
 }
 
 fn same_shape(value: &Ciphertext, shape: &CiphertextShape) -> bool {
+    let components_match = value.component_count() == shape.components();
     value.level() == shape.level()
-        && value.component_count() == shape.components()
+        && components_match
         && value.plaintext_precision() == shape.plaintext_precision()
         && value.noise_bound().as_natural() == shape.bound()
 }
@@ -240,16 +242,21 @@ impl EncryptedUpperDigitsPlan {
             program,
             source.shape(),
             source.slots(),
-            source.banks().len(),
+            source.geometry_banks(),
             levels,
             budget,
             BankRetention::Collected,
+            source.selection(),
         )
     }
 
     // Planning a complete composed operation must not require executing its
     // preceding transform first. This sole shared planner mints no scalar bank
     // owner: execution still consumes actual complete or per-coordinate coefficient origin.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the shared planner checks explicit geometry, level schedule, retention and selection before creating an owner"
+    )]
     pub(super) fn from_shape(
         profile: &BgvProfile,
         program: UpperDigitsProgram,
@@ -259,6 +266,7 @@ impl EncryptedUpperDigitsPlan {
         levels: &[usize],
         budget: UpperDigitsBudget,
         retention: BankRetention,
+        selection: CoefficientBankSelection,
     ) -> Result<Self, UpperDigitsError> {
         input.check_profile(profile)?;
         let context = program.plan().context();
@@ -273,6 +281,7 @@ impl EncryptedUpperDigitsPlan {
         {
             return Err(UpperDigitsError::Source);
         }
+        let selected_banks = selection.count(banks);
         let (count, output_id, depth) =
             compiler::compile(&program, compiler::Count::new(budget.compiler_steps))?;
         if levels.len() != depth
@@ -286,7 +295,7 @@ impl EncryptedUpperDigitsPlan {
             &program,
             count.nodes,
             count.operations,
-            banks,
+            selected_banks,
             levels.len(),
             retention,
             budget,
@@ -326,7 +335,7 @@ impl EncryptedUpperDigitsPlan {
             levels,
             output_id,
             count.operations,
-            banks,
+            selected_banks,
             retention,
             budget,
             preflight,
@@ -349,6 +358,7 @@ impl EncryptedUpperDigitsPlan {
             banks,
             slots,
             retention,
+            selection,
             nodes: store.nodes,
             order,
             uses,
@@ -376,15 +386,23 @@ impl EncryptedUpperDigitsPlan {
     pub const fn payload(&self) -> UpperDigitsPayload {
         self.payload
     }
-    /// Counts for one bank; multiply by the public bank count for the request.
+    /// Counts for one bank; multiply by [`Self::selected_banks`] for the request.
     #[must_use]
     pub const fn operations(&self) -> UpperDigitsOperations {
         self.operations
     }
-    /// Number of consumed/returned banks.
+    /// Geometric coefficient bank count, exactly the full ring degree divided by slots.
     #[must_use]
     pub const fn banks(&self) -> usize {
         self.banks
+    }
+    /// Number of banks actually consumed by this fixed public selection.
+    #[must_use]
+    pub fn selected_banks(&self) -> usize {
+        self.selection.count(self.banks)
+    }
+    pub(super) const fn selection(&self) -> CoefficientBankSelection {
+        self.selection
     }
     /// Number of coefficient-valued scalar slots in every bank.
     #[must_use]
@@ -412,14 +430,17 @@ impl EncryptedUpperDigitsPlan {
         source: &CoefficientSlotBanks,
         key: &SwitchingKey,
     ) -> Result<(), UpperDigitsError> {
-        if self.retention != BankRetention::Collected {
+        if self.retention != BankRetention::Collected
+            || source.banks().len() != self.selected_banks()
+        {
             return Err(UpperDigitsError::Source);
         }
         self.preflight_bank(
             profile,
             source.shape(),
             source.slots(),
-            source.banks().len(),
+            source.geometry_banks(),
+            source.selection(),
             key,
         )?;
         for input in source.banks() {
@@ -439,6 +460,7 @@ impl EncryptedUpperDigitsPlan {
         shape: &CiphertextShape,
         slots: usize,
         banks: usize,
+        selection: CoefficientBankSelection,
         key: &SwitchingKey,
     ) -> Result<(), UpperDigitsError> {
         self.input.check_profile(profile)?;
@@ -446,7 +468,11 @@ impl EncryptedUpperDigitsPlan {
         if key.kind() != SwitchingKeyKind::Relinearization {
             return Err(BgvError::WrongSwitchingKey.into());
         }
-        if shape != &self.input || slots != self.slots || banks != self.banks {
+        if shape != &self.input
+            || slots != self.slots
+            || banks != self.banks
+            || selection != self.selection
+        {
             return Err(UpperDigitsError::Source);
         }
         Ok(())
@@ -522,7 +548,7 @@ impl EncryptedUpperDigitsPlan {
                 }
                 Operation::AddPlain(a, c) => {
                     let plaintext =
-                        self.scalar_plaintext(profile, get(a)?.plaintext_precision(), c)?;
+                        Self::scalar_plaintext(profile, get(a)?.plaintext_precision(), c)?;
                     profile.add_plain(get(a)?, &plaintext)?
                 }
                 Operation::Negate(a) => profile.negate(get(a)?)?,
@@ -561,7 +587,6 @@ impl EncryptedUpperDigitsPlan {
     }
 
     fn scalar_plaintext(
-        &self,
         profile: &BgvProfile,
         precision: super::PlaintextPrecision,
         value: i64,
@@ -687,9 +712,7 @@ mod tests {
         if call == at && mode != 0 {
             FAULT.with(|v| v.set((usize::MAX, 0)));
             CLEARED_AT_FAULT.with(|v| v.set(poly::tests::cleared_words()));
-            if mode == 2 {
-                panic!("upper-digit owned-node unwind control");
-            }
+            assert_ne!(mode, 2, "upper-digit owned-node unwind control");
             return Err(UpperDigitsError::Program);
         }
         Ok(())
@@ -700,9 +723,10 @@ mod tests {
             return Ok(());
         }
         CLEARED_AT_FAULT.with(|v| v.set(poly::tests::cleared_words()));
-        if mode == 2 {
-            panic!("upper-digit partial in-place division unwind control");
-        }
+        assert_ne!(
+            mode, 2,
+            "upper-digit partial in-place division unwind control"
+        );
         Err(UpperDigitsError::Program)
     }
 
@@ -724,28 +748,30 @@ mod tests {
             .rev()
             .fold(BigInt::from(0), |a, &w| (a << 64) + w)
     }
-    fn inverse(x: &BigInt, m: &BigInt) -> BigInt {
-        let (mut a, mut b) = (x.clone(), m.clone());
-        let (mut u, mut v) = (BigInt::from(1), BigInt::from(0));
-        while b != BigInt::from(0) {
-            let q = &a / &b;
-            let r = &a - &q * &b;
-            a = b;
-            b = r;
-            let w = &u - &q * &v;
-            u = v;
-            v = w;
+    fn inverse(input: &BigInt, modulus: &BigInt) -> BigInt {
+        let (mut remainder, mut divisor) = (input.clone(), modulus.clone());
+        let (mut coefficient, mut successor) = (BigInt::from(1), BigInt::from(0));
+        while divisor != BigInt::from(0) {
+            let quotient = &remainder / &divisor;
+            let residual = &remainder - &quotient * &divisor;
+            remainder = divisor;
+            divisor = residual;
+            let following = &coefficient - &quotient * &successor;
+            coefficient = successor;
+            successor = following;
         }
-        assert_eq!(a, BigInt::from(1));
-        rem(u, m)
+        assert_eq!(remainder, BigInt::from(1));
+        rem(coefficient, modulus)
     }
     fn pow(mut x: u64, mut e: u64, m: u64) -> u64 {
         let mut y = 1;
         while e != 0 {
             if e & 1 != 0 {
-                y = (u128::from(y) * u128::from(x) % u128::from(m)) as u64;
+                y = u64::try_from(u128::from(y) * u128::from(x) % u128::from(m))
+                    .expect("canonical residue fits u64");
             }
-            x = (u128::from(x) * u128::from(x) % u128::from(m)) as u64;
+            x = u64::try_from(u128::from(x) * u128::from(x) % u128::from(m))
+                .expect("canonical residue fits u64");
             e >>= 1;
         }
         y
@@ -768,7 +794,8 @@ mod tests {
                 value += (u128::from(x) * u128::from(pow(encoding.root(), exponent as u64, t)))
                     % u128::from(t);
             }
-            out[k * encoding.stride()] = (value * u128::from(inv) % u128::from(t)) as u64;
+            out[k * encoding.stride()] = u64::try_from(value * u128::from(inv) % u128::from(t))
+                .expect("canonical residue fits u64");
         }
         out
     }
@@ -853,7 +880,9 @@ mod tests {
                 self.values = vec![Vec::new(); plan.nodes.len()];
                 self.phases = vec![Vec::new(); plan.nodes.len()];
             }
-            let reduce = |x: i128| x.rem_euclid(i128::from(t)) as u64;
+            let reduce = |x: i128| {
+                u64::try_from(x.rem_euclid(i128::from(t))).expect("canonical residue fits u64")
+            };
             let expected: Vec<u64> = match node.operation {
                 Operation::Input => (0..plan.slots)
                     .map(|j| self.coefficients[self.bank + plan.banks * j])
@@ -1030,7 +1059,7 @@ mod tests {
             }
             x = (x - digit) / p;
         }
-        x.rem_euclid(modulus) as u64
+        u64::try_from(x.rem_euclid(modulus)).expect("retained residue fits u64")
     }
 
     #[test]
@@ -1090,7 +1119,8 @@ mod tests {
                     assert_eq!(oracle.checks, 8 * plan.nodes.len());
                     assert_eq!(
                         oracle.divisions,
-                        8 * plan.operations.exact_divisions as usize
+                        8 * usize::try_from(plan.operations.exact_divisions)
+                            .expect("fixture division count fits usize")
                     );
                     total_divisions += oracle.divisions;
                 });
@@ -1398,6 +1428,7 @@ mod tests {
             &levels(3),
             budget(),
             BankRetention::Streaming,
+            CoefficientBankSelection::All,
         )
         .unwrap();
         let incoming_words = 2 * f.profile.degree() * (plan.input.level() + 1);
@@ -1408,6 +1439,7 @@ mod tests {
             plan.output_shape(),
             transform_budget(),
             BankRetention::Streaming,
+            CoefficientBankSelection::All,
         )
         .unwrap();
         for (at, division) in [
@@ -1418,13 +1450,13 @@ mod tests {
         ] {
             for mode in [1, 2] {
                 reset();
-                let plain =
+                let plaintext =
                     Plaintext::new(&f.profile, f.profile.master_plaintext(), (0..16).collect())
                         .unwrap();
                 let input = fixtures::encrypt(
                     &f.profile,
                     &f.keys.public,
-                    &plain,
+                    &plaintext,
                     &mut FixtureEntropy::new([225; 64]),
                 )
                 .unwrap();
@@ -1478,6 +1510,97 @@ mod tests {
                 }
             }
         }
+        reset();
+    }
+    #[test]
+    fn selected_upper_keeps_geometric_stride_and_refuses_equal_shape_selection_mismatch() {
+        reset();
+        let f = Fixture::new(3);
+        let source_shape = f.profile.plan_fresh(f.profile.master_plaintext()).unwrap();
+        let selected = super::super::CoefficientSlotDecomposition::prepare(
+            &f.profile,
+            &source_shape,
+            transform_budget(),
+            BankRetention::Collected,
+            CoefficientBankSelection::Zero,
+        )
+        .unwrap();
+        let plaintext =
+            Plaintext::new(&f.profile, f.profile.master_plaintext(), (0..16).collect()).unwrap();
+        let cipher = fixtures::encrypt(
+            &f.profile,
+            &f.keys.public,
+            &plaintext,
+            &mut FixtureEntropy::new([231; 64]),
+        )
+        .unwrap();
+        let banks = selected
+            .evaluate(&f.profile, cipher, &f.keys.evaluation)
+            .unwrap();
+        let plan = EncryptedUpperDigitsPlan::new(
+            &f.profile,
+            program(5, 3, 1),
+            &banks,
+            &levels(3),
+            budget(),
+        )
+        .unwrap();
+        assert_eq!(plan.banks(), 8);
+        assert_eq!(plan.selected_banks(), 1);
+        assert_eq!(plan.slots(), 2);
+        assert_eq!(plan.selection(), CoefficientBankSelection::Zero);
+        assert_eq!(
+            plan.preflight_bank(
+                &f.profile,
+                plan.input_shape(),
+                2,
+                8,
+                CoefficientBankSelection::All,
+                f.keys.evaluation.relinearization()
+            ),
+            Err(UpperDigitsError::Source)
+        );
+        assert_eq!(
+            plan.preflight_bank(
+                &f.profile,
+                plan.input_shape(),
+                2,
+                1,
+                CoefficientBankSelection::Zero,
+                f.keys.evaluation.relinearization()
+            ),
+            Err(UpperDigitsError::Source)
+        );
+        assert_eq!(CALLS.with(Cell::get), 0);
+        let result = plan
+            .evaluate(&f.profile, banks, f.keys.evaluation.relinearization())
+            .unwrap();
+        assert_eq!(result.geometry_banks(), 8);
+        assert_eq!(result.banks().len(), 1);
+        assert_eq!(result.selection(), CoefficientBankSelection::Zero);
+        // Bank0 carries coefficients0 and8; balanced upper two digits maps both to0.
+        let actual = phase(&f.profile, f.keys.secret.coefficients(), &result.banks()[0]);
+        assert!(
+            actual
+                .iter()
+                .all(|x| rem(x.clone(), &BigInt::from(5)) == BigInt::from(0))
+        );
+        let mut wrong = budget();
+        wrong.canonical_arithmetic_units = plan.payload().preallocation_arithmetic_units - 1;
+        assert!(
+            EncryptedUpperDigitsPlan::from_shape(
+                &f.profile,
+                program(5, 3, 1),
+                plan.input_shape(),
+                2,
+                8,
+                &levels(3),
+                wrong,
+                BankRetention::Collected,
+                CoefficientBankSelection::Zero
+            )
+            .is_err()
+        );
         reset();
     }
 }

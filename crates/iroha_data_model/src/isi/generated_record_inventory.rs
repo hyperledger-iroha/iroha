@@ -927,19 +927,14 @@ record!(
     "iroha_data_model::isi::repo::ReverseRepoIsi"
 );
 record!(
-    runtime_upgrade_activate_runtime_upgrade,
-    crate::isi::runtime_upgrade::ActivateRuntimeUpgrade,
-    "iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade"
+    runtime_upgrade_attest_runtime_support_v1,
+    crate::isi::runtime_upgrade::AttestRuntimeSupportV1,
+    "iroha_data_model::isi::runtime_upgrade::AttestRuntimeSupportV1"
 );
 record!(
-    runtime_upgrade_cancel_runtime_upgrade,
-    crate::isi::runtime_upgrade::CancelRuntimeUpgrade,
-    "iroha_data_model::isi::runtime_upgrade::CancelRuntimeUpgrade"
-);
-record!(
-    runtime_upgrade_propose_runtime_upgrade,
-    crate::isi::runtime_upgrade::ProposeRuntimeUpgrade,
-    "iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade"
+    runtime_upgrade_contain_runtime_v1,
+    crate::isi::runtime_upgrade::ContainRuntimeV1,
+    "iroha_data_model::isi::runtime_upgrade::ContainRuntimeV1"
 );
 record!(
     rwa_force_transfer_rwa,

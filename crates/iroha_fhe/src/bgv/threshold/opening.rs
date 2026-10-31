@@ -122,7 +122,7 @@ impl ThresholdSelection<'_> {
     ) -> Result<Plaintext, ThresholdOpeningError> {
         let result = self
             .validate_opening(profile, ciphertext, &shares, max_secret_bytes)
-            .and_then(|()| self.open_validated(profile, ciphertext, &shares));
+            .and_then(|()| Self::open_validated(profile, ciphertext, &shares));
         match result {
             Ok(plaintext) => Ok(plaintext),
             Err(reason) => Err(ThresholdOpeningError { reason, shares }),
@@ -193,7 +193,6 @@ impl ThresholdSelection<'_> {
     }
 
     fn open_validated(
-        &self,
         profile: &BgvProfile,
         ciphertext: &Ciphertext,
         shares: &[SubsetSecretKeyShare],
@@ -349,8 +348,9 @@ mod tests {
             ThresholdError::Bgv(BgvError::LevelOutOfRange { level: 2, top: 1 })
         );
         (_, local) = error.into_parts();
-        let plain = Plaintext::constant(&profile, profile.master_plaintext(), 1).expect("plain");
-        let valid = Ciphertext::trivial(&profile, &plain, 0).expect("valid cipher");
+        let plaintext =
+            Plaintext::constant(&profile, profile.master_plaintext(), 1).expect("plain");
+        let valid = Ciphertext::trivial(&profile, &plaintext, 0).expect("valid cipher");
         local[0].words = RnsPoly::zero(6, 8);
         let error = plan
             .open_local(&profile, &valid, local, usize::MAX)

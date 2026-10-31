@@ -49,14 +49,14 @@ fn compile(program: &HiddenRamFheProgram) -> RamLfeBgvNonlinearCompilerV1 {
 
 fn lanes(seed: u16) -> RamLfeInitialMemoryV1 {
     RamLfeInitialMemoryV1::from_lanes(&std::array::from_fn::<_, 32, _>(|i| {
-        ((u32::from(seed) + i as u32 * 29) % 257) as u16
+        ((u32::from(seed) + u32::try_from(i).unwrap() * 29) % 257) as u16
     }))
     .unwrap()
 }
 
 fn input(seed: u8) -> RamLfeReferenceInputV1 {
     RamLfeReferenceInputV1::from_bytes(&std::array::from_fn::<_, 63, _>(|i| {
-        seed.wrapping_add((i * 31) as u8)
+        seed.wrapping_add(u8::try_from(i * 31 % 256).unwrap())
     }))
     .unwrap()
 }
@@ -125,7 +125,7 @@ fn scalar(
             }
             sum = (sum + u32::from(coefficient) * u32::from(banks[source])) % 257;
         });
-        sum as u16
+        u16::try_from(sum).unwrap()
     })
 }
 
@@ -144,11 +144,13 @@ fn assert_all_boundaries(
     for gate in 0..normal.gate_count() {
         let operands = std::array::from_fn::<_, 3, _>(|operand| {
             normal.gate_operand(gate, operand).map_or(0, |form| {
-                form.iter()
-                    .zip(values.iter())
-                    .fold(0_u32, |sum, (&coefficient, &value)| {
+                u16::try_from(form.iter().zip(values.iter()).fold(
+                    0_u32,
+                    |sum, (&coefficient, &value)| {
                         (sum + u32::from(coefficient) * u32::from(value)) % 257
-                    }) as u16
+                    },
+                ))
+                .unwrap()
             })
         });
         let kind = normal.gate_kind(gate).unwrap();
@@ -210,9 +212,12 @@ fn plan<const O: usize>(profile: &BgvProfile) -> SlotLinearPlan<21, O> {
     let slots = SlotEncoding::new(profile, profile.master_plaintext())
         .unwrap()
         .slots();
-    let one = CostModel::new(profile)
-        .ciphertext_residue_bytes(profile.top_level(), 2)
-        .unwrap() as usize;
+    let one = usize::try_from(
+        CostModel::new(profile)
+            .ciphertext_residue_bytes(profile.top_level(), 2)
+            .unwrap(),
+    )
+    .unwrap();
     let layout = if slots == 128 && profile.master_plaintext_modulus() == 257 {
         RamLfeBgvNonlinearShapeV1::Bounded
             .build_layout::<21, O>(
@@ -307,7 +312,8 @@ fn same_compiler_uses_current_lanes_for_all257_conditions_and_snapshots() {
     let input = input(251);
     let mut first = None;
     for condition in 0..=256 {
-        let mut values = std::array::from_fn::<_, 32, _>(|i| ((i * 37 + 256) % 257) as u16);
+        let mut values =
+            std::array::from_fn::<_, 32, _>(|i| u16::try_from((i * 37 + 256) % 257).unwrap());
         values[0] = condition;
         let memory = RamLfeInitialMemoryV1::from_lanes(&values).unwrap();
         let result = assert_matches(&compiler, &program, &input, &memory);
@@ -315,7 +321,8 @@ fn same_compiler_uses_current_lanes_for_all257_conditions_and_snapshots() {
             first = Some(result);
         }
     }
-    let mut values = std::array::from_fn::<_, 32, _>(|i| ((i * 37 + 256) % 257) as u16);
+    let mut values =
+        std::array::from_fn::<_, 32, _>(|i| u16::try_from((i * 37 + 256) % 257).unwrap());
     values[0] = 0;
     assert_eq!(
         assert_matches(
@@ -350,7 +357,7 @@ fn select_waits_for_late_branches_and_condition_and_retains_product_by_one() {
         assert_matches(
             &compiler,
             &program,
-            &input(condition as u8),
+            &input(u8::try_from(condition % 256).unwrap()),
             &lanes(condition),
         );
     }
@@ -551,16 +558,15 @@ fn public_support_is_complete_fixed_and_rejects_future_and_bias_coefficients() {
             let row = operand * PHYSICAL + physical;
             for column in 0..=ROW_CELLS {
                 let form =
-                    column >= BASE_BANK && column <= ONE || column < 10 * gate && column % 10 == 9;
+                    (BASE_BANK..=ONE).contains(&column) || column < 10 * gate && column % 10 == 9;
                 let expected = gate < 255
                     && match (step, operand) {
                         (0, 0) => form || column == physical,
-                        (0, 1) => form,
+                        (0, 1) | (9, 1 | 2) => form,
                         (1..=8, 0) => column == physical - 1 || column == physical,
                         (1..=7, 1) => column == physical - 1 || column == ONE,
                         (8, 1) => column == ONE,
                         (9, 0) => form || column == physical - 1 || column == physical,
-                        (9, 1 | 2) => form,
                         _ => false,
                     };
                 let actual = layer.coefficient_index(row, column);
@@ -577,7 +583,7 @@ fn public_support_is_complete_fixed_and_rejects_future_and_bias_coefficients() {
     for row in 0..128 {
         for column in 0..=ROW_CELLS {
             let expected = row < 64
-                && (column >= BASE_BANK && column <= ONE || column < 2550 && column % 10 == 9);
+                && ((BASE_BANK..=ONE).contains(&column) || column < 2550 && column % 10 == 9);
             let actual = projection.coefficient_index(row, column);
             assert_eq!(actual.is_some(), expected);
             if expected {

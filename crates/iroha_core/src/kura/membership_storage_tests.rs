@@ -19,7 +19,7 @@ fn kura_with_limit(records: u64) -> Arc<Kura> {
     kura
 }
 
-#[cfg(all(unix, not(target_os = "espidf")))]
+#[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
 #[test]
 fn completed_range_retains_original_read_extent_and_releases_only_unwritten_tail() {
     let kura = kura_with_limit(4);
@@ -103,7 +103,7 @@ fn completed_range_retains_original_read_extent_and_releases_only_unwritten_tail
     );
 }
 
-#[cfg(all(unix, not(target_os = "espidf")))]
+#[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
 #[test]
 fn range_refusal_preserves_capacity_and_drop_marks_abandoned_without_refund() {
     let kura = kura_with_limit(2);
@@ -148,7 +148,7 @@ fn range_refusal_preserves_capacity_and_drop_marks_abandoned_without_refund() {
     ));
 }
 
-#[cfg(all(unix, not(target_os = "espidf")))]
+#[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
 #[test]
 fn actual_global_disk_budget_counts_pending_and_transferred_segment_bytes_once() {
     let mut kura = kura_with_limit(4);
@@ -217,7 +217,7 @@ fn segment_control_is_exactly_prepaid_and_released_after_its_actual_owner() {
     ));
 }
 
-#[cfg(all(unix, not(target_os = "espidf")))]
+#[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
 #[test]
 fn empty_and_partial_existing_segments_require_authenticated_restart_recovery() {
     for bytes in [Vec::new(), vec![0x41; 17], vec![0x52; 184]] {
@@ -237,7 +237,7 @@ fn empty_and_partial_existing_segments_require_authenticated_restart_recovery() 
     }
 }
 
-#[cfg(all(unix, not(target_os = "espidf")))]
+#[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
 #[test]
 fn range_unwind_retains_original_pending_bytes_and_never_reopens_an_attempt() {
     let kura = kura_with_limit(2);
@@ -303,7 +303,95 @@ fn original_descriptor_rejects_substitution_symlinks_and_extra_links() {
     }
 }
 
-#[cfg(all(unix, not(target_os = "espidf")))]
+#[cfg(windows)]
+#[test]
+fn native_original_pins_root_and_segment_and_refuses_extra_links() {
+    let kura = kura_with_limit(2);
+    let range = kura
+        .reserve_membership_range(2)
+        .expect("original native range");
+    range.write_at(0, &[0x28; 184]).expect("original bytes");
+    let root = &kura.store_root_directory;
+    assert_eq!(
+        root.native_owner.identity().unwrap(),
+        iroha_fs::FileMetadata::of(&root.file).unwrap().identity()
+    );
+    assert!(
+        std::fs::rename(
+            &kura.store_root,
+            kura.store_root.with_extension("displaced")
+        )
+        .is_err()
+    );
+    let path = kura.store_root.join(SEGMENT_NAME);
+    let saved = kura.store_root.join("original-membership-forensics");
+    assert!(std::fs::rename(&path, &saved).is_err());
+    std::fs::hard_link(&path, &saved).expect("actual foreign extra link");
+    let mut bytes = [0; 184];
+    assert!(matches!(
+        range.read_exact(0, &mut bytes),
+        Err(MembershipStorageError::NamespaceChanged)
+    ));
+    assert!(matches!(
+        range.write_at(184, &[1; 184]),
+        Err(MembershipStorageError::NamespaceChanged)
+    ));
+    assert!(matches!(
+        range.sync_data(),
+        Err(MembershipStorageError::NamespaceChanged)
+    ));
+    assert_eq!(std::fs::read(&saved).unwrap(), [0x28; 184]);
+    assert_eq!(kura.membership_storage.pending_bytes(), 184);
+}
+
+#[cfg(windows)]
+#[test]
+fn native_original_refuses_foreign_acl_without_repair_or_capacity_refund() {
+    let kura = kura_with_limit(2);
+    let range = kura
+        .reserve_membership_range(2)
+        .expect("original native range");
+    range.write_at(0, &[0x52; 184]).expect("original bytes");
+    let path = kura.store_root.join(SEGMENT_NAME);
+    let grant = std::process::Command::new("icacls.exe")
+        .arg(&path)
+        .args(["/grant", "*S-1-1-0:(R)"])
+        .output()
+        .unwrap();
+    assert!(
+        grant.status.success(),
+        "{}",
+        String::from_utf8_lossy(&grant.stderr)
+    );
+    let before = std::process::Command::new("icacls.exe")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(before.status.success());
+    let mut bytes = [0; 184];
+    assert!(matches!(
+        range.read_exact(0, &mut bytes),
+        Err(MembershipStorageError::NamespaceChanged)
+    ));
+    assert!(matches!(
+        range.write_at(184, &[1; 184]),
+        Err(MembershipStorageError::NamespaceChanged)
+    ));
+    assert!(matches!(
+        range.sync_data(),
+        Err(MembershipStorageError::NamespaceChanged)
+    ));
+    let after = std::process::Command::new("icacls.exe")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(after.status.success());
+    assert_eq!(before.stdout, after.stdout);
+    assert_eq!(std::fs::read(&path).unwrap(), [0x52; 184]);
+    assert_eq!(kura.membership_storage.pending_bytes(), 184);
+}
+
+#[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
 #[test]
 fn external_length_change_is_not_adopted_as_a_completed_or_free_extent() {
     let kura = kura_with_limit(3);
@@ -328,13 +416,17 @@ fn external_length_change_is_not_adopted_as_a_completed_or_free_extent() {
     assert_eq!(kura.membership_storage.pending_bytes(), 368);
 }
 
-#[cfg(all(unix, not(target_os = "espidf")))]
+#[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
 #[test]
 fn post_write_metadata_failure_recovers_only_its_exact_original_pending_request() {
     use super::super::{
         PHYSICAL_RESOURCE_FAMILIES, ResourceFamily, resource_inventory::Unavailable,
     };
-    use std::{os::unix::fs::FileExt as _, sync::mpsc, time::Duration};
+    use std::{
+        io::{Seek as _, SeekFrom, Write as _},
+        sync::mpsc,
+        time::Duration,
+    };
 
     for (corrupt, grow) in [(false, false), (true, false), (false, true)] {
         let kura = kura_with_limit(4);
@@ -440,11 +532,15 @@ fn post_write_metadata_failure_recovers_only_its_exact_original_pending_request(
 
         if corrupt || grow {
             if corrupt {
-                std::fs::OpenOptions::new()
+                let mut foreign = std::fs::OpenOptions::new()
                     .write(true)
                     .open(kura.store_root.join(SEGMENT_NAME))
-                    .expect("foreign writer")
-                    .write_all_at(&[0x99; 184], 184)
+                    .expect("foreign writer");
+                foreign
+                    .seek(SeekFrom::Start(184))
+                    .expect("exact pending offset");
+                foreign
+                    .write_all(&[0x99; 184])
                     .expect("foreign pending prefix only");
             }
             let rejected_bytes = std::fs::read(kura.store_root.join(SEGMENT_NAME))
@@ -537,7 +633,7 @@ fn post_write_metadata_failure_recovers_only_its_exact_original_pending_request(
     }
 }
 
-#[cfg(all(unix, not(target_os = "espidf")))]
+#[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
 #[test]
 fn original_range_wait_tracks_completion_and_abandonment_after_outer_cleanup() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -637,7 +733,7 @@ fn original_range_wait_tracks_completion_and_abandonment_after_outer_cleanup() {
     }
 }
 
-#[cfg(not(all(unix, not(target_os = "espidf"))))]
+#[cfg(not(any(windows, all(unix, not(target_os = "espidf")))))]
 #[test]
 fn unsupported_descriptor_platform_refuses_without_an_alternate_file_path() {
     let kura = kura_with_limit(1);

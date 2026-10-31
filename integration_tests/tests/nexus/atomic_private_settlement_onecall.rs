@@ -23,6 +23,49 @@ mod wallet;
 /// renew this original hour. This is a diagnostic limit, not a production performance claim.
 const COLD_CASE_LIMIT: Duration = Duration::from_secs(60 * 60);
 
+/// Public bindings of original proved material before committee availability exists.
+#[derive(Clone, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "integration_tests::private_onecall::ProvisionalPublic")]
+pub(super) struct ProvisionalPublic {
+    intent: PrivateSettlementProofIntentV1,
+    material_digests: Vec<Hash>,
+    proof_lengths: Vec<u64>,
+}
+impl ProvisionalPublic {
+    fn from_materials(materials: &[PrivateSettlementProvisionalLegMaterialV1]) -> Result<Self> {
+        ensure!(materials.len() == PARTICIPANT_COUNT);
+        let first = materials
+            .first()
+            .ok_or_else(|| eyre!("missing original material"))?;
+        let value = Self {
+            intent: first.manifest.proof_intent(),
+            material_digests: materials
+                .iter()
+                .map(PrivateSettlementProvisionalLegMaterialV1::payload_digest)
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            proof_lengths: materials
+                .iter()
+                .map(|material| material.proof.len() as u64)
+                .collect(),
+        };
+        value.validate_intent(&first.manifest.proof_intent())?;
+        Ok(value)
+    }
+
+    fn validate_intent(&self, intent: &PrivateSettlementProofIntentV1) -> Result<()> {
+        ensure!(
+            self.intent == *intent,
+            "provisional report replaced original payment terms"
+        );
+        ensure!(
+            self.material_digests.len() == PARTICIPANT_COUNT
+                && self.proof_lengths == vec![2_527_280; PARTICIPANT_COUNT],
+            "provisional report omitted genuine original proof material"
+        );
+        Ok(())
+    }
+}
+
 pub(super) fn intent(
     network: iroha_data_model::NetworkId,
     height: u64,
@@ -44,7 +87,11 @@ pub(super) fn intent(
         digest,
         expiry,
         private_settlement_reimbursement_terms_salt_for_terms(
-            network, height, expiry, digest, first,
+            network,
+            height,
+            expiry,
+            digest,
+            &first.governance,
         ),
     )?;
     Ok(PrivateSettlementProofIntentV1::new(
@@ -156,6 +203,43 @@ pub(super) enum N3SdkFlow {
     Cold(ColdFlow),
 }
 impl N3SdkFlow {
+    pub(super) fn prepare_only_and_reopen(&self, runtime: &tokio::runtime::Runtime) -> Result<()> {
+        let Self::Cold(flow) = self else {
+            return Ok(());
+        };
+        let (prepared, _) = flow.invoke(runtime, child::Mode::PrepareOnly, None)?;
+        ensure!(prepared.provisional.is_some() && prepared.prepared.is_none());
+        let (cached, _) = flow.invoke_once(runtime, child::Mode::PrepareCached, None)?;
+        ensure!(cached.provisional == prepared.provisional && cached.prepared.is_none());
+        ensure!(
+            flow.public.borrow().is_none(),
+            "preparation must not fabricate availability"
+        );
+        Ok(())
+    }
+
+    pub(super) fn require_cached_terminal(
+        &self,
+        runtime: &tokio::runtime::Runtime,
+        sponsor: &Client,
+        barrier: &PrivateSettlementPrepareBarrierV1,
+        original: &VerifiedPrivateSettlementReceipt,
+    ) -> Result<()> {
+        let Self::Cold(flow) = self else {
+            return Ok(());
+        };
+        for mode in [child::Mode::FinishCached, child::Mode::RecoverCached] {
+            let (_, verified) = flow.invoke_once(runtime, mode, Some((sponsor, barrier)))?;
+            ensure!(
+                verified
+                    .as_ref()
+                    .is_some_and(|receipt| receipt.receipt() == original.receipt()),
+                "zero-read cached continuation replaced the original verified receipt"
+            );
+        }
+        Ok(())
+    }
+
     pub(super) fn new(
         cold: bool,
         network: &Network,
@@ -163,7 +247,6 @@ impl N3SdkFlow {
         governed: Vec<GovernedLeg>,
         committees: &[CommitteeEndpoints],
         intent: &PrivateSettlementProofIntentV1,
-        policy_activation: u64,
     ) -> Result<Self> {
         let directory = tempfile::tempdir_in(network.env_dir())?.keep();
         PrivateDirectory::open_or_create(&directory)?;
@@ -176,7 +259,7 @@ impl N3SdkFlow {
                 network,
                 sponsor,
                 intent.clone(),
-                policy_activation,
+                wallet::original_openings(&governed),
                 endpoints,
                 directory,
             )?));
@@ -229,7 +312,7 @@ impl N3SdkFlow {
         match self {
             Self::Prepared { flow, .. } => flow.interrupt_after(runtime, step),
             Self::Cold(flow) => {
-                flow.invoke(runtime, child::Mode::Checkpoint(u8::try_from(step)?))?;
+                flow.invoke(runtime, child::Mode::Checkpoint(u8::try_from(step)?), None)?;
                 Ok(())
             }
         }
@@ -238,7 +321,7 @@ impl N3SdkFlow {
         match self {
             Self::Prepared { flow, .. } => flow.await_independent_audit(runtime),
             Self::Cold(flow) => {
-                flow.invoke(runtime, child::Mode::Unaudited)?;
+                flow.invoke(runtime, child::Mode::Unaudited, None)?;
                 let journal = flow.journal()?;
                 ensure!(
                     journal.steps[0].is_done()
@@ -342,7 +425,12 @@ impl N3SdkFlow {
         barrier: &PrivateSettlementPrepareBarrierV1,
     ) -> Result<VerifiedPrivateSettlementReceipt> {
         match self {
-            Self::Prepared { flow, .. } => Ok(flow.finish(runtime)?.receipt),
+            Self::Prepared { flow, .. } => match flow.finish(runtime)?.outcome {
+                iroha::client::VerifiedPrivateSettlementOutcome::Settled(receipt) => Ok(receipt),
+                iroha::client::VerifiedPrivateSettlementOutcome::Aborted(_) => {
+                    Err(eyre!("original payment aborted instead of settling"))
+                }
+            },
             Self::Cold(flow) => flow.verified(runtime, sponsor, barrier, child::Mode::Finish),
         }
     }
@@ -363,6 +451,7 @@ impl N3SdkFlow {
         }
         Ok(())
     }
+    #[cfg(unix)]
     pub(super) fn write_evidence(
         &self,
         root: &std::path::Path,
@@ -373,8 +462,8 @@ impl N3SdkFlow {
         };
         let children = flow.children.borrow();
         ensure!(
-            children.len() == 28,
-            "cold campaign requires twelve boundary children and sixteen post-restart recoveries"
+            children.len() == 33,
+            "cold campaign requires twelve boundary children, sixteen post-restart recoveries, three preparation children and two cached terminal children"
         );
         let mut files = Vec::new();
         let mut records = Vec::new();
@@ -414,7 +503,9 @@ impl N3SdkFlow {
             "original_case_limit_ms": (COLD_CASE_LIMIT.as_millis() as u64),
             "original_deadline_unix_ms": (flow.input.deadline_unix_ms),
             "child_report_bound_bytes": (child::CHILD_REPORT_MAX), "child_log_bound_bytes": (child::CHILD_LOG_MAX),
-            "read_only_before_every_continuation": true});
+            "read_only_before_every_continuation": true,
+            "wallet_owner": "FilePrivateSettlementWallet", "wallet_index_bound_bytes": (wallet::MAX_WALLET_INDEX_BYTES),
+            "wallet_physical_bound_bytes": (2 * (wallet::MAX_WALLET_INDEX_BYTES + 28))});
         files.push(write_smoke_evidence(
             root,
             "sdk-process-custody.json",
@@ -425,6 +516,89 @@ impl N3SdkFlow {
     }
 }
 
+// No wallet frame is decoded by the producer. The actual concrete owner authenticates it;
+// this state pins exact ciphertext across every nonsuccess restart and permits one terminal
+// replacement only after this parent's independent original-receipt verification succeeds.
+#[derive(Default)]
+enum WalletContinuity {
+    #[default]
+    Empty,
+    Pending(child::WalletSnapshot),
+    Consumed(child::WalletSnapshot),
+}
+impl WalletContinuity {
+    fn before(&self, snapshot: &child::WalletSnapshot) -> Result<()> {
+        let matches = match self {
+            Self::Empty => snapshot == &child::WalletSnapshot::default(),
+            Self::Pending(value) | Self::Consumed(value) => snapshot == value,
+        };
+        ensure!(
+            matches,
+            "original software wallet envelope changed between children"
+        );
+        Ok(())
+    }
+    fn observe(
+        &mut self,
+        before: &child::WalletSnapshot,
+        after: &child::WalletSnapshot,
+        stages: u64,
+        verified_success: bool,
+    ) -> Result<bool> {
+        self.before(before)?;
+        let next = match self {
+            Self::Empty if after == before => {
+                ensure!(stages == 0 && !verified_success);
+                return Ok(false);
+            }
+            Self::Empty => {
+                ensure!(
+                    stages == PARTICIPANT_COUNT as u64
+                        && !verified_success
+                        && after.lock
+                        && after.envelope.is_some(),
+                    "only original explicit preparation can stage software wallet inputs"
+                );
+                Self::Pending(after.clone())
+            }
+            Self::Pending(_) if !verified_success => {
+                ensure!(
+                    stages == 0 && before == after,
+                    "pending wallet changed without verified settlement"
+                );
+                return Ok(false);
+            }
+            Self::Pending(_) => {
+                let (before_length, before_hash) = before
+                    .envelope
+                    .ok_or_else(|| eyre!("original pending wallet absent"))?;
+                let (after_length, after_hash) = after
+                    .envelope
+                    .ok_or_else(|| eyre!("consumed wallet markers absent"))?;
+                ensure!(
+                    stages == 0
+                        && before.lock
+                        && after.lock
+                        && after_length < before_length
+                        && after_hash != before_hash,
+                    "verified cleanup must replace only live ciphertext with smaller durable input exclusions"
+                );
+                Self::Consumed(after.clone())
+            }
+            Self::Consumed(_) => {
+                ensure!(
+                    stages == 0 && verified_success && before == after,
+                    "consumed wallet changed or lost independently verified success"
+                );
+                return Ok(false);
+            }
+        };
+        let transition = matches!(next, Self::Consumed(_));
+        *self = next;
+        Ok(transition)
+    }
+}
+
 pub(super) struct ColdFlow {
     input: child::ChildInput,
     deadline: Instant,
@@ -432,16 +606,18 @@ pub(super) struct ColdFlow {
     pids: RefCell<Vec<u32>>,
     children: RefCell<Vec<(norito::json::Value, Vec<u8>, Vec<u8>, Vec<u8>)>>,
     public: RefCell<Option<PreparedPublic>>,
+    provisional: RefCell<Option<ProvisionalPublic>>,
     original_artifacts: RefCell<Option<Vec<(String, Hash)>>>,
     preparation_id: RefCell<Option<[u8; 32]>>,
     settlement_id: RefCell<Option<[u8; 32]>>,
+    wallet: RefCell<WalletContinuity>,
 }
 impl ColdFlow {
     fn new(
         network: &Network,
         sponsor: &Client,
         intent: PrivateSettlementProofIntentV1,
-        policy_activation: u64,
+        original_openings: Vec<wallet::OriginalOpening>,
         endpoints: Vec<Vec<Url>>,
         directory: PathBuf,
     ) -> Result<Self> {
@@ -457,12 +633,12 @@ impl ColdFlow {
         let key = zeroize::Zeroizing::new(rand::random::<[u8; 32]>());
         ensure!(key.iter().any(|b| *b != 0));
         let custody = PrivateDirectory::open_or_create(&directory)?;
-        for name in ["journals", "wallet-reservations", "encrypted-artifacts"] {
+        for name in ["journals", "software-wallet", "encrypted-artifacts"] {
             custody.create_child(name)?;
         }
         let input = child::ChildInput {
             intent,
-            policy_activation,
+            original_openings,
             original_genesis,
             pins,
             endpoint: sponsor.client().endpoint().to_string(),
@@ -498,9 +674,11 @@ impl ColdFlow {
             pids: RefCell::new(Vec::new()),
             children: RefCell::new(Vec::new()),
             public: RefCell::new(None),
+            provisional: RefCell::new(None),
             original_artifacts: RefCell::new(None),
             preparation_id: RefCell::new(None),
             settlement_id: RefCell::new(None),
+            wallet: RefCell::new(WalletContinuity::default()),
         })
     }
     fn journal(&self) -> Result<WorkflowJournalV1> {
@@ -520,18 +698,20 @@ impl ColdFlow {
         &self,
         runtime: &tokio::runtime::Runtime,
         mode: child::Mode,
-    ) -> Result<child::ChildReport> {
+        audit: Option<(&Client, &PrivateSettlementPrepareBarrierV1)>,
+    ) -> Result<(child::ChildReport, Option<VerifiedPrivateSettlementReceipt>)> {
         if mode != child::Mode::ReadOnly {
-            let read = self.invoke_once(runtime, child::Mode::ReadOnly)?;
-            ensure!(read.openings == 0 && read.reservations == 0);
+            let (read, _) = self.invoke_once(runtime, child::Mode::ReadOnly, audit)?;
+            ensure!(read.openings == 0 && read.stages == 0 && read.reservations == 0);
         }
-        self.invoke_once(runtime, mode)
+        self.invoke_once(runtime, mode, audit)
     }
     fn invoke_once(
         &self,
         runtime: &tokio::runtime::Runtime,
         mode: child::Mode,
-    ) -> Result<child::ChildReport> {
+        audit: Option<(&Client, &PrivateSettlementPrepareBarrierV1)>,
+    ) -> Result<(child::ChildReport, Option<VerifiedPrivateSettlementReceipt>)> {
         ensure!(
             Instant::now() < self.deadline,
             "original cold case deadline elapsed"
@@ -546,16 +726,18 @@ impl ColdFlow {
             .ok_or_else(|| eyre!("child sequence overflow"))?;
         let root = PrivateDirectory::open_or_create(&input.custody_path)?;
         let before = child::custody_snapshot(&root)?;
+        self.wallet.borrow().before(&before.wallet)?;
         let completed = child::spawn(runtime, &input, self.deadline)?;
         let report = completed.report;
-        if self.public.borrow().is_some() || mode == child::Mode::ReadOnly {
+        if self.provisional.borrow().is_some() || mode == child::Mode::ReadOnly {
             ensure!(
-                report.openings == 0 && report.reservations == 0,
+                report.openings == 0 && report.stages == 0 && report.reservations == 0,
                 "cold original recovery reopened wallet material or reserved again"
             );
         } else {
             ensure!(
-                mode == child::Mode::Checkpoint(0)
+                mode == child::Mode::PrepareOnly
+                    && report.stages == PARTICIPANT_COUNT as u64
                     && report.openings == PARTICIPANT_COUNT as u64
                     && report.reservations == PARTICIPANT_COUNT as u64,
                 "initial genuine proof preparation did not use exactly the original three wallet notes"
@@ -581,12 +763,55 @@ impl ColdFlow {
             }
         }
         let after = child::custody_snapshot(&root)?;
-        if mode == child::Mode::ReadOnly {
+        if mode.requires_unchanged_effects() {
             ensure!(
-                before == after,
+                before.effects == after.effects,
                 "read-only recovery changed wallet/artifact originals or journal effect identities"
             );
-            ensure!(report.openings == 0 && report.reservations == 0);
+            ensure!(report.openings == 0 && report.stages == 0 && report.reservations == 0);
+        }
+        let verified = if report.receipt.is_some() {
+            let (sponsor, barrier) = audit.ok_or_else(|| {
+                eyre!("successful child requires parent's original independent receipt audit")
+            })?;
+            Some(self.verify_report(runtime, sponsor, barrier, &report)?)
+        } else {
+            None
+        };
+        // No changed ciphertext becomes a trusted terminal snapshot before native finality,
+        // exact original execution and receipt terms have independently passed in this parent.
+        let wallet_transition = self.wallet.borrow_mut().observe(
+            &before.wallet,
+            &after.wallet,
+            report.stages,
+            verified.is_some(),
+        )?;
+        if let Some(provisional) = &report.provisional {
+            provisional.validate_intent(&self.input.intent)?;
+            let mut original = self.provisional.borrow_mut();
+            if let Some(original) = &*original {
+                ensure!(
+                    original == provisional,
+                    "cold resume replaced original proved material"
+                );
+            } else {
+                *original = Some(provisional.clone());
+            }
+            let artifacts = child::artifact_snapshot(&root)?;
+            let mut original = self.original_artifacts.borrow_mut();
+            if let Some(original) = &*original {
+                ensure!(
+                    *original == artifacts,
+                    "cold resume replaced encrypted originals"
+                );
+            } else {
+                *original = Some(artifacts);
+            }
+        } else {
+            ensure!(
+                self.provisional.borrow().is_none(),
+                "cold resume lost original proved material"
+            );
         }
         if let Some(prepared) = &report.prepared {
             prepared.validate_intent(&self.input.intent)?;
@@ -599,31 +824,24 @@ impl ColdFlow {
             } else {
                 *original = Some(prepared.clone());
             }
-            let artifacts = child::artifact_snapshot(&root)?;
-            let mut original = self.original_artifacts.borrow_mut();
-            if let Some(original) = &*original {
-                ensure!(
-                    *original == artifacts,
-                    "cold resume replaced encrypted originals"
-                );
-            } else {
-                *original = Some(artifacts);
-            }
         }
         let record = norito::json!({"sequence": (input.sequence), "mode": (mode.label()), "pid": (report.pid),
             "input_binding": (input.binding()?.to_string()), "report_sha256": (sha256_hex(&completed.report_bytes)),
             "report_bytes": (completed.report_bytes.len() as u64), "stdout_sha256": (sha256_hex(&completed.stdout)),
             "stderr_sha256": (sha256_hex(&completed.stderr)), "preparation_id": (hex::encode(report.preparation_id)),
             "settlement_id": (report.settlement_id.map(hex::encode)), "openings": (report.openings), "reservations": (report.reservations),
-            "read_only_custody_unchanged": (mode == child::Mode::ReadOnly),
-            "original_artifacts_unchanged": (report.prepared.is_some())});
+            "reconciliations": (report.reconciliations), "stages": (report.stages),
+            "wallet_consumption_transition": wallet_transition,
+            "read_only_effects_unchanged": (mode.requires_unchanged_effects()),
+            "finality_read_allowance": (mode.finality_read_allowance()),
+            "original_artifacts_unchanged": (report.provisional.is_some())});
         self.children.borrow_mut().push((
             record,
             completed.report_bytes,
             completed.stdout,
             completed.stderr,
         ));
-        Ok(report)
+        Ok((report, verified))
     }
     fn verified(
         &self,
@@ -632,21 +850,30 @@ impl ColdFlow {
         barrier: &PrivateSettlementPrepareBarrierV1,
         mode: child::Mode,
     ) -> Result<VerifiedPrivateSettlementReceipt> {
-        let report = self.invoke(runtime, mode)?;
+        let (_, verified) = self.invoke(runtime, mode, Some((sponsor, barrier)))?;
+        verified.ok_or_else(|| eyre!("child omitted independently verified original receipt"))
+    }
+    fn verify_report(
+        &self,
+        runtime: &tokio::runtime::Runtime,
+        sponsor: &Client,
+        barrier: &PrivateSettlementPrepareBarrierV1,
+        report: &child::ChildReport,
+    ) -> Result<VerifiedPrivateSettlementReceipt> {
         let receipt = report
             .receipt
+            .as_ref()
             .ok_or_else(|| eyre!("child omitted original verified receipt"))?;
         let evidence = report
             .evidence
-            .ok_or_else(|| eyre!("child omitted original successful execution evidence"))?;
+            .as_ref()
+            .ok_or_else(|| eyre!("child omitted original successful execution evidence"))?
+            .clone();
         let mut verifier = child::verifier(&self.input)?;
-        // Match the existing SDK's finite 64-read admission, without raising any resource cap.
+        // This independent fixture audit retains its original finite 64-read bound.
+        // SDK pending-prefix recovery can span calls; this audit never renews its budget.
         ensure!(
-            (2..=u64::from(
-                PrivateSettlementRunOptions::default()
-                    .max_finality_proof_reads
-                    .get()
-            ))
+            (2..=u64::from(PrivateSettlementRunOptions::default().max_finality_proof_reads))
                 .contains(&receipt.finalized_height)
         );
         let verified = runtime.block_on(async {
@@ -671,7 +898,7 @@ impl ColdFlow {
             .map_err(eyre::Report::new)
         })?;
         ensure!(
-            verified.receipt() == &receipt,
+            verified.receipt() == receipt,
             "reported receipt differs from independently verified successful execution"
         );
         Ok(verified)
@@ -691,4 +918,42 @@ fn cold_final_evidence_cannot_renew_or_outlive_original_deadline() {
     assert!(require_cold_deadline(Instant::now() + Duration::from_secs(60)).is_ok());
     assert!(require_cold_deadline(Instant::now()).is_err());
     assert!(require_cold_deadline(Instant::now() - Duration::from_secs(1)).is_err());
+}
+
+#[test]
+fn cold_wallet_continuity_allows_only_one_success_gated_envelope_transition() {
+    // These hashes test the producer's continuity gate only; no synthetic flag supplies
+    // protocol authority. The live caller passes true only after verify_report succeeds.
+    let empty = child::WalletSnapshot::default();
+    let pending = child::WalletSnapshot {
+        envelope: Some((100, Hash::new(b"pending"))),
+        lock: true,
+    };
+    let consumed = child::WalletSnapshot {
+        envelope: Some((60, Hash::new(b"consumed"))),
+        lock: true,
+    };
+    let mut state = WalletContinuity::default();
+    assert!(state.before(&pending).is_err());
+    assert!(!state.observe(&empty, &empty, 0, false).unwrap());
+    assert!(state.observe(&empty, &pending, 0, false).is_err());
+    assert!(
+        !state
+            .observe(&empty, &pending, PARTICIPANT_COUNT as u64, false)
+            .unwrap()
+    );
+    assert!(state.before(&consumed).is_err());
+    assert!(state.observe(&pending, &consumed, 0, false).is_err());
+    assert!(state.observe(&pending, &pending, 0, true).is_err());
+    assert!(!state.observe(&pending, &pending, 0, false).unwrap());
+    let growing = child::WalletSnapshot {
+        envelope: Some((101, Hash::new(b"replaced"))),
+        lock: true,
+    };
+    assert!(state.observe(&pending, &growing, 0, true).is_err());
+    assert!(state.observe(&pending, &consumed, 1, true).is_err());
+    assert!(state.observe(&pending, &consumed, 0, true).unwrap());
+    assert!(!state.observe(&consumed, &consumed, 0, true).unwrap());
+    assert!(state.observe(&consumed, &pending, 0, true).is_err());
+    assert!(state.observe(&consumed, &consumed, 0, false).is_err());
 }

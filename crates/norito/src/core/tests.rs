@@ -1051,6 +1051,82 @@ fn canonical_context_field_rejects_trailing_bytes_inside_declared_frame() {
     assert_eq!(offset, 0, "a non-canonical frame must not consume input");
 }
 #[test]
+fn context_field_fixed_arrays_fit_a_bounded_stack_without_allocating() {
+    for flags in [0, header_flags::COMPACT_LEN] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        let mut field = Vec::new();
+        serialize_to_buffer(&[[7_u64; 32]; 32], &mut field).expect("encode fixed arrays");
+        let mut payload = Vec::new();
+        write_len_to_vec_with_flags(&mut payload, field.len() as u64, flags);
+        payload.extend_from_slice(&field);
+        std::thread::Builder::new()
+            .name("norito-fixed-context-field".into())
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let _flags = DecodeFlagsGuard::enter(flags);
+                let limits = DecodeLimits::new(0, usize::MAX, 0, 0, 16);
+                let (result, usage) = with_decode_limits_measured(limits, || {
+                    let _context = PayloadCtxGuard::enter(&payload);
+                    let mut offset = 0;
+                    let decoded = decode_context_field_canonical::<[[u64; 32]; 32]>(
+                        payload.as_ptr(),
+                        &mut offset,
+                    )?;
+                    assert!(decoded.iter().flatten().all(|value| *value == 7));
+                    assert_eq!(offset, payload.len());
+                    finish_context_fields(payload.as_ptr(), offset)
+                });
+                result.expect("decode fixed arrays on bounded stack");
+                assert_eq!(usage.total_elements(), 0);
+                assert_eq!(usage.total_allocated_bytes(), 0);
+            })
+            .expect("start bounded-stack decoder")
+            .join()
+            .expect("bounded-stack decoder succeeds");
+    }
+}
+#[test]
+fn context_field_failure_drops_initialized_value_without_advancing() {
+    static DROPS: AtomicUsize = AtomicUsize::new(0);
+    #[derive(Debug)]
+    struct Probe;
+    impl SerializePayload for Probe {
+        fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error> {
+            0_u8.serialize(encoder)
+        }
+    }
+    impl<'de> DeserializePayload<'de> for Probe {
+        fn deserialize(_: &'de Archived<Self>) -> Self {
+            Self
+        }
+    }
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            DROPS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    for flags in [0, header_flags::COMPACT_LEN] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        for (field, accepted) in [(&[0][..], true), (&[1][..], false), (&[0, 1][..], false)] {
+            let mut payload = Vec::new();
+            write_len_to_vec_with_flags(&mut payload, field.len() as u64, flags);
+            payload.extend_from_slice(field);
+            let _context = PayloadCtxGuard::enter(&payload);
+            let before = DROPS.load(Ordering::Relaxed);
+            let mut offset = 0;
+            let result = decode_context_field_canonical::<Probe>(payload.as_ptr(), &mut offset);
+            assert_eq!(result.is_ok(), accepted);
+            assert_eq!(offset, if accepted { payload.len() } else { 0 });
+            if !accepted {
+                assert!(matches!(&result, Err(Error::LengthMismatch)));
+            }
+            drop(result);
+            assert_eq!(DROPS.load(Ordering::Relaxed), before + 1);
+        }
+    }
+}
+#[test]
 fn context_field_and_fixed_array_helpers_advance_exactly() {
     reset_decode_state();
     let first = String::from("alpha");

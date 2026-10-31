@@ -1184,7 +1184,9 @@ fn equation_bundle_digest_v1(
     let mut registry = DigestRegistryV1::with_capacity_v1(EQUATION_COUNT_V1)?;
     let mut records = [0_u8; EQUATION_COUNT_V1 * (1 + PROOF_DIGEST_BYTES_V1)];
     for (ordinal, (entry, digest)) in records
-        .chunks_exact_mut(1 + PROOF_DIGEST_BYTES_V1)
+        .as_chunks_mut::<{ 1 + PROOF_DIGEST_BYTES_V1 }>()
+        .0
+        .iter_mut()
         .zip(equation_commitment_digests)
         .enumerate()
     {
@@ -1208,7 +1210,9 @@ fn limb_bundle_digest_v1(
     let mut registry = DigestRegistryV1::with_capacity_v1(ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1)?;
     let mut records = [0_u8; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * (9 + PROOF_DIGEST_BYTES_V1)];
     for (limb, (entry, digest)) in records
-        .chunks_exact_mut(9 + PROOF_DIGEST_BYTES_V1)
+        .as_chunks_mut::<{ 9 + PROOF_DIGEST_BYTES_V1 }>()
+        .0
+        .iter_mut()
         .zip(limb_commitment_digests)
         .enumerate()
     {
@@ -1848,7 +1852,12 @@ fn aggregation_schedule_digest_v1(
     }
     const RECORD_BYTES: usize = 2 + 8 + 2 * 8 + 2;
     let mut records = [0_u8; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * REPETITION_COUNT_V1 * RECORD_BYTES];
-    for (ordinal, entry) in records.chunks_exact_mut(RECORD_BYTES).enumerate() {
+    for (ordinal, entry) in records
+        .as_chunks_mut::<RECORD_BYTES>()
+        .0
+        .iter_mut()
+        .enumerate()
+    {
         let limb = ordinal / REPETITION_COUNT_V1;
         let repetition = ordinal % REPETITION_COUNT_V1;
         let challenge = challenges[limb][repetition];

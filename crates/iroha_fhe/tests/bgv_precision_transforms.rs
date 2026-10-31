@@ -48,7 +48,9 @@ fn all_effective_precisions_route_and_trace_under_one_master_key_set() {
         elements.extend_from_slice(decomposition.galois_elements());
         elements.sort_unstable();
         elements.dedup();
-        let mut entropy = FixtureEntropy::new([81 + exponent as u8; 64]);
+        let mut entropy = FixtureEntropy::new(
+            [81 + u8::try_from(exponent).expect("fixture exponent fits u8"); 64],
+        );
         let keys = fixtures::key_set(&profile, &elements, &mut entropy).unwrap();
         for k in 1..=exponent {
             let precision = profile.plaintext_precision(k).unwrap();
@@ -62,7 +64,11 @@ fn all_effective_precisions_route_and_trace_under_one_master_key_set() {
             let plan =
                 SlotLinearPlan::<1, 1>::new(&profile, &[input.shape()], routing_budget()).unwrap();
             let matrix = [2, t - 1, 4, 3, 1, t - 2];
-            let owner = SlotLinearMap::new(&plan, &matrix.map(|x| x as u32)).unwrap();
+            let owner = SlotLinearMap::new(
+                &plan,
+                &matrix.map(|value| u32::try_from(value).expect("fixture modulus fits u32")),
+            )
+            .unwrap();
             let output = owner
                 .evaluate(&profile, &plan, &[input], &keys.evaluation)
                 .unwrap();

@@ -11,8 +11,10 @@ fn fi_link_revision_read_is_available_to_views_and_effectful_entrypoints() {
         let bytes = test_mode_compiler().compile_source(&source).unwrap();
         let parsed = ProgramMetadata::parse(&bytes).unwrap();
         let count = bytes[parsed.code_offset..]
-            .chunks_exact(4)
-            .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| u32::from_le_bytes(*v))
             .filter(|w| {
                 instruction::wide::opcode(*w) == instruction::wide::system::SYSTEM
                     && encoding::wide::decode_syscallx(*w)

@@ -186,7 +186,9 @@ impl QuotaWindowTree {
         let mut levels = Vec::with_capacity(QUOTA_DEPTH + 1);
         while level.len() > 1 {
             let next = level
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| hash_with_domain(QUOTA_NODE_DOMAIN, &[pair[0], pair[1]]))
                 .collect();
             levels.push(level);
@@ -265,7 +267,9 @@ impl<F: PoseidonField> QuotaUsageTree<F> {
         let mut levels = Vec::with_capacity(QUOTA_DEPTH + 1);
         while level.len() > 1 {
             let next = level
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| hash_with_domain(QUOTA_USAGE_NODE_DOMAIN, &[pair[0], pair[1]]))
                 .collect();
             levels.push(level);

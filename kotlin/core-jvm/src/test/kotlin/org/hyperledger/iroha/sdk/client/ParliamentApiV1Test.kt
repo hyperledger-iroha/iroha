@@ -474,9 +474,7 @@ class ParliamentApiV1Test {
     @Test
     fun proposalAdmissionRejectsMissingUnknownAndMalformedNestedFields() {
         val runtime = validProposal("RuntimeUpgrade")
-        @Suppress("UNCHECKED_CAST")
-        val manifest = (runtime["payload"] as MutableMap<String, Any?>)["manifest"] as MutableMap<String, Any?>
-        manifest.remove("provenance")
+        scheduledChangeSet(runtime).remove("qualification")
         assertFailsWith<IllegalArgumentException> {
             ParliamentApiV1.Proposal.fromJson(encode(runtime))
         }
@@ -523,11 +521,68 @@ class ParliamentApiV1Test {
         }
 
         val impreciseHeight = validProposal("RuntimeUpgrade")
-        @Suppress("UNCHECKED_CAST")
-        val impreciseManifest = (impreciseHeight["payload"] as MutableMap<String, Any?>)["manifest"] as MutableMap<String, Any?>
-        impreciseManifest["start_height"] = BigInteger("9007199254740992")
+        scheduledChangeSet(impreciseHeight)["effective_height"] = BigInteger("9007199254740992")
         assertFailsWith<IllegalArgumentException> {
             ParliamentApiV1.Proposal.fromJson(encode(impreciseHeight))
+        }
+    }
+
+    @Test
+    fun runtimeUpgradeAdmitsOnlyTheClosedChangeSetProposal() {
+        ParliamentApiV1.Proposal.fromJson(encode(validProposal("RuntimeUpgrade")))
+        val cancel = validProposal("RuntimeUpgrade")
+        runtimePayload(cancel)["action"] = linkedMapOf("kind" to "Cancel", "content" to "ab".repeat(32))
+        assertEquals("RuntimeUpgrade", ParliamentApiV1.Proposal.fromJson(encode(cancel)).kind)
+
+        val exactBound = BigInteger("9007199254740991")
+        val integerFields: List<Pair<String, (MutableMap<String, Any?>, Any) -> Unit>> = listOf(
+            "effective_height" to { proposal, value -> scheduledChangeSet(proposal)["effective_height"] = value },
+            "notice.blocks" to { proposal, value -> runtimeNotice(proposal)["blocks"] = value },
+            "notice.ms" to { proposal, value -> runtimeNotice(proposal)["ms"] = value },
+            "notice.approval_cushion_ms" to { proposal, value ->
+                runtimeNotice(proposal)["approval_cushion_ms"] = value
+            },
+            "proposed_ms" to { proposal, value -> runtimePayload(proposal)["proposed_ms"] = value },
+        )
+        integerFields.forEach { (field, set) ->
+            val bound = validProposal("RuntimeUpgrade").also { set(it, exactBound) }
+            ParliamentApiV1.Proposal.fromJson(encode(bound))
+            listOf<Any>(exactBound + BigInteger.ONE, -1, "20").forEach { invalid ->
+                val proposal = validProposal("RuntimeUpgrade").also { set(it, invalid) }
+                assertFailsWith<IllegalArgumentException>("accepted $field = $invalid") {
+                    ParliamentApiV1.Proposal.fromJson(encode(proposal))
+                }
+            }
+        }
+
+        val rejected: List<Pair<String, (MutableMap<String, Any?>) -> Unit>> = listOf(
+            "retired manifest" to { runtimePayload(it)["manifest"] = linkedMapOf<String, Any?>() },
+            "missing notice" to { runtimePayload(it).remove("notice") },
+            "unknown notice field" to { runtimeNotice(it)["start_height"] = 1 },
+            "retired activation" to {
+                runtimePayload(it)["action"] = linkedMapOf("kind" to "Activate", "content" to "ab".repeat(32))
+            },
+            "uppercase cancel id" to {
+                runtimePayload(it)["action"] = linkedMapOf("kind" to "Cancel", "content" to "AB".repeat(32))
+            },
+            "short cancel id" to {
+                runtimePayload(it)["action"] = linkedMapOf("kind" to "Cancel", "content" to "ab".repeat(31))
+            },
+            "cancel with a change set" to {
+                runtimePayload(it)["action"] = linkedMapOf("kind" to "Cancel", "content" to runtimeChangeSet())
+            },
+            "schedule with an id" to {
+                runtimePayload(it)["action"] = linkedMapOf("kind" to "Schedule", "content" to "ab".repeat(32))
+            },
+            "untagged change set" to { runtimePayload(it)["action"] = runtimeChangeSet() },
+            "unknown change-set field" to { scheduledChangeSet(it)["manifest"] = linkedMapOf<String, Any?>() },
+            "missing change-set field" to { scheduledChangeSet(it).remove("transitions") },
+        )
+        rejected.forEach { (case, edit) ->
+            val proposal = validProposal("RuntimeUpgrade").also(edit)
+            assertFailsWith<IllegalArgumentException>("accepted $case") {
+                ParliamentApiV1.Proposal.fromJson(encode(proposal))
+            }
         }
     }
 
@@ -1128,19 +1183,9 @@ class ParliamentApiV1Test {
             )
             "RuntimeUpgrade" -> linkedMapOf(
                 "proposal_operator" to account(1),
-                "manifest" to linkedMapOf(
-                    "name" to "runtime-v1",
-                    "description" to "first release runtime",
-                    "abi_version" to 1,
-                    "abi_hash" to List(32) { 1 },
-                    "added_syscalls" to emptyList<Any?>(),
-                    "added_pointer_types" to emptyList<Any?>(),
-                    "start_height" to 10,
-                    "end_height" to 20,
-                    "sbom_digests" to emptyList<Any?>(),
-                    "slsa_attestation" to "",
-                    "provenance" to emptyList<Any?>(),
-                ),
+                "action" to linkedMapOf("kind" to "Schedule", "content" to runtimeChangeSet()),
+                "notice" to linkedMapOf("blocks" to 5, "ms" to 0, "approval_cushion_ms" to 0),
+                "proposed_ms" to 1_788_181_200_000L,
             )
             "SccpRouteGovernance" -> linkedMapOf(
                 "proposal" to linkedMapOf(
@@ -1224,6 +1269,30 @@ class ParliamentApiV1Test {
         }
         return linkedMapOf("kind" to kind, "payload" to payload)
     }
+
+    /** Minimal universal-root change set; the SDK passes its contents through to node admission. */
+    private fun runtimeChangeSet(): MutableMap<String, Any?> = linkedMapOf(
+        "network" to networkId(),
+        "root" to linkedMapOf("kind" to "Universal", "content" to null),
+        "predecessor" to "01".repeat(32),
+        "successor" to "02".repeat(32),
+        "effective_height" to 20,
+        "publish" to emptyList<Any?>(),
+        "transitions" to emptyList<Any?>(),
+        "qualification" to "03".repeat(32),
+    )
+
+    @Suppress("UNCHECKED_CAST")
+    private fun runtimePayload(proposal: MutableMap<String, Any?>): MutableMap<String, Any?> =
+        proposal["payload"] as MutableMap<String, Any?>
+
+    @Suppress("UNCHECKED_CAST")
+    private fun scheduledChangeSet(proposal: MutableMap<String, Any?>): MutableMap<String, Any?> =
+        (runtimePayload(proposal)["action"] as MutableMap<String, Any?>)["content"] as MutableMap<String, Any?>
+
+    @Suppress("UNCHECKED_CAST")
+    private fun runtimeNotice(proposal: MutableMap<String, Any?>): MutableMap<String, Any?> =
+        runtimePayload(proposal)["notice"] as MutableMap<String, Any?>
 
     private fun monthlyFeePolicy(): MutableMap<String, Any?> = linkedMapOf(
         "schema_version" to 1,

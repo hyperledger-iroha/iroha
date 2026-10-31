@@ -22,8 +22,6 @@ fn retained_publication_preserves_the_signed_custom_chain_prefix() {
     assert_ne!(prefix, default_prefix);
     let profile = LocalnetServiceProfile::StreamTokenAuthorities;
     let options = LocalnetOptions {
-        service_profile: profile,
-        sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).unwrap(),
         seed: None,
@@ -37,16 +35,18 @@ fn retained_publication_preserves_the_signed_custom_chain_prefix() {
         block_cadence_ms: None,
         consensus_mode: SumeragiConsensusMode::Permissioned,
     };
-    // The existing managed generator supports an explicit prefix on the local chain.
-    crate::localnet::generate_localnet_runtime(
+    // The managed generator supports an explicit prefix on the local chain.
+    let request = crate::localnet::Request::new(
         &options,
-        &mut BufWriter::new(std::io::sink()),
         Some(DEFAULT_CHAIN_ID),
         Some(prefix),
-        true,
-        None,
+        crate::localnet::Mode::Managed {
+            publication_root: None,
+            service_profile: profile,
+        },
     )
     .unwrap();
+    crate::localnet::generate(&request).unwrap();
     let root = root.canonicalize().unwrap();
     let client_config = root.join("client.toml");
     let original_bytes = iroha_fs::read_private(&client_config, MAX_CLIENT_BYTES).unwrap();
@@ -111,16 +111,16 @@ fn native_publication_projection_requires_exact_staged_bound_genesis_manifest() 
             iroha_genesis::GENESIS_MANIFEST_JSON_MAX_BYTES_V1,
         )
         .unwrap();
-    validate_genesis_manifest_json(&bytes).unwrap();
+    iroha_genesis::validate_genesis_manifest_json(&bytes).unwrap();
     let bound =
         RawGenesisTransaction::from_json_slice_at_path(&bytes, root.join("genesis.json")).unwrap();
     let signed = directory
         .read("genesis.signed.nrt", SIGNED_GENESIS_MAX_BYTES_V1)
         .unwrap();
     let peer_bytes = directory.read("peer0.toml", MAX_CLIENT_BYTES).unwrap();
-    let peer = parse_localnet_peer_config(
+    let peer = config::parse_peer_config(
         std::str::from_utf8(&peer_bytes).unwrap(),
-        Some(&prepared.peers[0].config_path),
+        &prepared.peers[0].config_path,
     )
     .unwrap();
     let developer = prepared.context.load_client_config().unwrap().account;
@@ -129,7 +129,9 @@ fn native_publication_projection_requires_exact_staged_bound_genesis_manifest() 
     assert_eq!(binding.namespace.to_string(), NAMESPACE);
     let unbound = bound
         .clone()
-        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
+        .with_sumeragi_context_parameters(
+            iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended(),
+        )
         .with_consensus_meta()
         .unwrap();
     assert_ne!(
@@ -264,7 +266,7 @@ fn generated_client_uses_native_original_namespace_policy_and_exact_three_origin
             .client_config
             .parent()
             .unwrap()
-            .join(LOCALNET_RUNTIME_DIRECTORY)
+            .join(RUNTIME_DIRECTORY)
             .join(NAMESPACE_JOURNAL_DIRECTORY)
     );
     assert!(
@@ -277,7 +279,7 @@ fn generated_client_uses_native_original_namespace_policy_and_exact_three_origin
         .client_config
         .parent()
         .unwrap()
-        .join(LOCALNET_RUNTIME_DIRECTORY)
+        .join(RUNTIME_DIRECTORY)
         .join("publication-client");
     assert_eq!(
         original.publication_state_root(),
@@ -480,8 +482,8 @@ fn publication_client_refuses_each_endpoint_provider_policy_and_image_substituti
         swapped,
         replace_exact(
             text,
-            "web_login = \"mad_hatter\"",
-            "web_login = \"changed\"",
+            "status_timeout_ms = 300000",
+            "status_timeout_ms = 300001",
         ),
         format!("{text}\n# changed original image\n"),
     ];
@@ -530,13 +532,13 @@ fn standard_and_private_profiles_keep_publication_absent_and_reject_inserted_sec
         name,
     )
     .unwrap();
-    let spec = PrivateRootSpec {
+    let spec = crate::sora_network::PrivateRootSpec {
         parent_network_id: standard.context.network_id.parse().unwrap(),
         dataspace_id: DataSpaceId::from_hash(&selector.name_hash()),
         dataspace_alias: name.into(),
     };
     let ports = crate::managed::LocalnetPorts::reserve().unwrap();
-    let private = prepare_private_root(
+    let private = crate::sora_network::prepare_private_root(
         "publication-private",
         &temporary.path().join("private"),
         &ports,

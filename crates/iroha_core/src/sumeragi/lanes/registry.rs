@@ -246,7 +246,7 @@ impl LaneStores {
         _registry: &mut parking_lot::MutexGuard<'_, BTreeMap<(LaneId, [u8; 32]), StoreSlot>>,
     ) -> io::Result<u64> {
         self.registrations
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
                 last.checked_add(1)
             })
             .map(|last| last + 1)

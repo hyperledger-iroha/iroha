@@ -128,12 +128,11 @@ fn access_set_cache_get(key: &AccessSetCacheKey, manifest_hash: &IrohaHash) -> O
     let cache = access_set_cache();
     {
         let guard = cache.read();
-        if let Some(entry) = guard.get(key) {
+        {
+            let entry = guard.get(key)?;
             if entry.manifest_hash == *manifest_hash {
                 return Some(entry.set.clone());
             }
-        } else {
-            return None;
         }
     }
     let mut guard = cache.write();
@@ -1438,11 +1437,9 @@ fn access_set_from_hint_keys(
                     break;
                 }
             }
-            match parsed {
-                Some(key) => {
-                    canonical.push(CanonicalStateKey::AccountMetadata(key));
-                }
-                None => return None,
+            {
+                let key = parsed?;
+                canonical.push(CanonicalStateKey::AccountMetadata(key));
             }
             return Some(());
         }
@@ -1479,11 +1476,9 @@ fn access_set_from_hint_keys(
                     break;
                 }
             }
-            match parsed {
-                Some(key) => {
-                    canonical.push(CanonicalStateKey::AssetMetadata(key));
-                }
-                None => return None,
+            {
+                let key = parsed?;
+                canonical.push(CanonicalStateKey::AssetMetadata(key));
             }
             return Some(());
         }
@@ -1525,11 +1520,9 @@ fn access_set_from_hint_keys(
                     break;
                 }
             }
-            match parsed {
-                Some(key) => {
-                    canonical.push(CanonicalStateKey::AccountRole(key));
-                }
-                None => return None,
+            {
+                let key = parsed?;
+                canonical.push(CanonicalStateKey::AccountRole(key));
             }
             return Some(());
         }
@@ -1810,7 +1803,7 @@ where
             }
             SetKeyValueBox::Trigger(s) => {
                 set.add_read(key_trigger(&s.object));
-                set.add_write(format!("trigger.detail:{}:{}", &s.object, &s.key));
+                set.add_write(format!("trigger.detail:{}:{}", s.object, s.key));
             }
         }
         return set;
@@ -1831,7 +1824,7 @@ where
             }
             RemoveKeyValueBox::Trigger(r) => {
                 set.add_read(key_trigger(&r.object));
-                set.add_write(format!("trigger.detail:{}:{}", &r.object, &r.key));
+                set.add_write(format!("trigger.detail:{}:{}", r.object, r.key));
             }
         }
         return set;
@@ -2782,9 +2775,9 @@ mod tests {
             .collect();
         let mut callables = std::collections::BTreeMap::new();
         callables.insert(0, fixture_callable(code, 0));
-        for (index, bytes) in code.chunks_exact(4).enumerate() {
+        for (index, bytes) in code.as_chunks::<4>().0.iter().enumerate() {
             use ivm::instruction::wide;
-            let word = u32::from_le_bytes(bytes.try_into().expect("instruction word"));
+            let word = u32::from_le_bytes(*bytes);
             let offset = match wide::opcode(word) {
                 wide::control::JALS => i64::from(wide::imm24(word)),
                 wide::control::JAL if wide::rd(word) == 1 => i64::from(wide::imm16(word)),
@@ -5540,19 +5533,19 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             IvmStrategy::Conservative,
         );
         // Expect role registry touched and account-role binding keys written
-        assert!(set.read_keys.contains(&format!("role:{}", &role_id)));
+        assert!(set.read_keys.contains(&format!("role:{}", role_id)));
         assert!(
             set.write_keys
-                .contains(&format!("role.binding:{}:{}", &alice, &role_id))
+                .contains(&format!("role.binding:{}:{}", alice, role_id))
         );
         // Expect permission keys touched for account and role
         assert!(
             set.write_keys
-                .contains(&format!("perm.account:{}:{}", &alice, perm.name()))
+                .contains(&format!("perm.account:{}:{}", alice, perm.name()))
         );
         assert!(
             set.write_keys
-                .contains(&format!("perm.role:{}:{}", &role_id, perm.name()))
+                .contains(&format!("perm.role:{}:{}", role_id, perm.name()))
         );
         assert!(
             set.write_keys.contains(AUTHORIZATION_EPOCH_KEY),
@@ -5577,11 +5570,11 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             None,
             IvmStrategy::Conservative,
         );
-        assert!(set.read_keys.contains(&format!("trigger:{}", &trig)));
-        assert!(set.write_keys.contains(&format!("trigger:{}", &trig)));
+        assert!(set.read_keys.contains(&format!("trigger:{}", trig)));
+        assert!(set.write_keys.contains(&format!("trigger:{}", trig)));
         assert!(
             set.write_keys
-                .contains(&format!("trigger.repetitions:{}", &trig))
+                .contains(&format!("trigger.repetitions:{}", trig))
         );
     }
     #[test]
@@ -5752,7 +5745,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
                 .unwrap();
             let hints = AccessSetHints {
                 read_keys: vec!["state:trigger_hint_read".to_owned()],
-                write_keys: vec![format!("state:trigger_hint")],
+                write_keys: vec!["state:trigger_hint".to_string()],
                 dynamic_reads: Vec::new(),
                 dynamic_writes: Vec::new(),
             };

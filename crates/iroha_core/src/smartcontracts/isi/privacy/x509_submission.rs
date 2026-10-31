@@ -13,7 +13,7 @@ use iroha_data_model::{
 
 /// Execute an already-authorized request using its original signed attachment binding.
 /// No proof/cached-success token or generic direct-submission binding is accepted.
-pub(crate) fn execute_x509_submission(
+pub fn execute_x509_submission(
     request: &SubmitPrivacyZkX509CertificateV1,
     binding: &X509Binding,
     proof: &[u8],
@@ -174,7 +174,8 @@ fn select_current_state(
             .world
             .privacy_consensus_policy
             .get()
-            .current_limits.retained_root_count,
+            .current_limits
+            .retained_root_count,
         &state_transaction.world.privacy_commitments,
         &state_transaction.world.privacy_roots,
         &state_transaction.world.privacy_root_heads,

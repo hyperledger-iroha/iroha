@@ -2315,12 +2315,8 @@ where
             if read != take_bytes {
                 return Err(ZkAmsMkheCpkRelationErrorV1::DirectObject);
             }
-            for encoded in buffer[..read].chunks_exact(8) {
-                let residue = u64::from_be_bytes(
-                    encoded
-                        .try_into()
-                        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::NativeRelation)?,
-                );
+            for encoded in buffer[..read].as_chunks::<8>().0 {
+                let residue = u64::from_be_bytes(*encoded);
                 if residue >= modulus {
                     return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
                 }

@@ -11,6 +11,8 @@ use sha2::{Digest as _, Sha256};
 use super::{DescriptorBinding, SourceBoundVerifyingKeyV2, VerifyingKey, rebuild};
 use crate::{cs::CurveV1, keys::pk::artifact, pcs::ipa::PinnedParams};
 
+// Generated data with packaged byte identity; formatting it would change those bytes.
+#[rustfmt::skip]
 mod generated;
 
 const MAX_PROFILE_BYTES: usize = 32 << 20;
@@ -105,6 +107,7 @@ struct BuiltinProfileEntry {
 #[derive(Clone, Copy, Debug)]
 pub struct BuiltinSourceProfileV1 {
     entry: &'static BuiltinProfileEntry,
+    verify_sources: bool,
 }
 
 /// One role-specific member of a selected immutable compiled source graph.
@@ -112,6 +115,7 @@ pub struct BuiltinSourceProfileV1 {
 #[derive(Clone, Copy, Debug)]
 pub struct BuiltinSourceMemberV1 {
     entry: &'static BuiltinMemberEntry,
+    verify_source: bool,
 }
 
 // Only the all-original checks below construct this token. The separate seal
@@ -191,7 +195,10 @@ fn select_profile(
         return Err(BuiltinSourceErrorV1::ContractMismatch);
     }
     CancellationToken::checkpoint(cancellation)?;
-    Ok(BuiltinSourceProfileV1 { entry })
+    Ok(BuiltinSourceProfileV1 {
+        entry,
+        verify_sources: false,
+    })
 }
 
 impl BuiltinSourceProfileV1 {
@@ -214,6 +221,21 @@ impl BuiltinSourceProfileV1 {
         )
     }
 
+    /// The same profile, whose members also require every actual source to
+    /// reconstruct their pinned source fingerprint when they are admitted.
+    ///
+    /// Phones skip this witnessless synthesis at admission because each proof
+    /// rebuild repeats it. A build or installation check selects it so that a
+    /// circuit which differs from its installed key fails before shipping
+    /// instead of at that circuit's first proof on a device.
+    #[must_use]
+    pub const fn verifying_sources(self) -> Self {
+        Self {
+            verify_sources: true,
+            ..self
+        }
+    }
+
     /// Select an exact ordered role path within this profile only.
     /// Path words are public DATA, not authority or a globally meaningful key ID.
     /// # Errors
@@ -234,11 +256,27 @@ impl BuiltinSourceProfileV1 {
         if matches.next().is_some() {
             return Err(BuiltinSourceErrorV1::Member);
         }
-        Ok(BuiltinSourceMemberV1 { entry })
+        Ok(BuiltinSourceMemberV1 {
+            entry,
+            verify_source: self.verify_sources,
+        })
     }
 }
 
 impl BuiltinSourceMemberV1 {
+    /// Whether admission must also check the actual source against this member,
+    /// as selected by [`BuiltinSourceProfileV1::verifying_sources`].
+    #[must_use]
+    pub const fn verifies_source(self) -> bool {
+        self.verify_source
+    }
+
+    /// This member's exact ordered role path within its profile, for reports.
+    #[must_use]
+    pub const fn role_path(self) -> &'static [u32] {
+        self.entry.role_path
+    }
+
     /// Admit all three exact canonical originals against this compiled member.
     /// This explicit contract-qualified path performs no source synthesis or MSM.
     /// Ordinary artifact import remains strict; later proving still reconstructs

@@ -16,6 +16,7 @@ pub mod confidential_spool;
 #[cfg(feature = "bls")]
 /// Verification primitives for drand BLS12-381 randomness beacons.
 pub mod drand;
+mod ed25519_decode_cache;
 /// Symmetric/asymmetric encryption utilities.
 pub mod encryption;
 /// Baseline BFV fully homomorphic encryption primitives.
@@ -1779,8 +1780,7 @@ pub fn bls_normal_pop_verify(pk: &PublicKey, pop: &[u8]) -> Result<(), Error> {
     let pk_bytes = bls_public_key_payload(pk, Algorithm::BlsNormal)?;
     if bls_pop_cache()
         .lock()
-        .ok()
-        .is_some_and(|cache| cache.contains(Algorithm::BlsNormal, pk_bytes, pop))
+        .is_ok_and(|cache| cache.contains(Algorithm::BlsNormal, pk_bytes, pop))
     {
         return Ok(());
     }
@@ -1827,8 +1827,7 @@ pub fn bls_small_pop_verify(pk: &PublicKey, pop: &[u8]) -> Result<(), Error> {
     let pk_bytes = bls_public_key_payload(pk, Algorithm::BlsSmall)?;
     if bls_pop_cache()
         .lock()
-        .ok()
-        .is_some_and(|cache| cache.contains(Algorithm::BlsSmall, pk_bytes, pop))
+        .is_ok_and(|cache| cache.contains(Algorithm::BlsSmall, pk_bytes, pop))
     {
         return Ok(());
     }

@@ -79,10 +79,10 @@ const PRIVACY_PGC_POOL_INVARIANT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:pgc-p
 const PRIVACY_PUBLIC_RESERVE_ASSET_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:public-reserve-asset:v1";
 mod protocol_policy;
+use iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1;
 pub use protocol_policy::{
     AdmittedPrivacyProtocolV1, PrivacyAdmissionErrorV1, PrivacyProtocolLimitsPlanErrorV1,
-    PrivacyProtocolPolicyKeyV1, plan_due_privacy_protocol_limits_v1,
-    resolve_admitted_privacy_protocol_v1,
+    plan_due_privacy_protocol_limits_v1, resolve_admitted_privacy_protocol_v1,
     validate_privacy_protocol_policies_at_committed_height_v1,
     validate_privacy_protocol_policies_v1,
 };
@@ -782,7 +782,7 @@ pub fn load_privacy_pgc_pool_snapshot_v1(
         &retained_roots,
     )?;
     head.validate_retained_history_count(retained_roots.len(), retained_root_count)
-        .map_err(|error| error.to_owned())?;
+        .map_err(std::borrow::ToOwned::to_owned)?;
     let latest = retained_roots
         .last()
         .expect("non-empty history checked above");
@@ -1871,7 +1871,7 @@ fn validate_zk_x509_root_history_v1<'a>(
         }
     }
     head.validate_retained_history_count(history.len(), retained_root_count)
-        .map_err(|error| error.to_owned())?;
+        .map_err(std::borrow::ToOwned::to_owned)?;
     let latest = history
         .last()
         .expect("non-empty X.509 history checked above");
@@ -2516,7 +2516,7 @@ pub fn load_privacy_zk_ams_registry_snapshot_v1(
         &retained_roots,
     )?;
     head.validate_retained_history_count(retained_roots.len(), retained_root_count)
-        .map_err(|error| error.to_owned())?;
+        .map_err(std::borrow::ToOwned::to_owned)?;
     let latest = retained_roots
         .last()
         .expect("non-empty ZK-AMS history checked above");
@@ -4202,7 +4202,7 @@ pub fn load_privacy_proof_managed_pool_snapshot_v1(
         &retained_roots,
     )?;
     head.validate_retained_history_count(retained_roots.len(), retained_root_count)
-        .map_err(|error| error.to_owned())?;
+        .map_err(std::borrow::ToOwned::to_owned)?;
     for (key, provenance) in &retained_roots {
         match *provenance {
             PrivacyRootProvenanceV1::ProofManagedPoolBootstrap {
@@ -4593,7 +4593,7 @@ pub fn validate_privacy_persisted_state_v1(
         provenance
             .validate()
             .map_err(|error| format!("invalid privacy root provenance: {error}"))?;
-        if key.namespace().protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {}
+        key.namespace().protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
         history_by_scope
             .entry((key.namespace(), key.role()))
             .or_default()
@@ -4843,7 +4843,7 @@ pub fn validate_privacy_persisted_state_v1(
             }
         }
         head.validate_retained_history_count(history.len(), retained)
-            .map_err(|error| error.to_owned())?;
+            .map_err(std::borrow::ToOwned::to_owned)?;
         let latest = history.last().expect("grouped history is non-empty");
         if head.epoch() != latest.0.epoch()
             || head.root() != latest.0.root()
@@ -4860,7 +4860,7 @@ pub fn validate_privacy_persisted_state_v1(
             .map_err(|error| format!("invalid privacy root-head key: {error}"))?;
         head.validate()
             .map_err(|error| format!("invalid privacy root-head record: {error}"))?;
-        if key.namespace().protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {}
+        key.namespace().protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
         if !history_by_scope.contains_key(&(key.namespace(), key.role())) {
             return Err(format!(
                 "privacy root head for {:?}/{:?} has no retained history",
@@ -5990,7 +5990,7 @@ pub fn load_privacy_orchard_pool_snapshot_v1(
         &retained_roots,
     )?;
     head.validate_retained_history_count(retained_roots.len(), retained_root_count)
-        .map_err(|error| error.to_owned())?;
+        .map_err(std::borrow::ToOwned::to_owned)?;
     let latest = retained_roots
         .last()
         .expect("non-empty Orchard history checked above");
@@ -10042,14 +10042,6 @@ fn decode_storage_key<
     }
     Ok(key)
 }
-impl norito::json::JsonKeyCodec for PrivacyProtocolPolicyKeyV1 {
-    fn encode_json_key(&self, out: &mut String) {
-        encode_storage_key(self, out);
-    }
-    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
-        decode_storage_key(encoded)
-    }
-}
 macro_rules! impl_validated_json_key {
     ($key:ty) => {
         impl norito::json::JsonKeyCodec for $key {
@@ -11923,8 +11915,9 @@ mod tests {
             policy
         );
         assert_eq!(record.bootle_lantern_issuer_policy(), Some(&policy));
-        validate_persisted_commitments(&commitments)
-            .expect("canonical Bootle/Lantern issuer policy restores without protocol registration");
+        validate_persisted_commitments(&commitments).expect(
+            "canonical Bootle/Lantern issuer policy restores without protocol registration",
+        );
         storage_loader_rejection_cases! {
             |view| load_privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id, view), key;
             wrong_role {} => PrivacyStateItemRecordV1::zk_ace_policy_governance(

@@ -13,7 +13,7 @@ std::thread_local! {
 
 /// Snapshot syntax is distinct from a local refusal by the original State pool.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum StateRestoreError {
+pub enum StateRestoreError {
     /// Original complete parameter graph/control custody refused restoration.
     #[error(transparent)]
     Parameters(parameter_cell::ParameterCellRestoreError),
@@ -150,9 +150,11 @@ fn validate_resource_policy_versions(
     execution_budget: &iroha_allocation::AllocationBudget,
 ) -> Result<(), StateRestoreError> {
     crate::resource_coherence::validate_restored_policy(&world.view(), committed_height).map_err(
-        |error| json::Error::InvalidField {
-            field: "state.world.resource_policy".to_owned(),
-            message: error.to_string(),
+        |error| {
+            error.map_rejection(|error| json::Error::InvalidField {
+                field: "state.world.resource_policy".to_owned(),
+                message: error.to_string(),
+            })
         },
     )?;
     // Acquire the original undo cut atomically. Reading separate Cell predecessors
@@ -162,9 +164,11 @@ fn validate_resource_policy_versions(
     // committed height exists. Even that retained undo must be coherent.
     let previous_height = committed_height.saturating_sub(1);
     crate::resource_coherence::validate_restored_policy(&previous_world, previous_height).map_err(
-        |error| json::Error::InvalidField {
-            field: "state.world.resource_policy.revert".to_owned(),
-            message: error.to_string(),
+        |error| {
+            error.map_rejection(|error| json::Error::InvalidField {
+                field: "state.world.resource_policy.revert".to_owned(),
+                message: error.to_string(),
+            })
         },
     )?;
     Ok(())
@@ -567,6 +571,90 @@ impl<'a> SnapshotJsonMap<'a> {
             source_order: None,
         })
     }
+    /// The World object of a snapshot written by the predecessor release of an upgrade
+    /// checkpoint, rewritten as this release's World object, and the adoption authorizations the
+    /// predecessor's retired `runtime_upgrades` table held (`state::upgrade_checkpoint`).
+    ///
+    /// `Ok(None)`: `input` does not have the predecessor's World fields, so it is this release's
+    /// World. The predecessor's other retired fields must hold exactly their empty values, the
+    /// tables this release added start empty and the runtime fields are founded on this
+    /// release's baseline; every other value passes unchanged. The authorizations leave the World
+    /// with their table; the caller proves them against the certified root and checks that one
+    /// authorizes this adoption.
+    fn predecessor_world_json(
+        input: &str,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<
+        Option<(
+            String,
+            Vec<crate::state::upgrade_checkpoint::adoption::PredecessorRecord>,
+        )>,
+        StateRestoreError,
+    > {
+        use crate::state::upgrade_checkpoint::{
+            AUTHORIZATION_FIELD, added_world_field, adoption, is_founded_world_field,
+            predecessor_world_field_order, retired_world_fields,
+        };
+        let current = canonical_world_field_order();
+        let predecessor = predecessor_world_field_order(current);
+        let Ok(mut map) = SnapshotJsonMap::parse_admitted(input, "world", &predecessor, budget)
+        else {
+            return Ok(None);
+        };
+        if map.require_source_order(&predecessor, "world").is_err() {
+            return Ok(None);
+        }
+        let mut authorizations = Vec::new();
+        for retired in retired_world_fields() {
+            let field = format!("world.{}", retired.name);
+            let Some(SnapshotJsonField::Borrowed { raw }) = map.remove(retired.name) else {
+                return Err(json::Error::missing_field(field).into());
+            };
+            if retired.name == AUTHORIZATION_FIELD {
+                authorizations = adoption::parse_runtime_upgrades(raw).map_err(|error| {
+                    json::Error::InvalidField {
+                        field: field.clone(),
+                        message: error.to_string(),
+                    }
+                })?;
+                continue;
+            }
+            let found: json::Value = json::from_str(raw)?;
+            let empty: json::Value = json::from_str(retired.empty_json)?;
+            if found != empty {
+                return Err(json::Error::InvalidField {
+                    field,
+                    message: "an upgrade checkpoint admits a retired World field only empty"
+                        .to_owned(),
+                }
+                .into());
+            }
+        }
+        let mut world = String::with_capacity(input.len());
+        world.push('{');
+        for (index, key) in current.iter().enumerate() {
+            if index > 0 {
+                world.push(',');
+            }
+            world.push('"');
+            world.push_str(key);
+            world.push_str("\":");
+            if let Some(added) = added_world_field(key) {
+                world.push_str(&empty_added_world_field_json(added.name)?);
+                continue;
+            }
+            if is_founded_world_field(key) {
+                world.push_str(&founded_world_field_json(key)?);
+                continue;
+            }
+            let Some(SnapshotJsonField::Borrowed { raw }) = map.remove(key) else {
+                return Err(json::Error::missing_field(format!("world.{key}")).into());
+            };
+            world.push_str(raw);
+        }
+        world.push('}');
+        Ok(Some((world, authorizations)))
+    }
     /// Test fixture over the production index, funded by a large private pool so
     /// fixture maps exercise the admitted entries rather than a separate parser.
     #[cfg(test)]
@@ -799,6 +887,50 @@ fn canonical_world_field_order() -> &'static [&'static str] {
     <World as norito::json::FastJsonWrite>::json_object_field_order()
         .expect("World snapshot has a fixed derived object schema")
 }
+/// The founded value of a runtime World field, in snapshot JSON.
+fn founded_world_field_json(name: &str) -> Result<String, json::Error> {
+    let field = format!("world.{name}");
+    let invalid = |message: String| json::Error::InvalidField {
+        field: field.clone(),
+        message,
+    };
+    match name {
+        "runtime_definitions" => json::to_json(
+            &crate::runtime::founded_definitions().map_err(|error| invalid(error.to_string()))?,
+        ),
+        "runtime_selection" => json::to_json(&Cell::new(
+            crate::runtime::founded_selection().map_err(|error| invalid(error.to_string()))?,
+        )),
+        _ => return Err(invalid("not a founded World field".to_owned())),
+    }
+    .map_err(|error| invalid(error.to_string()))
+}
+
+/// This release's canonical snapshot JSON of an empty table an upgrade checkpoint adds
+/// (`state::upgrade_checkpoint::ADDED_WORLD_FIELDS`).
+fn empty_added_world_field_json(name: &str) -> Result<String, json::Error> {
+    let field = format!("world.{name}");
+    match name {
+        "runtime_change_sets" => json::to_json(&Storage::<
+            iroha_data_model::runtime::lifecycle::ChangeSetId,
+            iroha_data_model::runtime::lifecycle::ChangeSetRecordV1,
+        >::new()),
+        "runtime_containments" => json::to_json(&Storage::<
+            [u8; 32],
+            iroha_data_model::runtime::lifecycle::ContainmentRecordV1,
+        >::new()),
+        _ => {
+            return Err(json::Error::InvalidField {
+                field,
+                message: "not a World field an upgrade checkpoint adds".to_owned(),
+            });
+        }
+    }
+    .map_err(|error| json::Error::InvalidField {
+        field,
+        message: error.to_string(),
+    })
+}
 /// Canonical first-release State envelope fields, in signed source order.
 const STATE_SNAPSHOT_FIELDS: &[&str] = &[
     "chain_id",
@@ -965,6 +1097,59 @@ mod state_snapshot_decode_error_tests {
             Err(StateRestoreError::Serialization(json::Error::InvalidField { ref field, .. }))
                 if field == "state.world.resource_policy.revert"
         ));
+    }
+
+    #[test]
+    fn private_extension_restore_rejects_malformed_current_and_original_undo() {
+        use iroha_data_model::{
+            parameter::{CustomParameter, Parameter},
+            privacy::PrivateSettlementPolicyV1,
+        };
+        use iroha_primitives::json::Json;
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
+        let world = World::try_with_execution_budget([], [], [], &budget).unwrap();
+        let install = |parameter| {
+            let mut overlay = world.block();
+            let prepared = overlay
+                .parameters
+                .get()
+                .prepare_parameter(&Parameter::Custom(parameter), &budget)
+                .unwrap();
+            let successor = prepared
+                .into_successor(overlay.parameters.get(), &budget)
+                .map_err(|(_, error)| error)
+                .unwrap();
+            *overlay.parameters.get_mut() = successor;
+            overlay.commit();
+        };
+        let malformed = CustomParameter::new(
+            PrivateSettlementPolicyV1::parameter_id().clone(),
+            Json::from_str_norito("{}").unwrap(),
+        );
+        install(malformed);
+        assert!(
+            matches!(validate_resource_policy_versions(&world, 0, &budget),
+            Err(StateRestoreError::Serialization(json::Error::InvalidField { ref field, .. })) if field == "state.world.resource_policy")
+        );
+        install(
+            PrivateSettlementPolicyV1::protocol_default()
+                .to_custom_parameter()
+                .unwrap(),
+        );
+        crate::resource_coherence::validate_restored_policy(&world.view(), 0).unwrap();
+        assert!(
+            matches!(validate_resource_policy_versions(&world, 0, &budget),
+            Err(StateRestoreError::Serialization(json::Error::InvalidField { ref field, .. })) if field == "state.world.resource_policy.revert")
+        );
+        // Local codec refusal remains distinct even when the current value is well formed.
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+        let refused = norito::with_decode_limits_scope(limits, || {
+            validate_resource_policy_versions(&world, 0, &budget)
+        })
+        .unwrap_err();
+        assert!(
+            matches!(refused, StateRestoreError::ExecutionDeferred(ref original) if original.decode_refusal().is_some())
+        );
     }
 
     #[test]
@@ -1335,11 +1520,32 @@ impl KuraSeed {
         let world_value = map
             .remove("world")
             .ok_or_else(|| json::Error::missing_field("world"))?;
-        let world_map = world_value.into_object(
-            "world",
-            canonical_world_field_order(),
-            &self.execution_budget,
-        )?;
+        let checkpoint = self.kura.upgrade_checkpoint().cloned();
+        // Under an upgrade checkpoint the World may be the predecessor release's. Its key set
+        // differs from this release's, so at most one of the two shapes parses.
+        let (predecessor_world, adoption_authorizations) = match (&checkpoint, &world_value) {
+            (Some(_), SnapshotJsonField::Borrowed { raw }) => {
+                match SnapshotJsonMap::predecessor_world_json(raw, &self.execution_budget)? {
+                    Some((world, authorizations)) => (Some(world), authorizations),
+                    None => (None, Vec::new()),
+                }
+            }
+            _ => (None, Vec::new()),
+        };
+        let is_predecessor_world = predecessor_world.is_some();
+        let world_map = match &predecessor_world {
+            Some(world) => SnapshotJsonMap::parse_admitted(
+                world,
+                "world",
+                canonical_world_field_order(),
+                &self.execution_budget,
+            )?,
+            None => world_value.into_object(
+                "world",
+                canonical_world_field_order(),
+                &self.execution_budget,
+            )?,
+        };
         world_map.require_source_order(canonical_world_field_order(), "world")?;
         if !world_map.contains_key("contract_subject_bindings") {
             return Err((json::Error::missing_field("world.contract_subject_bindings")).into());
@@ -1484,13 +1690,15 @@ impl KuraSeed {
         let native_execution_tip::RestoredNativeTip {
             cell: native_execution_tip,
             world_root: certified_world_root,
+            checkpoint_world_root,
         } = native_tip_claim
-            .restore(
+            .restore_with_checkpoint(
                 &self.execution_budget,
                 &chain_id,
                 &network_id,
                 &block_hashes,
                 &self.kura,
+                checkpoint.as_ref(),
                 &mut |certified| {
                     observe_committee(&mut current_progress, CURRENT_COMMITTEE, certified)?;
                     observe_committee(&mut previous_progress, PREVIOUS_COMMITTEE, certified)
@@ -1690,8 +1898,64 @@ impl KuraSeed {
             })?;
         // The World is final here; authenticate it before State construction loads or
         // recovers any durable journal on its behalf.
-        if let Some(certified) = certified_world_root {
-            authenticate_restored_world(&world, &self.execution_budget, certified)?;
+        if is_predecessor_world {
+            // The checkpoint block's own certified result binds the predecessor's World root,
+            // and with it the governance records that authorize the adoption.
+            let certified = checkpoint_world_root.ok_or_else(|| json::Error::InvalidField {
+                field: "world".to_owned(),
+                message: "a predecessor release's World is admitted only at the upgrade checkpoint"
+                    .to_owned(),
+            })?;
+            let imported_root = world
+                .adopt_checkpoint_accumulator(
+                    &self.execution_budget,
+                    certified,
+                    &adoption_authorizations,
+                )
+                .map_err(restored_world_verification_error)?;
+            let record = crate::state::upgrade_checkpoint::adoption::anchor(
+                &adoption_authorizations,
+                crate::state::upgrade_checkpoint::adoption::AnchorInputs {
+                    network: network_id,
+                    height: committed_height,
+                    block_hash: checkpoint
+                        .as_ref()
+                        .map(|checkpoint| checkpoint.block_hash)
+                        .ok_or_else(|| json::Error::InvalidField {
+                            field: "world".to_owned(),
+                            message: "a predecessor World needs its upgrade checkpoint".to_owned(),
+                        })?,
+                    predecessor_world_root: certified,
+                    imported_state_root: imported_root,
+                    committee: commit_topology.view().get(),
+                },
+            )
+            .map_err(|message| json::Error::InvalidField {
+                field: "world.runtime_upgrades".to_owned(),
+                message,
+            })?;
+            iroha_logger::info!(
+                height = record.height,
+                selection = %record.selection,
+                authorization = %hex::encode(record.authorization),
+                imported_state_root = %hex::encode(record.imported_state_root),
+                "adopting the predecessor's World under its governed authorization"
+            );
+        }
+        match certified_world_root {
+            Some(certified) => {
+                authenticate_restored_world(&world, &self.execution_budget, certified)?;
+            }
+            // Only the predecessor's World at the checkpoint has no certified successor yet.
+            None if committed_height > 0 && !is_predecessor_world => {
+                return Err((json::Error::InvalidField {
+                    field: "native_execution_tip".to_owned(),
+                    message: "a World of this release at the upgrade checkpoint needs its certified successor"
+                        .to_owned(),
+                })
+                .into());
+            }
+            None => {}
         }
         let state = build_state(
             BuildStateInputs {
@@ -1735,17 +1999,9 @@ fn authenticate_restored_world(
     execution_budget: &iroha_allocation::AllocationBudget,
     certified: Hash,
 ) -> Result<(), StateRestoreError> {
-    // A local acquisition refusal is no verdict on the snapshot: it keeps its typed admission
-    // owner instead of authorizing a fallback replay.
-    let classify = |error: WorldStateVerificationError| match error {
-        WorldStateVerificationError::Acquisition(error) => StateRestoreError::Admission(
-            StateAdmissionError::Storage(StateStorageAdmissionError::World(error)),
-        ),
-        error => StateRestoreError::WorldVerification(error),
-    };
     let captured = world
         .verify_state_accumulator(execution_budget)
-        .map_err(classify)?;
+        .map_err(restored_world_verification_error)?;
     if captured != certified {
         return Err(StateRestoreError::WorldMismatch {
             captured,
@@ -1753,6 +2009,16 @@ fn authenticate_restored_world(
         });
     }
     Ok(())
+}
+/// A local acquisition refusal is no verdict on the snapshot: it keeps its typed admission owner
+/// instead of authorizing a fallback replay.
+fn restored_world_verification_error(error: WorldStateVerificationError) -> StateRestoreError {
+    match error {
+        WorldStateVerificationError::Acquisition(error) => StateRestoreError::Admission(
+            StateAdmissionError::Storage(StateStorageAdmissionError::World(error)),
+        ),
+        error => StateRestoreError::WorldVerification(error),
+    }
 }
 /// Exercise exact durable Fast boundary admission without constructing native State.
 #[cfg(test)]
@@ -3582,3 +3848,198 @@ impl From<sccp_forgery_custody::ForgeryStorageError> for StateRestoreError {
 #[cfg(test)]
 #[path = "deserialize_snapshot_map_tests.rs"]
 mod snapshot_map_tests;
+
+#[cfg(test)]
+mod predecessor_snapshot_tests {
+    use super::*;
+
+    /// Imports a real predecessor-release payload (`snapshot.data` of a generation written by the
+    /// release named in `state::upgrade_checkpoint`) and proves the import exact: the
+    /// predecessor-registry capture of the decoded World equals the payload's own accumulator.
+    #[test]
+    #[ignore = "needs IROHA_PREDECESSOR_SNAPSHOT=<path to a predecessor snapshot.data>"]
+    fn predecessor_world_imports_exactly() {
+        let path = std::env::var("IROHA_PREDECESSOR_SNAPSHOT")
+            .expect("IROHA_PREDECESSOR_SNAPSHOT names a predecessor snapshot.data");
+        // Taira's addresses use its chain discriminant, as its node configuration selects.
+        let discriminant = std::env::var("IROHA_PREDECESSOR_CHAIN_DISCRIMINANT")
+            .map_or(369, |value| value.parse().expect("chain discriminant"));
+        let _chain =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(discriminant);
+        let input = std::fs::read_to_string(path).expect("read the snapshot payload");
+        let budget = iroha_allocation::AllocationBudget::new(16 << 30);
+        let mut state =
+            SnapshotJsonMap::parse_admitted(&input, "state", STATE_SNAPSHOT_FIELDS, &budget)
+                .expect("State envelope");
+        let Some(SnapshotJsonField::Borrowed { raw }) = state.remove("world") else {
+            panic!("State envelope has no World");
+        };
+        let (world_json, authorizations) = SnapshotJsonMap::predecessor_world_json(raw, &budget)
+            .expect("admissible predecessor World")
+            .expect("predecessor World shape");
+        let world_map = SnapshotJsonMap::parse_admitted(
+            &world_json,
+            "world",
+            canonical_world_field_order(),
+            &budget,
+        )
+        .expect("current World shape");
+        let ivm = IVM::try_new(0).expect("IVM");
+        let seed = IvmSeed {
+            ivm: &ivm,
+            _marker: PhantomData,
+        };
+        let mut world = parse_world(&budget, world_map, &seed).expect("predecessor World decodes");
+        // Restore fills these World fields from the State envelope, as `into_state_from_snapshot_map`.
+        world.public_lane_validators = take_required::<snapshot_storage::SnapshotStorage>(
+            &mut state,
+            "public_lane_validators",
+        )
+        .and_then(|storage| {
+            storage.decode(
+                "public_lane_validators",
+                public_lane_validator_record_matches_key,
+            )
+        })
+        .expect("public lane validators");
+        world.public_lane_stake_shares = take_required::<snapshot_storage::SnapshotStorage>(
+            &mut state,
+            "public_lane_stake_shares",
+        )
+        .and_then(|storage| {
+            storage.decode(
+                "public_lane_stake_shares",
+                public_lane_stake_share_matches_key,
+            )
+        })
+        .expect("public lane stake shares");
+        world.public_lane_stake_custody = take_required::<snapshot_storage::SnapshotStorage>(
+            &mut state,
+            "public_lane_stake_custody",
+        )
+        .and_then(|storage| {
+            storage.decode(
+                "public_lane_stake_custody",
+                |_: &(LaneId, AccountId), value: &(AssetId, Quantity)| !value.1.is_zero(),
+            )
+        })
+        .expect("public lane stake custody");
+        world.public_lane_stake_reserves = take_required::<snapshot_storage::SnapshotStorage>(
+            &mut state,
+            "public_lane_stake_reserves",
+        )
+        .and_then(|storage| {
+            storage.decode(
+                "public_lane_stake_reserves",
+                |_: &AssetId, value: &Quantity| !value.is_zero(),
+            )
+        })
+        .expect("public lane stake reserves");
+        world.space_directory_manifests = take_required::<snapshot_storage::SnapshotStorage>(
+            &mut state,
+            "space_directory_manifests",
+        )
+        .and_then(|storage| {
+            storage.decode(
+                "space_directory_manifests",
+                snapshot_storage::manifest_set_matches_key,
+            )
+        })
+        .expect("space directory manifests");
+        fn take<T: JsonDeserialize + JsonSerialize>(
+            state: &mut SnapshotJsonMap<'_>,
+            field: &str,
+        ) -> T {
+            take_required(state, field).unwrap_or_else(|error| panic!("{field}: {error:?}"))
+        }
+        snapshot_service_state::SnapshotServiceState {
+            capacity_fee_ledger: take(&mut state, "capacity_fee_ledger"),
+            capacity_disputes: take(&mut state, "capacity_disputes"),
+            provider_credit_ledger: take(&mut state, "provider_credit_ledger"),
+            sorafs_pricing: take(&mut state, "sorafs_pricing"),
+            soradns_directory_records: take(&mut state, "soradns_directory_records"),
+            soradns_directory_pending: take(&mut state, "soradns_directory_pending"),
+            soradns_directory_history: take(&mut state, "soradns_directory_history"),
+            soradns_directory_prev_of: take(&mut state, "soradns_directory_prev_of"),
+            soradns_directory_revocations: take(&mut state, "soradns_directory_revocations"),
+            soradns_release_signers: take(&mut state, "soradns_release_signers"),
+            soradns_directory_latest: take(&mut state, "soradns_directory_latest"),
+            soradns_rotation_policy: take(&mut state, "soradns_rotation_policy"),
+            soradns_last_publish_ms: take(&mut state, "soradns_last_publish_ms"),
+            soradns_history_len: take(&mut state, "soradns_history_len"),
+        }
+        .restore(&mut world)
+        .expect("service state");
+        take_required_scoped::<sccp_snapshot_state::SnapshotSccpState>(
+            &mut state,
+            sccp_snapshot_state::SCCP_SNAPSHOT_MEMBER,
+        )
+        .expect("SCCP state")
+        .restore(&mut world, &budget)
+        .expect("SCCP restore");
+        super::super::contract_subject_restore::rebuild(&mut world).expect("contract subjects");
+        let stored = world.state_accumulator.view().get().clone();
+        let block = world.try_block(&budget).expect("World block");
+        let captured = super::super::world_projection::WorldStateAccumulator::capture(&block)
+            .expect("capture");
+        drop(block);
+        let (predecessor, root) =
+            super::super::world_projection::world_state_accumulator::predecessor_root(
+                &captured,
+                &authorizations,
+            )
+            .expect("predecessor root");
+        eprintln!(
+            "entries: stored {} predecessor {} current {}; predecessor root {root}",
+            stored.entries(),
+            predecessor.entries(),
+            captured.entries()
+        );
+        assert_eq!(
+            predecessor, stored,
+            "import differs from the predecessor's World"
+        );
+        // Restore then takes the World over under this release's registry; every later check of
+        // the World (State construction, Sumeragi startup) sees only this release's accumulator.
+        let current = world
+            .adopt_checkpoint_accumulator(&budget, root, &authorizations)
+            .expect("adopt the checkpoint World");
+        assert_eq!(
+            world
+                .verify_state_accumulator(&budget)
+                .expect("adopted World"),
+            current
+        );
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(world, kura, query);
+        assert_eq!(
+            state
+                .verify_world_state_accumulator()
+                .expect("State over the adopted World"),
+            current
+        );
+        let counts = |state: &State| {
+            (
+                state.world.uaid_dataspaces.view().len(),
+                state.world.account_scope_directory.view().len(),
+                state.world.account_scope_accounts.view().len(),
+                state.world.account_scope_account_counts.view().len(),
+            )
+        };
+        let before = counts(&state);
+        state
+            .finalize_snapshot_derived_state_indexes(false)
+            .expect("derived indexes");
+        eprintln!(
+            "derived index counts before {before:?} after {:?}",
+            counts(&state)
+        );
+        assert_eq!(
+            state
+                .verify_world_state_accumulator()
+                .expect("State after derived indexes"),
+            current
+        );
+    }
+}

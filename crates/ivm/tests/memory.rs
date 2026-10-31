@@ -82,7 +82,7 @@ fn test_memory_access() {
     vm.load_program(&prog).unwrap();
     let res2 = vm.run();
     assert!(
-        matches!(res2, Err(VMError::MemoryAccessViolation { perm: _, .. }))
+        matches!(res2, Err(VMError::MemoryAccessViolation { .. }))
             && if let Err(VMError::MemoryAccessViolation { perm, .. }) = res2 {
                 perm == Perm::WRITE
             } else {

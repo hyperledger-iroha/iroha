@@ -12,6 +12,12 @@
 //! Every validator boot and its original required broker must close successfully. Its genuine
 //! Parliament pulse consumes current credentials while the next committee remains pending.
 //! Retail monthly policy and network slashing remain separate gates.
+//!
+//! The live ceremony and broker scenarios require the existing Unix external software
+//! signer transport and inherited credential descriptors. Portable history, quorum,
+//! lifecycle, progress, SCCP geometry and fee-accounting controls remain enabled.
+//! TODO: Qualify the live committee, SCCP and AMX rotation corridors on Windows with
+//! a genuine authenticated native signer transport and original broker custody.
 
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::{sandbox, sync::rebind_blocking_client};
@@ -63,18 +69,20 @@ use iroha_core::{
 };
 use iroha_model_base::{metadata::Metadata, peer::PeerId, topology::LaneId};
 use iroha_test_network::{
-    CommitteeValidatorP2pBootstrap, DisposableBeaconProviderBinding, DisposableGenesisDkgOutput,
-    DisposablePendingCustodyInput, DisposablePreparedBeaconCustody,
-    DisposableRetainedBeaconCredential, DisposableRotationDkgOutput, DisposableRotationProofInput,
-    Network, NetworkBuilder, NetworkPeer, PeerLifecycleEvent, init_instruction_registry,
-    prepare_disposable_pending_custody, read_on_dedicated_thread, run_disposable_genesis_dkg,
-    run_disposable_rotation_dkg,
+    CommitteeValidatorP2pBootstrap, Network, NetworkBuilder, NetworkPeer, PeerLifecycleEvent,
+    init_instruction_registry, read_on_dedicated_thread,
+};
+#[cfg(unix)]
+use iroha_test_network::{
+    DisposableBeaconProviderBinding, DisposableGenesisDkgOutput, DisposablePendingCustodyInput,
+    DisposablePreparedBeaconCustody, DisposableRetainedBeaconCredential,
+    DisposableRotationDkgOutput, DisposableRotationProofInput, prepare_disposable_pending_custody,
+    run_disposable_genesis_dkg, run_disposable_rotation_dkg,
 };
 use iroha_test_samples::ALICE_ID;
-use irohad::{
-    IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderSlotV1,
-    external_software_signer::encode_consensus_threshold_credential_bundle_v1,
-};
+#[cfg(unix)]
+use irohad::external_software_signer::encode_consensus_threshold_credential_bundle_v1;
+use irohad::{IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderSlotV1};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -87,6 +95,7 @@ use zeroize::Zeroizing;
 
 #[derive(norito::derive::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
+#[cfg(unix)]
 struct NativeProviderManifest {
     signer_index: u16,
     validator: PeerId,
@@ -290,6 +299,7 @@ fn verify_clean_peer_exit(
 }
 
 /// Join every original process before a restart or test completion, retaining its exit evidence.
+#[cfg(unix)]
 async fn shutdown_all_cleanly(network: &Network) -> Result<()> {
     let mut boots = Vec::new();
     for peer in network.all_peers() {
@@ -384,6 +394,7 @@ fn process_closure_requires_one_original_successful_terminal_without_event_loss(
     Ok(())
 }
 
+#[cfg(unix)]
 async fn prove_retained_successor_after_restart(
     network: &sandbox::SerializedNetwork,
     admin: &Client,
@@ -1337,6 +1348,7 @@ fn extend_finality_chain_from_proofs(
     Ok((journal, blocks))
 }
 
+#[cfg(unix)]
 async fn stage_genesis_brokers(
     network: &Network,
     dkg: &DisposableGenesisDkgOutput,
@@ -1403,17 +1415,20 @@ async fn stage_genesis_brokers(
 }
 
 #[derive(Clone)]
+#[cfg(unix)]
 struct CurrentCustodyRecord {
     credential_path: PathBuf,
     catalog: Vec<u8>,
 }
 
+#[cfg(unix)]
 struct PreparedRotation {
     target: Vec<PeerId>,
     prepared: Vec<DisposablePreparedBeaconCustody>,
     dkg: DisposableRotationDkgOutput,
 }
 
+#[cfg(unix)]
 fn genesis_current_custody(
     dkg: &DisposableGenesisDkgOutput,
     catalogs: &BTreeMap<PeerId, Vec<u8>>,
@@ -1435,6 +1450,7 @@ fn genesis_current_custody(
         .collect()
 }
 
+#[cfg(unix)]
 fn prepared_current_custody(
     prepared: &[DisposablePreparedBeaconCustody],
 ) -> Result<BTreeMap<PeerId, CurrentCustodyRecord>> {
@@ -1452,6 +1468,7 @@ fn prepared_current_custody(
         .collect()
 }
 
+#[cfg(unix)]
 async fn stage_prepared_brokers(
     network: &Network,
     prepared: &[DisposablePreparedBeaconCustody],
@@ -1498,6 +1515,7 @@ async fn stage_prepared_brokers(
     Ok(())
 }
 
+#[cfg(unix)]
 fn prove_exact_target_readiness(
     transition: &iroha::data_model::nexus::ValidatorCommitteeTransitionV1,
     session: &iroha::data_model::consensus::GlobalThresholdBeaconKeySessionV1,
@@ -1568,12 +1586,14 @@ fn prove_exact_target_readiness(
     })
 }
 
+#[cfg(unix)]
 struct RotationSignerCustody<'a> {
     current_custody: &'a BTreeMap<PeerId, CurrentCustodyRecord>,
     provider_revision: u64,
     missing_custody: Option<&'a PeerId>,
 }
 
+#[cfg(unix)]
 async fn execute_rotation_preparation(
     network: &Network,
     admin: &Client,
@@ -1593,6 +1613,7 @@ async fn execute_rotation_preparation(
     )
     .await
 }
+#[cfg(unix)]
 async fn execute_rotation_preparation_with_workload(
     network: &Network,
     admin: &Client,
@@ -1985,6 +2006,7 @@ async fn execute_rotation_preparation_with_workload(
     })
 }
 
+#[cfg(unix)]
 struct QualificationInputs<'a> {
     network: &'a sandbox::SerializedNetwork,
     admin: &'a Client,
@@ -1997,6 +2019,7 @@ struct QualificationInputs<'a> {
     signed_genesis_hash: iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
 }
 
+#[cfg(unix)]
 async fn run_custody_or_activation_scenario(
     scenario: QualificationScenario,
     inputs: &QualificationInputs<'_>,
@@ -2494,6 +2517,7 @@ async fn run_custody_or_activation_scenario(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(unix)]
 enum QualificationScenario {
     WithheldIncumbentCustody,
     FiveCandidateRetention,
@@ -2502,6 +2526,7 @@ enum QualificationScenario {
     ActivateSevenThenReturnFour,
 }
 
+#[cfg(unix)]
 impl QualificationScenario {
     fn pool_size(self) -> usize {
         match self {
@@ -2527,17 +2552,13 @@ impl QualificationScenario {
     }
 }
 
+#[cfg(unix)]
 async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<()> {
     init_instruction_registry();
     let pool_size = scenario.pool_size();
     let seats = scenario.selected_seats();
     let supplementary = pool_size - 4;
     let registry_capacity = i64::try_from(pool_size.max(7))?;
-    let xor: AssetDefinitionId = defaults::nexus::fees::fee_asset_id().parse()?;
-    ensure!(
-        xor.to_string() == TAIRA_XOR,
-        "staking must use real genesis-pinned XOR"
-    );
     let npos = SumeragiNposParameters {
         epoch_length_blocks: NonZeroU64::new(EPOCH).expect("nonzero epoch"),
         max_validators: 7,
@@ -2546,6 +2567,11 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         slashing_delay_blocks: 1,
         ..SumeragiNposParameters::default()
     };
+    let xor: AssetDefinitionId = npos.xor_asset_definition_id.clone();
+    ensure!(
+        xor.to_string() == TAIRA_XOR,
+        "staking must use real genesis-pinned XOR"
+    );
     npos.validate().map_err(|error| eyre!(error))?;
     let builder = NetworkBuilder::new()
         .with_peers(4)
@@ -2829,6 +2855,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
 
 // Native authenticated history decoding runs inside the test driver during DKG.
 // Bound its owning thread and runtime stacks explicitly, without an inherited env setting.
+#[cfg(unix)]
 fn run_network_qualification(scenario: QualificationScenario) -> Result<()> {
     const NETWORK_STACK_BYTES: usize = 32 * 1024 * 1024;
     let handle = std::thread::Builder::new()
@@ -2851,27 +2878,32 @@ fn run_network_qualification(scenario: QualificationScenario) -> Result<()> {
 }
 
 #[test]
+#[cfg(unix)]
 fn overfull_pool_freezes_seven_then_missing_incumbent_custody_certifies_four_retained() -> Result<()>
 {
     run_network_qualification(QualificationScenario::WithheldIncumbentCustody)
 }
 
 #[test]
+#[cfg(unix)]
 fn five_candidates_freeze_exact_four_and_certify_retention_without_reroll() -> Result<()> {
     run_network_qualification(QualificationScenario::FiveCandidateRetention)
 }
 
 #[test]
+#[cfg(unix)]
 fn eleven_candidates_freeze_exact_seven_and_certify_retention_without_reroll() -> Result<()> {
     run_network_qualification(QualificationScenario::ElevenCandidateRetention)
 }
 
 #[test]
+#[cfg(unix)]
 fn complete_dkg_but_missing_target_custody_certifies_four_retained() -> Result<()> {
     run_network_qualification(QualificationScenario::MissingTargetCustody)
 }
 
 #[test]
+#[cfg(unix)]
 fn complete_real_xor_committee_rotates_four_to_seven_to_four() -> Result<()> {
     run_network_qualification(QualificationScenario::ActivateSevenThenReturnFour)
 }

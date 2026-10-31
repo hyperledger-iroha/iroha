@@ -2154,14 +2154,14 @@ mod exact12_fixture {
         /// Exact first-release instruction wire identifier.
         pub submit_proof_wire_id: String,
         /// Complete canonical request archive selected by `submit_proof_wire_id`.
-        /// X.509 uses the proof-free SubmitPrivacyZkX509CertificateV1; other protocols
-        /// use SubmitPrivacyProofV1.
+        /// X.509 uses the proof-free `SubmitPrivacyZkX509CertificateV1`; other protocols
+        /// use `SubmitPrivacyProofV1`.
         pub submit_proof_instruction_norito: Vec<u8>,
-        /// Canonical binding preimage: X.509's ActionStatementV1, or the ordinary
+        /// Canonical binding preimage: X.509's `ActionStatementV1`, or the ordinary
         /// normalized privacy unsigned-payload projection for other protocols.
         pub transaction_intent_projection_norito: Vec<u8>,
         /// Domain-separated digest of that binding preimage. X.509 uses the existing
-        /// ActionStatementV1 domain; other protocols use the privacy transaction-intent domain.
+        /// `ActionStatementV1` domain; other protocols use the privacy transaction-intent domain.
         pub transaction_intent_digest: [u8; 32],
         /// Canonical adaptive unsigned [`TransactionPayload`] bytes presented to signers.
         pub unsigned_transaction_payload_norito: Vec<u8>,
@@ -2580,12 +2580,18 @@ mod exact12_fixture {
         for sample in privacy_action_role_samples_v1().expect("complete structural role samples") {
             let expected = sample_protocol_limits(sample.envelope.protocol_id);
             assert_eq!(sample.profile.protocol_limits, expected);
-            sample.profile.validate().expect("valid canonical fixture profile");
-            sample.envelope.validate_against_profile_v1(
-                &sample.profile,
-                &sample.profile.protocol_limits,
-                &PrivacyConsensusLimitsV1::taira_default(),
-            ).expect("structural fixture respects its canonical protocol limits");
+            sample
+                .profile
+                .validate()
+                .expect("valid canonical fixture profile");
+            sample
+                .envelope
+                .validate_against_profile_v1(
+                    &sample.profile,
+                    &sample.profile.protocol_limits,
+                    &PrivacyConsensusLimitsV1::taira_default(),
+                )
+                .expect("structural fixture respects its canonical protocol limits");
         }
     }
     /// Build one structurally valid sample for each of the thirteen Exact12 roles.

@@ -1257,11 +1257,13 @@ fn enforce_successor_epoch(
     )
 }
 fn push_digest_words(values: &mut Vec<Scalar>, bytes: [u8; 32]) {
-    values.extend(bytes.chunks_exact(4).map(|word| {
-        Scalar::from_u64(u64::from(u32::from_be_bytes(
-            word.try_into().expect("exact four-byte word"),
-        )))
-    }));
+    values.extend(
+        bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|word| Scalar::from_u64(u64::from(u32::from_be_bytes(*word)))),
+    );
 }
 fn map_composition_error(error: MaskedRelaxedErrorV1) -> ZkAmsAdmissionRelationErrorV1 {
     match error {

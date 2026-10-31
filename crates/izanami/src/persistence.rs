@@ -8,12 +8,13 @@
 use crate::config::{ChaosConfig, FaultArgs, FaultToggles, IzanamiArgs, WorkloadProfile};
 use color_eyre::{Result, eyre::eyre};
 use dirs::config_dir;
+use iroha_fs::FileMetadata as Metadata;
 use norito::{
     DecodeLimits,
     codec::{Decode, Encode},
 };
 use std::{
-    fs::{self, Metadata, OpenOptions},
+    fs::{self, OpenOptions},
     io::{self, Read},
     path::{Path, PathBuf},
     time::Duration,
@@ -241,23 +242,38 @@ impl StoredArgs {
 fn config_path() -> Option<PathBuf> {
     config_dir().map(|dir| dir.join(APP_DIR).join(CONFIG_FILE))
 }
-#[cfg(unix)]
 fn same_file_identity(left: &Metadata, right: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev() && left.ino() == right.ino()
+    left.identity() == right.identity()
 }
-#[cfg(windows)]
-fn same_file_identity(left: &Metadata, right: &Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
+
+#[cfg(test)]
+#[test]
+fn native_config_identity_preserves_aliases_and_bounded_reads() {
+    let directory = std::env::temp_dir().join(format!(
+        "izanami-native-identity-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&directory).unwrap();
+    let first = directory.join("first");
+    let second = directory.join("second");
+    let alias = directory.join("alias");
+    fs::write(&first, b"same bytes").unwrap();
+    fs::write(&second, b"same bytes").unwrap();
+    fs::hard_link(&first, &alias).unwrap();
+    let original = Metadata::symlink_metadata(&first).unwrap();
+    let distinct = Metadata::symlink_metadata(&second).unwrap();
+    let linked = Metadata::symlink_metadata(&alias).unwrap();
+    assert!(!same_file_identity(&original, &distinct));
+    assert!(same_file_identity(&original, &linked));
+    assert!(!metadata_is_link(&original));
+    assert_eq!(read_config_file_bounded(&first).unwrap(), b"same bytes");
+    fs::remove_dir_all(directory).unwrap();
 }
-#[cfg(not(any(unix, windows)))]
-fn same_file_identity(_left: &Metadata, _right: &Metadata) -> bool {
-    false
-}
+
 fn metadata_is_link(metadata: &Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
@@ -277,7 +293,7 @@ fn invalid_config_file(message: impl Into<String>) -> io::Error {
 fn read_config_file_bounded(path: &Path) -> io::Result<Vec<u8>> {
     let maximum_u64 = u64::try_from(CONFIG_FILE_MAX_BYTES_V1)
         .expect("fixed Izanami configuration limit fits u64");
-    let named_before = fs::symlink_metadata(path)?;
+    let named_before = Metadata::symlink_metadata(path)?;
     if metadata_is_link(&named_before) || !named_before.is_file() {
         return Err(invalid_config_file(
             "persisted Izanami configuration is not a direct regular file",
@@ -302,7 +318,7 @@ fn read_config_file_bounded(path: &Path) -> io::Result<Vec<u8>> {
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let mut file = options.open(path)?;
-    let opened_before = file.metadata()?;
+    let opened_before = Metadata::of(&file)?;
     if metadata_is_link(&opened_before)
         || !opened_before.is_file()
         || !same_file_identity(&named_before, &opened_before)
@@ -328,8 +344,8 @@ fn read_config_file_bounded(path: &Path) -> io::Result<Vec<u8>> {
             "persisted Izanami configuration grew while being read",
         ));
     }
-    let opened_after = file.metadata()?;
-    let named_after = fs::symlink_metadata(path)?;
+    let opened_after = Metadata::of(&file)?;
+    let named_after = Metadata::symlink_metadata(path)?;
     if metadata_is_link(&named_after)
         || !named_after.is_file()
         || metadata_is_link(&opened_after)

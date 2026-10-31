@@ -38,12 +38,40 @@ where
     T: norito::NoritoSerialize,
     for<'de> T: norito::NoritoDeserialize<'de>,
 {
+    read_with_owner(world, key, None)
+}
+
+fn read_with_owner<T>(
+    world: &impl WorldReadOnly,
+    key: &StatePath,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<T>, Error>
+where
+    T: norito::NoritoSerialize,
+    for<'de> T: norito::NoritoDeserialize<'de>,
+{
     world
         .smart_contract_state()
         .get(key)
         .map(|bytes| {
-            norito::decode_canonical(bytes)
-                .map_err(|error| reject(format!("invalid native enrollment state: {error}")))
+            crate::execution_attempt::canonical_policy_decode(
+                owner,
+                bytes,
+                norito::canonical_decode_limits(bytes.len()),
+            )
+            .map_err(|error| {
+                let rejected = |error: norito::CanonicalDecodeControlError| {
+                    reject(format!("invalid native enrollment state: {error}"))
+                };
+                match owner {
+                    Some(owner) => owner.attempt_error_to_instruction_error(
+                        crate::execution_attempt::canonical_decode_control_attempt_error(
+                            error, rejected,
+                        ),
+                    ),
+                    None => rejected(error),
+                }
+            })
         })
         .transpose()
 }
@@ -52,7 +80,17 @@ pub fn enrollment(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
 ) -> Result<Option<AssetUidEnrollmentV1>, Error> {
-    let value: Option<AssetUidEnrollmentV1> = read(world, &enrollment_key(definition))?;
+    enrollment_with_owner(world, definition, None)
+}
+
+/// Read enrollment while retaining a transaction's original local decode refusal.
+pub fn enrollment_with_owner(
+    world: &impl WorldReadOnly,
+    definition: &AssetDefinitionId,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<AssetUidEnrollmentV1>, Error> {
+    let value: Option<AssetUidEnrollmentV1> =
+        read_with_owner(world, &enrollment_key(definition), owner)?;
     if value
         .as_ref()
         .is_some_and(|v| v.asset_definition_id != *definition || v.activated_at_height == 0)
@@ -69,7 +107,17 @@ pub fn system(
     definition: &AssetDefinitionId,
     account: &AccountId,
 ) -> Result<Option<AssetUidSystemAccountV1>, Error> {
-    let value: Option<AssetUidSystemAccountV1> = read(world, &system_key(definition, account))?;
+    system_with_owner(world, definition, account, None)
+}
+
+fn system_with_owner(
+    world: &impl WorldReadOnly,
+    definition: &AssetDefinitionId,
+    account: &AccountId,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<AssetUidSystemAccountV1>, Error> {
+    let value: Option<AssetUidSystemAccountV1> =
+        read_with_owner(world, &system_key(definition, account), owner)?;
     if value.as_ref().is_some_and(|v| {
         v.asset_definition_id != *definition || v.account_id != *account || v.revision == 0
     }) {
@@ -92,9 +140,20 @@ pub fn beneficial(
     definition: &AssetDefinitionId,
     account: &AccountId,
 ) -> Result<Option<BeneficialEnrollment>, Error> {
-    let retail = super::asset_uid::member_policy(world, definition, account)?.is_some();
-    let fi = super::asset_fi::fi(world, definition, account)?;
-    let system = system(world, definition, account)?;
+    beneficial_with_owner(world, definition, account, None)
+}
+
+/// Resolve categories in their existing order without losing transaction-local refusals.
+pub fn beneficial_with_owner(
+    world: &impl WorldReadOnly,
+    definition: &AssetDefinitionId,
+    account: &AccountId,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<BeneficialEnrollment>, Error> {
+    let retail =
+        super::asset_uid::member_policy_with_owner(world, definition, account, owner)?.is_some();
+    let fi = super::asset_fi::fi_with_owner(world, definition, account, owner)?;
+    let system = system_with_owner(world, definition, account, owner)?;
     if usize::from(retail) + usize::from(fi.is_some()) + usize::from(system.is_some()) > 1 {
         return Err(reject("asset enrollment categories overlap"));
     }
@@ -112,13 +171,22 @@ pub fn beneficial(
 /// New ordinary monetary use requires current eligibility at both boundaries.
 /// Native retained-payer returns use their separate sealed custody path.
 pub fn require_active_beneficial(world: &impl WorldReadOnly, id: &AssetId) -> Result<(), Error> {
-    if enrollment(world, id.definition())?.is_none() {
+    require_active_beneficial_with_owner(world, id, None)
+}
+
+/// Apply ordinary monetary enrollment checks with the transaction's decode owner.
+pub fn require_active_beneficial_with_owner(
+    world: &impl WorldReadOnly,
+    id: &AssetId,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<(), Error> {
+    if enrollment_with_owner(world, id.definition(), owner)?.is_none() {
         return Ok(());
     }
     if id.scope() != &AssetBalanceScope::Global {
         return Err(reject("enrolled asset requires exact Global balances"));
     }
-    match beneficial(world, id.definition(), id.account())? {
+    match beneficial_with_owner(world, id.definition(), id.account(), owner)? {
         Some(
             BeneficialEnrollment::Retail
             | BeneficialEnrollment::Fi { enabled: true }

@@ -289,7 +289,7 @@ const FRAME_HEADER_BYTES: usize = 32 + 2 + 1 + 1;
 
 /// Width fixed by a validated public odd prime, always at most 62 bits.
 fn residue_width(prime: u64) -> usize {
-    (u64::BITS - prime.leading_zeros()) as usize
+    prime.bit_width() as usize
 }
 
 /// Public limb bytes, with at most seven zero high padding bits.
@@ -319,14 +319,14 @@ fn pack_limb(bytes: &mut [u8], words: &[u64], width: usize) {
         *accumulator |= u128::from(*word) << bits;
         bits += width;
         while bits >= 8 {
-            bytes[offset] = *accumulator as u8;
+            bytes[offset] = u8::try_from(*accumulator & 0xff).expect("masked byte fits u8");
             *accumulator >>= 8;
             bits -= 8;
             offset += 1;
         }
     }
     if bits != 0 {
-        bytes[offset] = *accumulator as u8;
+        bytes[offset] = u8::try_from(*accumulator & 0xff).expect("masked byte fits u8");
     }
 }
 
@@ -348,7 +348,9 @@ fn unpack_limb(
             bits += 8;
             offset += 1;
         }
-        let value = Zeroizing::new((*accumulator & mask) as u64);
+        let value = Zeroizing::new(
+            u64::try_from(*accumulator & mask).map_err(|_| BgvError::MalformedFrame)?,
+        );
         if *value >= prime {
             return Err(BgvError::NonCanonical {
                 index: first_index + index,
@@ -543,7 +545,8 @@ impl Ciphertext {
                 .to_le_bytes(),
         );
         bytes[34] = u8::try_from(self.components.len()).map_err(|_| BgvError::MalformedFrame)?;
-        bytes[35] = self.precision.exponent() as u8;
+        bytes[35] =
+            u8::try_from(self.precision.exponent()).map_err(|_| BgvError::MalformedFrame)?;
         let noise_words = self.noise.as_natural().words_le();
         let mut offset = FRAME_HEADER_BYTES;
         for index in 0..profile.noise_bound_words() {
@@ -597,9 +600,7 @@ impl Ciphertext {
         // bound before allocating any private residue owner.
         let mut noise = Vec::new();
         frame_reserve(&mut noise, profile.noise_bound_words())?;
-        for chunk in noise_bytes.chunks_exact(8) {
-            let mut word = [0_u8; 8];
-            word.copy_from_slice(chunk);
+        for &word in noise_bytes.as_chunks::<8>().0 {
             noise.push(u64::from_le_bytes(word));
         }
         let shape =
@@ -863,9 +864,7 @@ mod tests {
         if stage == at {
             FRAME_FAULT.set((usize::MAX, false));
             FRAME_CLEARED_AT_FAULT.set(super::super::poly::tests::cleared_words());
-            if unwind {
-                panic!("packed frame partial-owner unwind control");
-            }
+            assert!(!unwind, "packed frame partial-owner unwind control");
             return Err(BgvError::MalformedFrame);
         }
         Ok(())
@@ -1389,7 +1388,7 @@ mod tests {
                         0 => 0,
                         1 => 1,
                         2 => prime - 1,
-                        _ => ((index as u64).wrapping_mul(0x1234_5678_9abc_def)) % prime,
+                        _ => ((index as u64).wrapping_mul(0x0123_4567_89ab_cdef)) % prime,
                     })
                     .collect();
                 let mut expected = vec![0_u8; (degree * width).div_ceil(8)];

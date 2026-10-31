@@ -2,13 +2,16 @@
 //!
 //! For master `T=p^E`, source precision `p^r` and `a=p^(E-r)`, compute
 //! `w_i=[a*c_i]_Q` by exact centered RNS conversion and encrypt `w0+w1*s`
-//! using a genuine encryption of the same secret. Complete coefficient-slot,
-//! upper-digit and inverse transforms recover the original full-ring message.
+//! using a genuine encryption of the same secret. Ring mode extracts every
+//! coefficient bank. Scalar mode requires a closed scalar-message source and
+//! extracts bank zero through the same trace, upper-digit and inverse kernels.
+//! Both recover the complete original message; the dense homomorphic input is
+//! never treated as a scalar slot vector.
 //! The strict public condition `2*a*V+(N+1)*Q<a*Q` uses dense ternary secrets.
 //!
 //! Closed local sources carry construction provenance only. There is no imported
 //! ciphertext/key constructor or external authentication claim. Runtime keys
-//! contain no SecretKey: separate custody is returned once during setup.
+//! contain no `SecretKey`: separate custody is returned once during setup.
 //! TODO(C.8, R.9, R.11): qualify production parameters, complete application
 //! resource ledgers, external key/input proofs and circuit privacy. Small-ring
 //! arithmetic does not settle those obligations or activate current candidates.
@@ -24,13 +27,33 @@ use super::{
     BgvError, BgvProfile, Ciphertext, CiphertextShape, CoefficientSlotBudget,
     CoefficientSlotDecomposition, CoefficientSlotError, CoefficientSlotRecomposition,
     EncryptedUpperDigitsPlan, EvaluationKeys, KeySet, Plaintext, PublicKey, SecretKey,
-    SlotLinearError, SlotLinearMap, SlotLinearPlan, SwitchingKeyKind, UpperDigitsBudget,
-    UpperDigitsError, coefficient_slots,
+    SlotEncoding, SlotLinearError, SlotLinearMap, SlotLinearPlan, SwitchingKeyKind,
+    UpperDigitsBudget, UpperDigitsError, coefficient_slots,
     coins::{EntropySource, OsEntropy, small_residue},
     cost::CostModel,
-    relative_trace::BankRetention,
+    relative_trace::{BankRetention, CoefficientBankSelection},
 };
 use crate::prime_power::UpperDigitsProgram;
+
+/// Public message-space requirement of a prepared bootstrap.
+///
+/// This selects a fixed algorithm and its exact work; it grants no source
+/// membership capability. Scalar execution requires [`LocalScalarCiphertext`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootstrapMessageSpace {
+    /// Preserve every coefficient of an arbitrary ring message.
+    Ring,
+    /// Preserve a proved member of the canonical scalar-slot subalgebra.
+    ScalarSlots,
+}
+impl BootstrapMessageSpace {
+    const fn selection(self) -> CoefficientBankSelection {
+        match self {
+            Self::Ring => CoefficientBankSelection::All,
+            Self::ScalarSlots => CoefficientBankSelection::Zero,
+        }
+    }
+}
 
 /// Scoped setup ceilings, measured as resident element payload rather than frames.
 ///
@@ -38,6 +61,10 @@ use crate::prime_power::UpperDigitsProgram;
 /// allocator overhead and the profile remain separate. The secret ceiling is
 /// charged although its owner is returned separately from the runtime key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Every resource ceiling names its explicit byte unit; public fields and payload scopes stay unambiguous."
+)]
 pub struct LocalBootstrapSetupBudget {
     /// Public/evaluation/encrypted-secret resident residue elements.
     pub retained_residue_bytes: usize,
@@ -89,7 +116,7 @@ pub struct BootstrapBudget {
     pub input_owned_bytes: usize,
     /// Both source-derived master plaintext coefficient buffers.
     pub input_plaintext_bytes: usize,
-    /// Input conversion and plaintext-product shared CostModel units.
+    /// Input conversion and plaintext-product shared `CostModel` units.
     pub input_arithmetic_units: u64,
     /// Separate input plaintext-add coefficient words.
     pub input_addition_words: u64,
@@ -125,7 +152,7 @@ pub struct BootstrapPayload {
     pub input_owned_bytes: usize,
     /// Two master-precision plaintext buffers.
     pub input_plaintext_bytes: usize,
-    /// Exact conversion/scalar/product CostModel units, excluding copies/clears.
+    /// Exact conversion/scalar/product `CostModel` units, excluding copies/clears.
     pub input_arithmetic_units: u64,
     /// Exact separate plaintext-add coefficient words.
     pub input_addition_words: u64,
@@ -236,6 +263,7 @@ impl BootstrapMetadata {
 // Only complete canonical preparation constructs this core. Public shapes and
 // shared ownership create neither key relation nor ciphertext origin authority.
 struct BootstrapPreparation {
+    message_space: BootstrapMessageSpace,
     homomorphic: CiphertextShape,
     scale: u64,
     decomposition: CoefficientSlotDecomposition,
@@ -283,11 +311,31 @@ fn stream_residue_bytes(
         || !banks.is_power_of_two()
         || digits.banks() != banks
         || digits.slots() != extraction.slots()
+        || digits.selection() != extraction.selection()
+        || restoration.selection() != extraction.selection()
     {
         return Err(BootstrapError::Shape);
     }
     let depth = banks.ilog2() as usize;
     let mut peak = mul(2, incoming)?;
+    if extraction.selection() == CoefficientBankSelection::Zero {
+        // The even-only walk owns current/image/sum and no deferred odd sibling.
+        if depth > 0 {
+            peak = peak.max(mul(3, incoming)?);
+        }
+        peak = peak.max(add(
+            mul(2, incoming)?,
+            extraction.payload().routing.scratch_residue_bytes,
+        )?);
+        peak = peak.max(digits.payload().single_bank_residue_bytes);
+        peak = peak.max(add(
+            mul(2, outgoing)?,
+            restoration.payload().routing.scratch_residue_bytes,
+        )?);
+        // The shared inverse still executes its ordinal-zero monomial product.
+        peak = peak.max(mul(2, outgoing)?);
+        return Ok(peak);
+    }
     for done in 0..banks {
         // Binary DFS visits leaf bit_reverse(done,h). The still-pending odd
         // siblings are exactly h-popcount(done); previous output exists iff done>0.
@@ -355,8 +403,8 @@ fn aggregate_work(
         digits.payload().canonical_arithmetic_units,
         restoration.operations().arithmetic_units,
     ])?;
-    // Each transform stays at its output level and already counts all d banks.
-    // Upper payload likewise already counts every bank: never multiply by d again.
+    // Each transform stays at its output level and already counts selected banks.
+    // Upper payload likewise includes its selection; never multiply by d again.
     let words = checked_sum([
         input_words,
         transform_words(
@@ -428,6 +476,10 @@ fn transform_budget(
     Ok(())
 }
 impl BootstrapPreparation {
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Consume this exact source-admission result when creating its per-call payload."
+    )]
     fn admit_budget(
         &self,
         profile: &BgvProfile,
@@ -622,9 +674,10 @@ impl BootstrapPlan {
     pub fn metadata_requirement(
         profile: &BgvProfile,
         precision: super::PlaintextPrecision,
+        message_space: BootstrapMessageSpace,
         program: &crate::prime_power::UpperDigitsPlan,
     ) -> Result<super::PlanMetadataRequirement, super::PlanMetadataError> {
-        Self::split_metadata_requirement(profile, precision, program)?.standalone()
+        Self::split_metadata_requirement(profile, precision, message_space, program)?.standalone()
     }
 
     /// Allocation-free shared-core and per-source complementary metadata bounds.
@@ -637,6 +690,7 @@ impl BootstrapPlan {
     pub fn split_metadata_requirement(
         profile: &BgvProfile,
         precision: super::PlaintextPrecision,
+        message_space: BootstrapMessageSpace,
         program: &crate::prime_power::UpperDigitsPlan,
     ) -> Result<BootstrapMetadata, super::PlanMetadataError> {
         use super::metadata::{add, mul, shape_heap_bound, shape_value_bound, sum};
@@ -650,24 +704,25 @@ impl BootstrapPlan {
             return Err(super::PlanMetadataError::Context);
         }
         let (slots, banks, bits, depth) = super::metadata::geometry(profile, master)?;
+        let selected_banks = message_space.selection().count(banks);
         // Shared H:1; decomposition input/trace pair/route pair:5;
-        // restoration input/route pair/trace output:4 plus d trace inputs;
+        // restoration input/route pair/trace output:4 plus selected trace inputs;
         // upper outer input/output:2. All stored bounds are admitted.
         let heap = sum(&[
-            mul(add(banks, 12)?, shape_heap_bound(profile)?)?,
-            mul(banks, size_of::<CiphertextShape>())?,
+            mul(add(selected_banks, 12)?, shape_heap_bound(profile)?)?,
+            mul(selected_banks, size_of::<CiphertextShape>())?,
             mul(
                 sum(&[mul(2, slots)?, mul(5, bits)?, mul(4, depth)?])?,
                 size_of::<u32>(),
             )?,
         ])?;
         let route = SlotLinearPlan::<1, 1>::metadata_requirement(profile, master)?;
-        // Recomposition keeps its temporary d-shape input vector while the
+        // Recomposition keeps its temporary selected-shape input vector while the
         // trace owns its cloned vector and the matrix is prepared. The retained
         // vector is in `heap`; this charges only the second staging vector.
         let staging = add(
             size_of::<Vec<CiphertextShape>>(),
-            mul(banks, shape_value_bound(profile)?)?,
+            mul(selected_banks, shape_value_bound(profile)?)?,
         )?;
         // Trace construction retains output, image, sum and monomial result;
         // the outer constructor also owns fresh/mul-plain/H transfer temporaries.
@@ -678,7 +733,7 @@ impl BootstrapPlan {
         )?;
         let program_scratch = add(
             program.geometry().preparation_scratch_bytes,
-            program.preparation_owner_bytes(),
+            crate::prime_power::UpperDigitsPlan::preparation_owner_bytes(),
         )?;
         let scratch = sum(&[
             staging,
@@ -764,6 +819,7 @@ impl BootstrapPlan {
     pub fn new(
         profile: &BgvProfile,
         input: &CiphertextShape,
+        message_space: BootstrapMessageSpace,
         program: UpperDigitsProgram,
         levels: &[usize],
         budget: BootstrapBudget,
@@ -781,7 +837,8 @@ impl BootstrapPlan {
         let scale = master.modulus() / effective.modulus();
         let slots = super::SlotEncoding::slot_count(profile, master)?;
         let banks = profile.degree() / slots;
-        let stream_metadata = coefficient_slots::stream_metadata_bytes(profile, banks)?;
+        let selection = message_space.selection();
+        let stream_metadata = coefficient_slots::stream_metadata_bytes(profile, banks, selection)?;
         limit(
             stream_metadata,
             budget.stream_metadata_bytes,
@@ -801,6 +858,7 @@ impl BootstrapPlan {
             &homomorphic,
             budget.decomposition,
             BankRetention::Streaming,
+            selection,
         )?;
         let digits = EncryptedUpperDigitsPlan::from_shape(
             profile,
@@ -811,12 +869,14 @@ impl BootstrapPlan {
             levels,
             budget.upper_digits,
             BankRetention::Streaming,
+            selection,
         )?;
         let recomposition = CoefficientSlotRecomposition::prepare(
             profile,
             digits.output_shape(),
             budget.recomposition,
             BankRetention::Streaming,
+            selection,
         )?;
         if recomposition.output_shape().plaintext_precision() != effective {
             return Err(BootstrapError::Shape);
@@ -843,6 +903,7 @@ impl BootstrapPlan {
         galois.sort_unstable();
         galois.dedup();
         let preparation = BootstrapPreparation {
+            message_space,
             homomorphic,
             scale,
             decomposition,
@@ -887,6 +948,12 @@ impl BootstrapPlan {
             preparation: Arc::clone(&self.preparation),
             payload,
         })
+    }
+
+    /// Fixed message space required by this immutable prepared algorithm.
+    #[must_use]
+    pub fn message_space(&self) -> BootstrapMessageSpace {
+        self.preparation.message_space
     }
 
     /// Whether two descriptors retain the actual same immutable preparation.
@@ -982,6 +1049,295 @@ impl LocalBootstrapCiphertext<'_> {
     #[must_use]
     pub fn into_ciphertext(self) -> Ciphertext {
         self.value
+    }
+}
+
+/// A same-key local source whose message lies in the canonical scalar subalgebra.
+///
+/// Membership is modulo effective plaintext precision; encrypted residues and
+/// noise need not be sparse at master precision. Only checked plaintext seeds
+/// and closure-preserving operations construct this owner. It is not imported
+/// ciphertext authentication, packed-byte admission or a privacy guarantee.
+/// No raw/general local conversion can recover the capability after demotion.
+pub struct LocalScalarCiphertext<'key> {
+    local: LocalBootstrapCiphertext<'key>,
+    encoding: SlotEncoding,
+}
+impl fmt::Debug for LocalScalarCiphertext<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[REDACTED local scalar ciphertext]")
+    }
+}
+impl<'key> LocalScalarCiphertext<'key> {
+    /// Borrow the canonical ciphertext without granting a scalar constructor.
+    #[must_use]
+    pub fn ciphertext(&self) -> &Ciphertext {
+        self.local.ciphertext()
+    }
+    /// Exact public canonical shape of the owned ciphertext.
+    #[must_use]
+    pub fn shape(&self) -> CiphertextShape {
+        self.local.shape()
+    }
+    /// Borrow local provenance for canonical preflight without relinquishing ownership.
+    #[must_use]
+    pub fn as_local(&self) -> &LocalBootstrapCiphertext<'key> {
+        &self.local
+    }
+    /// Consume this owner and relinquish scalar membership provenance.
+    #[must_use]
+    pub fn into_local(self) -> LocalBootstrapCiphertext<'key> {
+        self.local
+    }
+}
+
+impl LocalBootstrapKey {
+    fn check_scalar_source(
+        &self,
+        profile: &BgvProfile,
+        input: &LocalScalarCiphertext<'_>,
+    ) -> Result<(), BootstrapError> {
+        self.check_source(profile, &input.local)?;
+        input
+            .encoding
+            .plaintext_precision()
+            .check_profile(profile)?;
+        input
+            .encoding
+            .plaintext_precision()
+            .check_same(input.local.value.plaintext_precision())?;
+        if input.encoding.slots()
+            != SlotEncoding::slot_count(profile, input.local.value.plaintext_precision())?
+        {
+            return Err(BootstrapError::Shape);
+        }
+        Ok(())
+    }
+
+    /// Honestly encrypt an actually checked scalar plaintext under this local owner.
+    ///
+    /// # Errors
+    /// Foreign context, off-stride nonzero plaintext, entropy or canonical encryption refusal.
+    pub fn encrypt_scalar<'key>(
+        &'key self,
+        profile: &BgvProfile,
+        encoding: &SlotEncoding,
+        plaintext: &Plaintext,
+    ) -> Result<LocalScalarCiphertext<'key>, BootstrapError> {
+        self.public.check_profile(profile)?;
+        encoding.plaintext_precision().check_profile(profile)?;
+        encoding.check_scalar_subalgebra(plaintext)?;
+        let local = self.encrypt(profile, plaintext)?;
+        Ok(LocalScalarCiphertext {
+            local,
+            encoding: *encoding,
+        })
+    }
+
+    /// Construct a noiseless local ciphertext from an actually checked scalar plaintext.
+    ///
+    /// # Errors
+    /// Foreign context, off-stride nonzero plaintext or canonical level/noise refusal.
+    pub fn trivial_scalar<'key>(
+        &'key self,
+        profile: &BgvProfile,
+        encoding: &SlotEncoding,
+        plaintext: &Plaintext,
+        level: usize,
+    ) -> Result<LocalScalarCiphertext<'key>, BootstrapError> {
+        self.public.check_profile(profile)?;
+        encoding.plaintext_precision().check_profile(profile)?;
+        encoding.check_scalar_subalgebra(plaintext)?;
+        let local = self.trivial(profile, plaintext, level)?;
+        Ok(LocalScalarCiphertext {
+            local,
+            encoding: *encoding,
+        })
+    }
+
+    /// Add two scalar messages through the canonical local addition.
+    ///
+    /// # Errors
+    /// Foreign origin/context or canonical shape/noise refusal; consumed owners clear.
+    pub fn add_scalar<'key>(
+        &'key self,
+        profile: &BgvProfile,
+        lhs: LocalScalarCiphertext<'key>,
+        rhs: LocalScalarCiphertext<'key>,
+    ) -> Result<LocalScalarCiphertext<'key>, BootstrapError> {
+        self.check_scalar_source(profile, &lhs)?;
+        self.check_scalar_source(profile, &rhs)?;
+        if lhs.encoding != rhs.encoding {
+            return Err(BootstrapError::Shape);
+        }
+        let encoding = lhs.encoding;
+        let local = self.add(profile, lhs.local, rhs.local)?;
+        Ok(LocalScalarCiphertext { local, encoding })
+    }
+
+    /// Add a checked scalar plaintext, retaining the unchanged scalar source owner.
+    ///
+    /// # Errors
+    /// Origin/context/membership refusal before arithmetic, or canonical noise refusal.
+    pub fn add_plain_scalar<'key>(
+        &'key self,
+        profile: &BgvProfile,
+        input: LocalScalarCiphertext<'key>,
+        plaintext: &Plaintext,
+    ) -> Result<(LocalScalarCiphertext<'key>, LocalScalarCiphertext<'key>), BootstrapError> {
+        self.check_scalar_source(profile, &input)?;
+        input.encoding.check_scalar_subalgebra(plaintext)?;
+        let encoding = input.encoding;
+        let (source, result) = self.add_plain(profile, input.local, plaintext)?;
+        Ok((
+            LocalScalarCiphertext {
+                local: source,
+                encoding,
+            },
+            LocalScalarCiphertext {
+                local: result,
+                encoding,
+            },
+        ))
+    }
+
+    /// Multiply by a checked scalar plaintext, retaining the unchanged scalar source.
+    ///
+    /// # Errors
+    /// Origin/context/membership refusal before arithmetic, or canonical noise refusal.
+    pub fn mul_plain_scalar<'key>(
+        &'key self,
+        profile: &BgvProfile,
+        input: LocalScalarCiphertext<'key>,
+        plaintext: &Plaintext,
+    ) -> Result<(LocalScalarCiphertext<'key>, LocalScalarCiphertext<'key>), BootstrapError> {
+        self.check_scalar_source(profile, &input)?;
+        input.encoding.check_scalar_subalgebra(plaintext)?;
+        let encoding = input.encoding;
+        let (source, result) = self.mul_plain(profile, input.local, plaintext)?;
+        Ok((
+            LocalScalarCiphertext {
+                local: source,
+                encoding,
+            },
+            LocalScalarCiphertext {
+                local: result,
+                encoding,
+            },
+        ))
+    }
+
+    /// Lower a scalar source through the canonical modulus-switch path.
+    ///
+    /// # Errors
+    /// Foreign origin/context or canonical level/noise refusal.
+    pub fn switch_scalar<'key>(
+        &'key self,
+        profile: &BgvProfile,
+        input: LocalScalarCiphertext<'key>,
+        level: usize,
+    ) -> Result<LocalScalarCiphertext<'key>, BootstrapError> {
+        self.check_scalar_source(profile, &input)?;
+        let encoding = input.encoding;
+        let local = self.switch_to(profile, input.local, level)?;
+        Ok(LocalScalarCiphertext { local, encoding })
+    }
+
+    /// Multiply two scalar messages through the canonical tensor/relinearization path.
+    ///
+    /// # Errors
+    /// Foreign origin/context or canonical shape/noise refusal; consumed owners clear.
+    pub fn multiply_scalar<'key>(
+        &'key self,
+        profile: &BgvProfile,
+        lhs: LocalScalarCiphertext<'key>,
+        rhs: LocalScalarCiphertext<'key>,
+    ) -> Result<LocalScalarCiphertext<'key>, BootstrapError> {
+        self.check_scalar_source(profile, &lhs)?;
+        self.check_scalar_source(profile, &rhs)?;
+        if lhs.encoding != rhs.encoding {
+            return Err(BootstrapError::Shape);
+        }
+        let encoding = lhs.encoding;
+        let local = self.multiply(profile, lhs.local, rhs.local)?;
+        Ok(LocalScalarCiphertext { local, encoding })
+    }
+
+    /// Square a scalar source without cloning its ciphertext owner.
+    ///
+    /// # Errors
+    /// Foreign origin/context or canonical shape/noise refusal.
+    pub fn square_scalar<'key>(
+        &'key self,
+        profile: &BgvProfile,
+        input: LocalScalarCiphertext<'key>,
+    ) -> Result<LocalScalarCiphertext<'key>, BootstrapError> {
+        self.check_scalar_source(profile, &input)?;
+        let encoding = input.encoding;
+        let local = self.square(profile, input.local)?;
+        Ok(LocalScalarCiphertext { local, encoding })
+    }
+
+    /// Route scalar sources through the sole canonical encoded-diagonal map.
+    ///
+    /// Encoded diagonals and odd Galois permutations preserve the scalar
+    /// subalgebra. Original owners are returned unchanged alongside actual outputs.
+    /// # Errors
+    /// Foreign origin/context, empty input, resource or canonical routing/noise refusal.
+    pub fn route_scalar<'key, const I: usize, const O: usize>(
+        &'key self,
+        profile: &BgvProfile,
+        plan: &SlotLinearPlan<I, O>,
+        map: &SlotLinearMap<I, O>,
+        inputs: [LocalScalarCiphertext<'key>; I],
+        owned_residue_bytes: usize,
+    ) -> Result<
+        (
+            [LocalScalarCiphertext<'key>; I],
+            [LocalScalarCiphertext<'key>; O],
+        ),
+        BootstrapError,
+    > {
+        let encoding = inputs.first().ok_or(BootstrapError::Shape)?.encoding;
+        for input in &inputs {
+            self.check_scalar_source(profile, input)?;
+            if input.encoding != encoding {
+                return Err(BootstrapError::Shape);
+            }
+        }
+        let (sources, results) = self.route(
+            profile,
+            plan,
+            map,
+            inputs.map(|input| input.local),
+            owned_residue_bytes,
+        )?;
+        Ok((
+            sources.map(|local| LocalScalarCiphertext { local, encoding }),
+            results.map(|local| LocalScalarCiphertext { local, encoding }),
+        ))
+    }
+
+    /// Refresh a proved scalar source through the selected canonical bootstrap.
+    ///
+    /// Either complete ring extraction or the fixed scalar bank selection may
+    /// preserve this capability. Both execute the same full encrypted-secret
+    /// input and strict carry admission, with no runtime secret access.
+    /// # Errors
+    /// Foreign origin/context/exact shape, missing key, resource or canonical arithmetic refusal.
+    pub fn refresh_scalar<'key>(
+        &'key self,
+        profile: &BgvProfile,
+        plan: &BootstrapPlan,
+        input: LocalScalarCiphertext<'key>,
+    ) -> Result<LocalScalarCiphertext<'key>, BootstrapError> {
+        self.check_scalar_source(profile, &input)?;
+        let encoding = input.encoding;
+        let local = self.refresh_local(profile, plan, input.local)?;
+        encoding
+            .plaintext_precision()
+            .check_same(local.value.plaintext_precision())?;
+        Ok(LocalScalarCiphertext { local, encoding })
     }
 }
 
@@ -1139,6 +1495,10 @@ impl LocalBootstrapKey {
     /// # Errors
     /// Foreign origin or canonical master/precision/level/component/noise refusal.
     /// Both consumed sources and partial outputs clear on failure or unwind.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "The API consumes and retires source ciphertext owners on success, failure and unwind; borrowing would change custody."
+    )]
     pub fn add<'key>(
         &'key self,
         profile: &BgvProfile,
@@ -1153,22 +1513,33 @@ impl LocalBootstrapKey {
         Ok(LocalBootstrapCiphertext { key: self, value })
     }
 
-    /// Consume a local source through the canonical plaintext sum.
+    /// Apply the canonical plaintext sum and return both checked owners.
+    ///
+    /// The first result is the unchanged source with the same exact shape and
+    /// residue allocations; the second is the actual sum. Both coexist until
+    /// the caller drops or retains the source. No ciphertext is cloned or
+    /// reconstructed from raw residues.
     ///
     /// # Errors
     /// Foreign origin or canonical master/precision/noise refusal before private
-    /// coefficients are read. Consumed and partial ciphertexts clear on failure.
+    /// coefficients are read. Both owners clear on failure or unwind.
     pub fn add_plain<'key>(
         &'key self,
         profile: &BgvProfile,
         input: LocalBootstrapCiphertext<'key>,
         plaintext: &Plaintext,
-    ) -> Result<LocalBootstrapCiphertext<'key>, BootstrapError> {
+    ) -> Result<
+        (
+            LocalBootstrapCiphertext<'key>,
+            LocalBootstrapCiphertext<'key>,
+        ),
+        BootstrapError,
+    > {
         self.check_source(profile, &input)?;
         let value = profile.add_plain(&input.value, plaintext)?;
         #[cfg(test)]
         tests::checkpoint("plaintext sum output")?;
-        Ok(LocalBootstrapCiphertext { key: self, value })
+        Ok((input, LocalBootstrapCiphertext { key: self, value }))
     }
 
     /// Apply the canonical plaintext product and return both checked owners.
@@ -1249,6 +1620,10 @@ impl LocalBootstrapKey {
     ///
     /// # Errors
     /// Foreign local origin or canonical context/component/noise refusal.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "The API consumes and retires source ciphertext owners on success, failure and unwind; borrowing would change custody."
+    )]
     pub fn multiply<'key>(
         &'key self,
         profile: &BgvProfile,
@@ -1264,6 +1639,10 @@ impl LocalBootstrapKey {
     ///
     /// # Errors
     /// Foreign local origin or canonical component/noise refusal.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "The API consumes and retires source ciphertext owners on success, failure and unwind; borrowing would change custody."
+    )]
     pub fn square<'key>(
         &'key self,
         profile: &BgvProfile,
@@ -1334,15 +1713,31 @@ impl LocalBootstrapKey {
             outputs.map(|value| LocalBootstrapCiphertext { key: self, value }),
         ))
     }
-    /// Consume a local source and execute the complete admitted bootstrap pipeline.
+    /// Consume a general local source through a complete Ring bootstrap plan.
     ///
-    /// This reads no SecretKey and performs no runtime decryption/re-encryption.
+    /// `ScalarSlots` plans require the closed source capability of [`Self::refresh_scalar`].
+    ///
+    /// This reads no `SecretKey` and performs no runtime decryption/re-encryption.
     /// Every stage retains its canonical exact shape and genuine bank origin.
     ///
     /// # Errors
     /// Foreign origin, exact source/key mismatch or canonical allocation/arithmetic
     /// refusal. All consumed and partial owners clear on failure or unwind.
     pub fn refresh<'key>(
+        &'key self,
+        profile: &BgvProfile,
+        plan: &BootstrapPlan,
+        input: LocalBootstrapCiphertext<'key>,
+    ) -> Result<LocalBootstrapCiphertext<'key>, BootstrapError> {
+        if plan.message_space() != BootstrapMessageSpace::Ring {
+            return Err(BootstrapError::Shape);
+        }
+        self.refresh_local(profile, plan, input)
+    }
+
+    // Sole encrypted bootstrap executor. Public callers establish message-space
+    // authority before reaching this edge; the complete H/carry pipeline remains.
+    fn refresh_local<'key>(
         &'key self,
         profile: &BgvProfile,
         plan: &BootstrapPlan,
@@ -1372,6 +1767,7 @@ impl LocalBootstrapKey {
             plan.preparation.decomposition.output_shape(),
             plan.preparation.decomposition.slots(),
             plan.preparation.decomposition.banks(),
+            plan.preparation.decomposition.selection(),
             self.evaluation.relinearization(),
         )?;
         #[cfg(test)]
@@ -1495,9 +1891,7 @@ mod tests {
         if call == at && mode != 0 {
             FAULT.with(|v| v.set((usize::MAX, 0)));
             AT_FAULT.with(|v| v.set(poly::tests::cleared_words()));
-            if mode == 2 {
-                panic!("local bootstrap clearing unwind control");
-            }
+            assert_ne!(mode, 2, "local bootstrap clearing unwind control");
             return Err(BootstrapError::Shape);
         }
         Ok(())
@@ -1524,7 +1918,7 @@ mod tests {
     }
     fn center(x: &BigInt, q: &BigInt) -> BigInt {
         let r = rem(x, q);
-        if &r > &(q / 2_u32) { r - q } else { r }
+        if r > (q / 2_u32) { r - q } else { r }
     }
     fn small(x: &BigInt, q: u64) -> u64 {
         let (_, words) = rem(x, &BigInt::from(q)).to_u64_digits();
@@ -1608,6 +2002,7 @@ mod tests {
         message: Vec<u64>,
         r: u32,
         seen: [usize; 4],
+        expected_banks: usize,
     }
     pub(super) fn observe_source(
         profile: &BgvProfile,
@@ -1639,6 +2034,7 @@ mod tests {
                     .map(|(a, b)| small(&(a + b), master))
                     .collect();
                 o.seen = [0; 4];
+                o.expected_banks = plan.preparation.decomposition.selected_banks();
             }
         });
         checkpoint("source")
@@ -1690,7 +2086,7 @@ mod tests {
                         sum = (sum + small(&actual[d * k], modulus) * power) % modulus;
                         power = power * beta % modulus;
                     }
-                    assert!(sum == expected[r + d * j]);
+                    assert_eq!(sum, expected[r + d * j]);
                 }
                 o.seen[if upper { 2 } else { 1 }] += 1;
             }
@@ -1717,9 +2113,7 @@ mod tests {
                 );
                 assert_eq!(value.plaintext_precision().exponent(), o.r);
                 o.seen[3] += 1;
-                let banks = profile.degree()
-                    / SlotEncoding::slot_count(profile, profile.master_plaintext()).unwrap();
-                assert_eq!(o.seen, [1, banks, banks, 1]);
+                assert_eq!(o.seen, [1, o.expected_banks, o.expected_banks, 1]);
             }
         });
         checkpoint("result")
@@ -1807,7 +2201,15 @@ mod tests {
             1 + offset,
             1 + offset,
         ];
-        BootstrapPlan::new(profile, shape, program(), &levels, budget()).unwrap()
+        BootstrapPlan::new(
+            profile,
+            shape,
+            BootstrapMessageSpace::Ring,
+            program(),
+            &levels,
+            budget(),
+        )
+        .unwrap()
     }
     fn setup(
         profile: &BgvProfile,
@@ -1851,6 +2253,7 @@ mod tests {
                 message: vec![],
                 r: 0,
                 seen: [0; 4],
+                expected_banks: 0,
             })
         });
     }
@@ -1890,12 +2293,12 @@ mod tests {
         };
         expected = clear_square(&clear_square(&expected));
         let mut value = source(&profile, &key, 1, 41);
-        assert!(
+        assert_eq!(
             secret
                 .decrypt(&profile, value.ciphertext())
                 .unwrap()
-                .coefficients()
-                == expected
+                .coefficients(),
+            expected
         );
         let before = max_phase(&profile, value.ciphertext(), secret.coefficients());
         value = key.refresh(&profile, &plan, value).unwrap();
@@ -1909,17 +2312,20 @@ mod tests {
             value = key.refresh(&profile, &repeat, value).unwrap();
             let after = max_phase(&profile, value.ciphertext(), secret.coefficients());
             assert!(after < before);
-            assert!(
+            assert_eq!(
                 secret
                     .decrypt(&profile, value.ciphertext())
                     .unwrap()
-                    .coefficients()
-                    == expected
+                    .coefficients(),
+                expected
             );
         }
         let decoded = secret.decrypt(&profile, value.ciphertext()).unwrap();
         OBSERVER.with(|cell| {
-            assert!(decoded.coefficients() == cell.borrow().as_ref().unwrap().message)
+            assert_eq!(
+                decoded.coefficients(),
+                cell.borrow().as_ref().unwrap().message
+            )
         });
         let ordinary = value.into_ciphertext();
         assert_eq!(ordinary.shape(), *repeat.output_shape());
@@ -1943,7 +2349,9 @@ mod tests {
                 .encrypt_with(
                     &profile,
                     &plaintext,
-                    &mut FixtureEntropy::new([110 + index as u8; 64]),
+                    &mut FixtureEntropy::new(
+                        [110 + u8::try_from(index).expect("three plaintext fixtures"); 64],
+                    ),
                 )
                 .unwrap();
             let value = key.switch_to(&profile, value, 1).unwrap();
@@ -1951,12 +2359,12 @@ mod tests {
             let value = key.square(&profile, value).unwrap();
             let expected = clear_square(&clear_square(&message));
             let value = key.refresh(&profile, &plan, value).unwrap();
-            assert!(
+            assert_eq!(
                 secret
                     .decrypt(&profile, value.ciphertext())
                     .unwrap()
-                    .coefficients()
-                    == expected
+                    .coefficients(),
+                expected
             );
         }
         reset();
@@ -1967,8 +2375,15 @@ mod tests {
         reset();
         let profile = make_profile(4);
         let shape = starting_shape(&profile, 1);
-        let plan =
-            BootstrapPlan::new(&profile, &shape, program(), &[2, 2, 2, 1, 0, 0], budget()).unwrap();
+        let plan = BootstrapPlan::new(
+            &profile,
+            &shape,
+            BootstrapMessageSpace::Ring,
+            program(),
+            &[2, 2, 2, 1, 0, 0],
+            budget(),
+        )
+        .unwrap();
         assert_eq!(plan.output_shape().level(), 0);
         assert_eq!(
             plan.output_shape().bound(),
@@ -2087,7 +2502,15 @@ mod tests {
         exact.input_arithmetic_units = payload.input_arithmetic_units;
         exact.input_addition_words = payload.input_addition_words;
         assert!(
-            BootstrapPlan::new(&profile, &shape, program(), &[3, 3, 3, 2, 1, 1], exact).is_ok()
+            BootstrapPlan::new(
+                &profile,
+                &shape,
+                BootstrapMessageSpace::Ring,
+                program(),
+                &[3, 3, 3, 2, 1, 1],
+                exact
+            )
+            .is_ok()
         );
         for field in 0..9 {
             let mut bad = exact;
@@ -2129,7 +2552,14 @@ mod tests {
                     "input addition"
                 }
             };
-            let result = BootstrapPlan::new(&profile, &shape, program(), &[3, 3, 3, 2, 1, 1], bad);
+            let result = BootstrapPlan::new(
+                &profile,
+                &shape,
+                BootstrapMessageSpace::Ring,
+                program(),
+                &[3, 3, 3, 2, 1, 1],
+                bad,
+            );
             assert!(matches!(result,Err(BootstrapError::Budget{resource}) if resource==name));
         }
         let q = profile.level_modulus(1).unwrap();
@@ -2147,7 +2577,15 @@ mod tests {
             )
             .unwrap();
         assert!(
-            BootstrapPlan::new(&profile, &below, program(), &[3, 3, 3, 2, 1, 1], budget()).is_ok()
+            BootstrapPlan::new(
+                &profile,
+                &below,
+                BootstrapMessageSpace::Ring,
+                program(),
+                &[3, 3, 3, 2, 1, 1],
+                budget()
+            )
+            .is_ok()
         );
         let above = profile
             .plan_claimed(
@@ -2158,12 +2596,26 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(
-            BootstrapPlan::new(&profile, &above, program(), &[3, 3, 3, 2, 1, 1], budget()),
+            BootstrapPlan::new(
+                &profile,
+                &above,
+                BootstrapMessageSpace::Ring,
+                program(),
+                &[3, 3, 3, 2, 1, 1],
+                budget()
+            ),
             Err(BootstrapError::RoundingBound)
         ));
         let master = profile.plan_fresh(profile.master_plaintext()).unwrap();
         assert!(matches!(
-            BootstrapPlan::new(&profile, &master, program(), &[3, 3, 3, 2, 1, 1], budget()),
+            BootstrapPlan::new(
+                &profile,
+                &master,
+                BootstrapMessageSpace::Ring,
+                program(),
+                &[3, 3, 3, 2, 1, 1],
+                budget()
+            ),
             Err(BootstrapError::Shape)
         ));
         let fresh = profile.plan_fresh(profile.master_plaintext()).unwrap();
@@ -2177,6 +2629,7 @@ mod tests {
                 &[3, 3, 3, 2, 1, 1],
                 budget().upper_digits,
                 BankRetention::Collected,
+                CoefficientBankSelection::All,
             ),
             Err(UpperDigitsError::Source)
         ));
@@ -2221,7 +2674,7 @@ mod tests {
                 0 => bad.retained_residue_bytes -= 1,
                 1 => bad.returned_secret_bytes -= 1,
                 _ => bad.plaintext_bytes -= 1,
-            };
+            }
             let mut entropy = FixtureEntropy::new([73; 64]);
             assert!(matches!(
                 LocalBootstrapKey::generate_with(&profile, g, bad, &mut entropy),
@@ -2249,7 +2702,10 @@ mod tests {
             LocalBootstrapKey::generate_with(&profile, g, exact, &mut entropy),
             Err(BootstrapError::Bgv(BgvError::EntropyUnavailable))
         ));
-        let mut entropy = FixtureEntropy::failing_after([89; 64], (g.len() + 3) as u32);
+        let mut entropy = FixtureEntropy::failing_after(
+            [89; 64],
+            u32::try_from(g.len() + 3).expect("small key fixture draw count"),
+        );
         let before = poly::tests::cleared_words();
         assert!(LocalBootstrapKey::generate_with(&profile, g, exact, &mut entropy).is_err());
         assert!(poly::tests::cleared_words() > before);
@@ -2315,7 +2771,7 @@ mod tests {
         .unwrap();
         let map = SlotLinearMap::prepare_rows(&plan, |row, values| {
             match row / 2 {
-                0 => values[4] = (row + 1) as u32,
+                0 => values[4] = u32::try_from(row + 1).expect("six output rows"),
                 1 => values[row % 2] = 1,
                 _ => values.copy_from_slice(if row % 2 == 0 {
                     &[1, 2, 3, 4, 1]
@@ -2390,7 +2846,7 @@ mod tests {
         .unwrap();
         let input = routing_inputs(&profile, &key, &key);
         let input_words = input.each_ref().map(|value| value.value.canonical_words());
-        let input_shapes = input.each_ref().map(|value| value.shape());
+        let input_shapes = input.each_ref().map(LocalBootstrapCiphertext::shape);
         let input_pointers = input.each_ref().map(|value| {
             std::array::from_fn::<_, 2, _>(|component| {
                 value.value.components()[component].words().as_ptr()
@@ -2408,11 +2864,11 @@ mod tests {
         for (index, value) in returned.iter().enumerate() {
             assert_eq!(value.value.canonical_words(), input_words[index]);
             assert_eq!(value.shape(), input_shapes[index]);
-            for component in 0..2 {
-                assert_eq!(
-                    value.value.components()[component].words().as_ptr(),
-                    input_pointers[index][component]
-                );
+            for (component, pointer) in value.value.components()[..2]
+                .iter()
+                .zip(&input_pointers[index])
+            {
+                assert_eq!(component.words().as_ptr(), *pointer);
             }
             key.preflight_evaluation(
                 &profile,
@@ -2623,6 +3079,7 @@ mod tests {
                 &input_shape,
                 budget().decomposition,
                 BankRetention::Streaming,
+                CoefficientBankSelection::All,
             )
             .unwrap();
             assert_eq!(collected.output_shape(), streamed.output_shape());
@@ -2637,6 +3094,7 @@ mod tests {
                     &levels,
                     budget().upper_digits,
                     retention,
+                    CoefficientBankSelection::All,
                 )
                 .unwrap()
             };
@@ -2667,6 +3125,7 @@ mod tests {
                 upper_one.output_shape(),
                 budget().recomposition,
                 BankRetention::Streaming,
+                CoefficientBankSelection::All,
             )
             .unwrap();
             let mut galois = collected.galois_elements().to_vec();
@@ -2753,7 +3212,8 @@ mod tests {
                             }
                             x = (x - digit) / i128::from(prime);
                         }
-                        x.rem_euclid(i128::from(prime.pow(retained))) as u64
+                        u64::try_from(x.rem_euclid(i128::from(prime.pow(retained))))
+                            .expect("residue below u64 prime power")
                     })
                     .collect();
                 assert_eq!(
@@ -2799,13 +3259,21 @@ mod tests {
             source = profile.plan_switch_down(&source).unwrap();
         }
         assert_eq!(source.bound(), &crate::natural::Natural::from_u64(722));
-        let plan =
-            BootstrapPlan::new(&profile, &source, make_program(), &levels, budget()).unwrap();
+        let plan = BootstrapPlan::new(
+            &profile,
+            &source,
+            BootstrapMessageSpace::Ring,
+            make_program(),
+            &levels,
+            budget(),
+        )
+        .unwrap();
         assert_eq!(plan.preparation.decomposition.banks(), 1);
         let blueprint = make_program().plan();
         let requirement = BootstrapPlan::metadata_requirement(
             &profile,
             profile.plaintext_precision(1).unwrap(),
+            BootstrapMessageSpace::Ring,
             &blueprint,
         )
         .unwrap();
@@ -2837,21 +3305,28 @@ mod tests {
             repeat_shape.bound(),
             &crate::natural::Natural::from_u64(993_215_142_580_578)
         );
-        let repeat =
-            BootstrapPlan::new(&profile, &repeat_shape, make_program(), &levels, budget()).unwrap();
+        let repeat = BootstrapPlan::new(
+            &profile,
+            &repeat_shape,
+            BootstrapMessageSpace::Ring,
+            make_program(),
+            &levels,
+            budget(),
+        )
+        .unwrap();
         assert_eq!(repeat.output_shape(), plan.output_shape());
         assert!(repeat.output_shape().bound() < repeat_shape.bound());
         let (secret, key) = setup(&profile, &plan, 217);
         install(&secret);
         let mut expected = vec![0, 1, 8, 16];
-        let plain = Plaintext::new(
+        let plaintext = Plaintext::new(
             &profile,
             profile.plaintext_precision(1).unwrap(),
             expected.clone(),
         )
         .unwrap();
         let value = key
-            .encrypt_with(&profile, &plain, &mut FixtureEntropy::new([219; 64]))
+            .encrypt_with(&profile, &plaintext, &mut FixtureEntropy::new([219; 64]))
             .unwrap();
         let value = key.switch_to(&profile, value, 2).unwrap();
         let mut value = key.refresh(&profile, &plan, value).unwrap();
@@ -2935,41 +3410,39 @@ mod tests {
                     1 => profile.add_plain(left.ciphertext(), &right_plain).unwrap(),
                     _ => profile.mul_plain(left.ciphertext(), &right_plain).unwrap(),
                 };
-                let value = match operation {
-                    0 => key.add(&profile, left, right).unwrap(),
-                    1 => {
-                        drop(right);
+                let value = if operation == 0 {
+                    key.add(&profile, left, right).unwrap()
+                } else {
+                    drop(right);
+                    let original_shape = left.shape();
+                    let original_words = Zeroizing::new(left.ciphertext().canonical_words());
+                    let original_pointers: Vec<_> = left
+                        .value
+                        .components()
+                        .iter()
+                        .map(|component| component.words().as_ptr())
+                        .collect();
+                    let (retained, product) = if operation == 1 {
                         key.add_plain(&profile, left, &right_plain).unwrap()
-                    }
-                    _ => {
-                        drop(right);
-                        let original_shape = left.shape();
-                        let original_words = Zeroizing::new(left.ciphertext().canonical_words());
-                        let original_pointers: Vec<_> = left
-                            .value
-                            .components()
-                            .iter()
-                            .map(|component| component.words().as_ptr())
-                            .collect();
-                        let (retained, product) =
-                            key.mul_plain(&profile, left, &right_plain).unwrap();
-                        assert_eq!(retained.shape(), original_shape);
-                        assert_eq!(
-                            *Zeroizing::new(retained.ciphertext().canonical_words()),
-                            *original_words
-                        );
-                        let retained_pointers: Vec<_> = retained
-                            .value
-                            .components()
-                            .iter()
-                            .map(|component| component.words().as_ptr())
-                            .collect();
-                        assert_eq!(retained_pointers, original_pointers);
-                        key.preflight_evaluation(&profile, &retained, &original_shape, &elements)
-                            .unwrap();
-                        drop(retained);
-                        product
-                    }
+                    } else {
+                        key.mul_plain(&profile, left, &right_plain).unwrap()
+                    };
+                    assert_eq!(retained.shape(), original_shape);
+                    assert_eq!(
+                        *Zeroizing::new(retained.ciphertext().canonical_words()),
+                        *original_words
+                    );
+                    let retained_pointers: Vec<_> = retained
+                        .value
+                        .components()
+                        .iter()
+                        .map(|component| component.words().as_ptr())
+                        .collect();
+                    assert_eq!(retained_pointers, original_pointers);
+                    key.preflight_evaluation(&profile, &retained, &original_shape, &elements)
+                        .unwrap();
+                    drop(retained);
+                    product
                 };
                 assert_eq!(
                     value.ciphertext().canonical_words(),
@@ -3204,7 +3677,12 @@ mod tests {
                 let result = catch_unwind(AssertUnwindSafe(|| match operation {
                     0 => key.trivial(&profile, &plain, profile.top_level()),
                     1 => key.add(&profile, source(), source()),
-                    2 => key.add_plain(&profile, source(), &plain),
+                    2 => key
+                        .add_plain(&profile, source(), &plain)
+                        .map(|(input, output)| {
+                            drop(input);
+                            output
+                        }),
                     _ => key
                         .mul_plain(&profile, source(), &plain)
                         .map(|(input, output)| {
@@ -3229,12 +3707,18 @@ mod tests {
             }
         }
         reset();
-        let (input, result) = key.mul_plain(&profile, source(), &plain).unwrap();
-        let before = poly::tests::cleared_words();
-        drop(input);
-        assert_eq!(poly::tests::cleared_words() - before, words);
-        drop(result);
-        assert_eq!(poly::tests::cleared_words() - before, 2 * words);
+        for product in [false, true] {
+            let (input, result) = if product {
+                key.mul_plain(&profile, source(), &plain).unwrap()
+            } else {
+                key.add_plain(&profile, source(), &plain).unwrap()
+            };
+            let before = poly::tests::cleared_words();
+            drop(input);
+            assert_eq!(poly::tests::cleared_words() - before, words);
+            drop(result);
+            assert_eq!(poly::tests::cleared_words() - before, 2 * words);
+        }
         reset();
     }
 
@@ -3290,8 +3774,13 @@ mod tests {
             let precision = profile.plaintext_precision(1).unwrap();
             let program = program();
             let program_plan = program.plan();
-            let requirement =
-                BootstrapPlan::metadata_requirement(&profile, precision, &program_plan).unwrap();
+            let requirement = BootstrapPlan::metadata_requirement(
+                &profile,
+                precision,
+                BootstrapMessageSpace::Ring,
+                &program_plan,
+            )
+            .unwrap();
             let source = starting_shape(&profile, 2);
             let plan = make_plan(&profile, &source);
             let observed = plan.retained_metadata().unwrap();
@@ -3301,7 +3790,7 @@ mod tests {
             assert!(
                 requirement.preparation_scratch_bytes
                     >= program_plan.geometry().preparation_scratch_bytes
-                        + program_plan.preparation_owner_bytes()
+                        + crate::prime_power::UpperDigitsPlan::preparation_owner_bytes()
             );
             assert_eq!(
                 requirement.repeated(21).unwrap().retained_bytes().unwrap(),
@@ -3320,6 +3809,7 @@ mod tests {
                 BootstrapPlan::metadata_requirement(
                     &profile,
                     profile.master_plaintext(),
+                    BootstrapMessageSpace::Ring,
                     &program_plan
                 )
                 .is_err()
@@ -3329,6 +3819,7 @@ mod tests {
                 BootstrapPlan::metadata_requirement(
                     &profile,
                     other.plaintext_precision(1).unwrap(),
+                    BootstrapMessageSpace::Ring,
                     &program_plan
                 ),
                 Err(super::super::PlanMetadataError::Bgv(
@@ -3388,8 +3879,18 @@ mod tests {
             assert_eq!(shared.output_shape(), independent.output_shape());
             assert_eq!(shared.payload(), independent.payload());
             assert_eq!(shared.galois_elements(), independent.galois_elements());
-            let a = source(&profile, &key, level, 182 + level as u8);
-            let b = source(&profile, &key, level, 182 + level as u8);
+            let a = source(
+                &profile,
+                &key,
+                level,
+                182 + u8::try_from(level).expect("small fixture level"),
+            );
+            let b = source(
+                &profile,
+                &key,
+                level,
+                182 + u8::try_from(level).expect("small fixture level"),
+            );
             assert_eq!(
                 a.ciphertext().canonical_words(),
                 b.ciphertext().canonical_words()
@@ -3607,6 +4108,7 @@ mod tests {
         let requirement = BootstrapPlan::split_metadata_requirement(
             &profile,
             profile.plaintext_precision(1).unwrap(),
+            BootstrapMessageSpace::Ring,
             &program().plan(),
         )
         .unwrap();
@@ -3616,6 +4118,7 @@ mod tests {
             BootstrapPlan::metadata_requirement(
                 &profile,
                 profile.plaintext_precision(1).unwrap(),
+                BootstrapMessageSpace::Ring,
                 &program().plan()
             )
             .unwrap()
@@ -3755,6 +4258,7 @@ mod tests {
         let split = BootstrapPlan::split_metadata_requirement(
             &profile,
             profile.plaintext_precision(1).unwrap(),
+            BootstrapMessageSpace::Ring,
             &program,
         )
         .unwrap();
@@ -3797,5 +4301,653 @@ mod tests {
         );
         // All counts are requested typed payloads, excluding the separately
         // budgeted shared matrices/layout/upper program and caller containers.
+    }
+    #[test]
+    fn scalar_local_closures_delegate_exact_bytes_and_retain_actual_original_owners() {
+        reset();
+        let profile = make_profile(5);
+        let precision = profile.plaintext_precision(1).unwrap();
+        let encoding = SlotEncoding::new(&profile, precision).unwrap();
+        let (route, map) = routing_fixture(&profile);
+        let (secret, key) = LocalBootstrapKey::generate_with(
+            &profile,
+            route.galois_elements(),
+            setup_budget(),
+            &mut FixtureEntropy::new([211; 64]),
+        )
+        .unwrap();
+        let a = encoding.encode(&profile, &[1, 2]).unwrap();
+        let b = encoding.encode(&profile, &[3, 4]).unwrap();
+        let source = || key.encrypt_scalar(&profile, &encoding, &a).unwrap();
+        let other = || key.encrypt_scalar(&profile, &encoding, &b).unwrap();
+        let trivial = key
+            .trivial_scalar(&profile, &encoding, &a, profile.top_level())
+            .unwrap();
+        assert_eq!(
+            secret
+                .decrypt(&profile, trivial.ciphertext())
+                .unwrap()
+                .coefficients(),
+            a.coefficients()
+        );
+        key.preflight_evaluation(&profile, trivial.as_local(), &trivial.shape(), &[])
+            .unwrap();
+        for operation in 0..5 {
+            let lhs = source();
+            let rhs = other();
+            let expected = match operation {
+                0 => profile.add(lhs.ciphertext(), rhs.ciphertext()).unwrap(),
+                1 => profile
+                    .multiply(
+                        lhs.ciphertext(),
+                        rhs.ciphertext(),
+                        key.evaluation.relinearization(),
+                    )
+                    .unwrap(),
+                2 => profile
+                    .multiply(
+                        lhs.ciphertext(),
+                        lhs.ciphertext(),
+                        key.evaluation.relinearization(),
+                    )
+                    .unwrap(),
+                3 => profile.switch_down(lhs.ciphertext()).unwrap(),
+                _ => profile.add_plain(lhs.ciphertext(), &b).unwrap(),
+            };
+            let actual = match operation {
+                0 => key.add_scalar(&profile, lhs, rhs).unwrap(),
+                1 => key.multiply_scalar(&profile, lhs, rhs).unwrap(),
+                2 => {
+                    drop(rhs);
+                    key.square_scalar(&profile, lhs).unwrap()
+                }
+                3 => {
+                    drop(rhs);
+                    key.switch_scalar(&profile, lhs, profile.top_level() - 1)
+                        .unwrap()
+                }
+                _ => {
+                    drop(rhs);
+                    let (original, sum) = key.add_plain_scalar(&profile, lhs, &b).unwrap();
+                    drop(original);
+                    sum
+                }
+            };
+            assert_eq!(actual.shape(), expected.shape());
+            assert_eq!(
+                actual.ciphertext().canonical_words(),
+                expected.canonical_words()
+            );
+            let clear = secret.decrypt(&profile, actual.ciphertext()).unwrap();
+            encoding.check_scalar_subalgebra(&clear).unwrap();
+            let phase = assert_bound(&profile, actual.ciphertext(), secret.coefficients());
+            assert_eq!(
+                phase.iter().map(|v| small(v, 5)).collect::<Vec<_>>(),
+                clear.coefficients()
+            );
+        }
+        for multiply in [false, true] {
+            let input = source();
+            let shape = input.shape();
+            let words = Zeroizing::new(input.ciphertext().canonical_words());
+            let pointers: Vec<_> = input
+                .local
+                .value
+                .components()
+                .iter()
+                .map(|p| p.words().as_ptr())
+                .collect();
+            let expected = if multiply {
+                profile.mul_plain(input.ciphertext(), &b).unwrap()
+            } else {
+                profile.add_plain(input.ciphertext(), &b).unwrap()
+            };
+            let (original, output) = if multiply {
+                key.mul_plain_scalar(&profile, input, &b).unwrap()
+            } else {
+                key.add_plain_scalar(&profile, input, &b).unwrap()
+            };
+            assert_eq!(original.shape(), shape);
+            assert_eq!(
+                *Zeroizing::new(original.ciphertext().canonical_words()),
+                *words
+            );
+            assert_eq!(
+                original
+                    .local
+                    .value
+                    .components()
+                    .iter()
+                    .map(|p| p.words().as_ptr())
+                    .collect::<Vec<_>>(),
+                pointers
+            );
+            assert_eq!(
+                output.ciphertext().canonical_words(),
+                expected.canonical_words()
+            );
+            let before = poly::tests::cleared_words();
+            let count = words.len();
+            drop(original);
+            assert_eq!(poly::tests::cleared_words() - before, count);
+            drop(output);
+            assert_eq!(poly::tests::cleared_words() - before, 2 * count);
+        }
+        let inputs = [source(), key.square_scalar(&profile, other()).unwrap()];
+        let (originals, outputs) = key
+            .route_scalar(
+                &profile,
+                &route,
+                &map,
+                inputs,
+                routing_ceiling(&profile, &route),
+            )
+            .unwrap();
+        let original_values = originals.map(|v| v.into_local().value);
+        let expected = map
+            .evaluate(&profile, &route, &original_values, &key.evaluation)
+            .unwrap();
+        for (actual, expected) in outputs.iter().zip(expected) {
+            assert_eq!(
+                actual.ciphertext().canonical_words(),
+                expected.canonical_words()
+            );
+            let clear = secret.decrypt(&profile, actual.ciphertext()).unwrap();
+            encoding.check_scalar_subalgebra(&clear).unwrap();
+            let phase = assert_bound(&profile, actual.ciphertext(), secret.coefficients());
+            assert_eq!(
+                phase.iter().map(|v| small(v, 5)).collect::<Vec<_>>(),
+                clear.coefficients()
+            );
+        }
+        reset();
+    }
+
+    #[test]
+    fn scalar_membership_and_message_space_refuse_before_private_bootstrap_reads() {
+        reset();
+        let profile = make_profile(5);
+        let precision = profile.plaintext_precision(1).unwrap();
+        let encoding = SlotEncoding::new(&profile, precision).unwrap();
+        let shape = profile
+            .plan_switch_to_level(&profile.plan_fresh(precision).unwrap(), 1)
+            .unwrap();
+        let plan = BootstrapPlan::new(
+            &profile,
+            &shape,
+            BootstrapMessageSpace::ScalarSlots,
+            program(),
+            &[3, 3, 3, 2, 1, 1],
+            budget(),
+        )
+        .unwrap();
+        let (_, key) = setup(&profile, &plan, 213);
+        let (_, foreign) = setup(&profile, &plan, 215);
+        let mut off_stride = vec![0; profile.degree()];
+        off_stride[1] = 1;
+        let outside = Plaintext::new(&profile, precision, off_stride).unwrap();
+        assert!(matches!(
+            key.encrypt_scalar(&profile, &encoding, &outside),
+            Err(BootstrapError::Bgv(BgvError::OutsideScalarSubalgebra {
+                index: 1
+            }))
+        ));
+        assert!(matches!(
+            key.trivial_scalar(&profile, &encoding, &outside, 1),
+            Err(BootstrapError::Bgv(BgvError::OutsideScalarSubalgebra {
+                index: 1
+            }))
+        ));
+        let plaintext = encoding.encode(&profile, &[1, 2]).unwrap();
+        let source = || key.encrypt_scalar(&profile, &encoding, &plaintext).unwrap();
+        assert!(matches!(
+            key.add_plain_scalar(&profile, source(), &outside),
+            Err(BootstrapError::Bgv(BgvError::OutsideScalarSubalgebra {
+                index: 1
+            }))
+        ));
+        assert!(matches!(
+            key.mul_plain_scalar(&profile, source(), &outside),
+            Err(BootstrapError::Bgv(BgvError::OutsideScalarSubalgebra {
+                index: 1
+            }))
+        ));
+        assert!(matches!(
+            foreign.square_scalar(&profile, source()),
+            Err(BootstrapError::Origin)
+        ));
+        let wrong = SlotEncoding::new(&profile, profile.plaintext_precision(2).unwrap()).unwrap();
+        assert!(key.encrypt_scalar(&profile, &wrong, &plaintext).is_err());
+        // Demoting a genuine scalar source still cannot authorize generic selected refresh.
+        let input = key
+            .switch_scalar(&profile, source(), 1)
+            .unwrap()
+            .into_local();
+        ACCESSES.with(|v| v.set(0));
+        assert!(matches!(
+            key.refresh(&profile, &plan, input),
+            Err(BootstrapError::Shape)
+        ));
+        assert_eq!(ACCESSES.with(Cell::get), 0);
+        let input = key.switch_scalar(&profile, source(), 1).unwrap();
+        assert!(matches!(
+            foreign.refresh_scalar(&profile, &plan, input),
+            Err(BootstrapError::Origin)
+        ));
+        assert_eq!(ACCESSES.with(Cell::get), 0);
+        reset();
+    }
+
+    #[test]
+    fn selected_scalar_bootstrap_preserves_full_phase_and_one_real_bank_at_d2_and_d8() {
+        for log_n in [2, 4] {
+            reset();
+            let profile =
+                BgvProfile::new(BgvParameters::derive(log_n, 5, 3, (50, 5), (60, 2), 2).unwrap())
+                    .unwrap();
+            let precision = profile.plaintext_precision(1).unwrap();
+            let encoding = SlotEncoding::new(&profile, precision).unwrap();
+            let shape = profile
+                .plan_switch_to_level(&profile.plan_fresh(precision).unwrap(), 1)
+                .unwrap();
+            let ring = BootstrapPlan::new(
+                &profile,
+                &shape,
+                BootstrapMessageSpace::Ring,
+                program(),
+                &[3, 3, 3, 2, 1, 1],
+                budget(),
+            )
+            .unwrap();
+            let selected = BootstrapPlan::new(
+                &profile,
+                &shape,
+                BootstrapMessageSpace::ScalarSlots,
+                program(),
+                &[3, 3, 3, 2, 1, 1],
+                budget(),
+            )
+            .unwrap();
+            let d = profile.degree() / encoding.slots();
+            assert_eq!(selected.preparation.decomposition.banks(), d);
+            assert_eq!(selected.preparation.decomposition.selected_banks(), 1);
+            assert_eq!(selected.preparation.digits.banks(), d);
+            assert_eq!(selected.preparation.digits.selected_banks(), 1);
+            assert_eq!(
+                ring.preparation.digits.payload().canonical_arithmetic_units,
+                selected
+                    .preparation
+                    .digits
+                    .payload()
+                    .canonical_arithmetic_units
+                    * d as u64
+            );
+            assert!(
+                selected.payload().canonical_arithmetic_units
+                    < ring.payload().canonical_arithmetic_units
+            );
+            assert_eq!(
+                selected.payload().input_arithmetic_units,
+                ring.payload().input_arithmetic_units
+            );
+            assert_eq!(
+                selected.homomorphic_input_shape(),
+                ring.homomorphic_input_shape()
+            );
+            let blueprint = program().plan();
+            let requirement = BootstrapPlan::metadata_requirement(
+                &profile,
+                precision,
+                BootstrapMessageSpace::ScalarSlots,
+                &blueprint,
+            )
+            .unwrap();
+            let actual = selected.retained_metadata().unwrap();
+            assert!(actual.retained_bytes().unwrap() <= requirement.retained_bytes().unwrap());
+            let (secret, key) = setup(
+                &profile,
+                &ring,
+                217 + u8::try_from(log_n).expect("small fixture log degree"),
+            );
+            let plain = encoding.encode(&profile, &[1, 2]).unwrap();
+            for current in [&ring, &selected] {
+                let input = key.encrypt_scalar(&profile, &encoding, &plain).unwrap();
+                let input = key.switch_scalar(&profile, input, 1).unwrap();
+                install(&secret);
+                let mut output = key.refresh_scalar(&profile, current, input).unwrap();
+                assert_eq!(output.shape(), *current.output_shape());
+                assert_eq!(
+                    secret
+                        .decrypt(&profile, output.ciphertext())
+                        .unwrap()
+                        .coefficients(),
+                    plain.coefficients()
+                );
+                let mut expected = plain.coefficients().to_vec();
+                for _ in 0..2 {
+                    let squared = profile
+                        .plan_multiply(&output.shape(), &output.shape())
+                        .unwrap();
+                    let repeat = current.admit_source(&profile, &squared, budget()).unwrap();
+                    assert_eq!(repeat.message_space(), current.message_space());
+                    assert!(repeat.shares_preparation(current));
+                    output = key.square_scalar(&profile, output).unwrap();
+                    let integers: Vec<_> = expected.iter().map(|&v| BigInt::from(v)).collect();
+                    expected = conv(&integers, &integers)
+                        .iter()
+                        .map(|v| small(v, 5))
+                        .collect();
+                    output = key.refresh_scalar(&profile, &repeat, output).unwrap();
+                    assert_eq!(
+                        secret
+                            .decrypt(&profile, output.ciphertext())
+                            .unwrap()
+                            .coefficients(),
+                        expected
+                    );
+                }
+                reset();
+            }
+        }
+    }
+
+    #[test]
+    fn selected_scalar_caps_and_failed_partial_bootstrap_owners_remain_strict() {
+        reset();
+        let profile = make_profile(5);
+        let precision = profile.plaintext_precision(1).unwrap();
+        let encoding = SlotEncoding::new(&profile, precision).unwrap();
+        let shape = profile
+            .plan_switch_to_level(&profile.plan_fresh(precision).unwrap(), 1)
+            .unwrap();
+        let plan = BootstrapPlan::new(
+            &profile,
+            &shape,
+            BootstrapMessageSpace::ScalarSlots,
+            program(),
+            &[3, 3, 3, 2, 1, 1],
+            budget(),
+        )
+        .unwrap();
+        let exact = exact_shared_budget(&plan);
+        plan.admit_source(&profile, &shape, exact).unwrap();
+        for resource in 0..30 {
+            let mut bad = exact;
+            match resource {
+                0 => bad.canonical_arithmetic_units -= 1,
+                1 => bad.scalar_word_operations -= 1,
+                2 => bad.stream_owned_residue_bytes -= 1,
+                3 => bad.stream_metadata_bytes -= 1,
+                4 => bad.retained_preparation_bytes -= 1,
+                5 => bad.input_owned_bytes -= 1,
+                6 => bad.input_plaintext_bytes -= 1,
+                7 => bad.input_arithmetic_units -= 1,
+                8 => bad.input_addition_words -= 1,
+                9..=22 => {
+                    let stage = if resource < 16 {
+                        &mut bad.decomposition
+                    } else {
+                        &mut bad.recomposition
+                    };
+                    match (resource - 9) % 7 {
+                        0 => stage.routing.coefficient_bytes -= 1,
+                        1 => stage.routing.layout_metadata_bytes -= 1,
+                        2 => stage.routing.preparation_scratch_bytes -= 1,
+                        3 => stage.routing.output_residue_bytes -= 1,
+                        4 => stage.routing.scratch_residue_bytes -= 1,
+                        5 => stage.owned_residue_bytes -= 1,
+                        _ => stage.trace_plaintext_bytes -= 1,
+                    }
+                }
+                23 => bad.upper_digits.compiler_steps -= 1,
+                24 => bad.upper_digits.metadata_bytes -= 1,
+                25 => bad.upper_digits.owned_residue_bytes -= 1,
+                26 => bad.upper_digits.plaintext_bytes -= 1,
+                27 => bad.upper_digits.backend_scratch_bytes -= 1,
+                28 => bad.upper_digits.canonical_arithmetic_units -= 1,
+                _ => bad.upper_digits.scalar_word_operations -= 1,
+            }
+            assert!(matches!(
+                plan.admit_source(&profile, &shape, bad),
+                Err(BootstrapError::Budget { .. })
+            ));
+        }
+        let (_, key) = setup(&profile, &plan, 227);
+        let plaintext = encoding.encode(&profile, &[1, 2]).unwrap();
+        for stage in 1..=7 {
+            for mode in [1, 2] {
+                reset();
+                let input = key.encrypt_scalar(&profile, &encoding, &plaintext).unwrap();
+                let input = key.switch_scalar(&profile, input, 1).unwrap();
+                ACCESSES.with(|v| v.set(0));
+                FAULT.with(|v| v.set((stage, mode)));
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    key.refresh_scalar(&profile, &plan, input)
+                }));
+                if mode == 2 {
+                    assert!(result.is_err());
+                } else {
+                    assert!(matches!(result, Ok(Err(BootstrapError::Shape))));
+                }
+                assert!(poly::tests::cleared_words() > AT_FAULT.with(Cell::get));
+            }
+        }
+        reset();
+    }
+    fn scalar_test_program(prime: u64, exponent: u32, retained: u32) -> UpperDigitsProgram {
+        let context = PrimePowerContext::new(prime, exponent).unwrap();
+        let g = UpperDigitsPlan::required(context, retained).unwrap();
+        UpperDigitsProgram::prepare(
+            &UpperDigitsPlan::new(
+                context,
+                retained,
+                ProgramBudget {
+                    coefficient_bytes: g.coefficient_bytes,
+                    preparation_scratch_bytes: g.preparation_scratch_bytes,
+                    program_bytes: g.program_bytes,
+                    preparation_operations: g.preparation_operations,
+                    live_values: g.live_values,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn scalar_selected_fully_split_bootstrap_preserves_same_one_bank_algorithm() {
+        reset();
+        let profile =
+            BgvProfile::new(BgvParameters::derive(2, 17, 2, (50, 8), (60, 2), 2).unwrap()).unwrap();
+        let precision = profile.plaintext_precision(1).unwrap();
+        let encoding = SlotEncoding::new(&profile, precision).unwrap();
+        let input_shape = profile
+            .plan_switch_to_level(&profile.plan_fresh(precision).unwrap(), 2)
+            .unwrap();
+        let ring = BootstrapPlan::new(
+            &profile,
+            &input_shape,
+            BootstrapMessageSpace::Ring,
+            scalar_test_program(17, 2, 1),
+            &[6, 5, 4, 3, 2],
+            budget(),
+        )
+        .unwrap();
+        let selected = BootstrapPlan::new(
+            &profile,
+            &input_shape,
+            BootstrapMessageSpace::ScalarSlots,
+            scalar_test_program(17, 2, 1),
+            &[6, 5, 4, 3, 2],
+            budget(),
+        )
+        .unwrap();
+        assert_eq!(selected.preparation.decomposition.banks(), 1);
+        assert_eq!(selected.preparation.digits.selected_banks(), 1);
+        assert_eq!(ring.output_shape(), selected.output_shape());
+        assert_eq!(
+            ring.payload().canonical_arithmetic_units,
+            selected.payload().canonical_arithmetic_units
+        );
+        assert_eq!(
+            ring.payload().scalar_word_operations,
+            selected.payload().scalar_word_operations
+        );
+        let (secret, key) = setup(&profile, &ring, 229);
+        let plain = encoding.encode(&profile, &[0, 1, 8, 16]).unwrap();
+        for plan in [&ring, &selected] {
+            let input = key.encrypt_scalar(&profile, &encoding, &plain).unwrap();
+            let input = key.switch_scalar(&profile, input, 2).unwrap();
+            install(&secret);
+            let output = key.refresh_scalar(&profile, plan, input).unwrap();
+            assert_eq!(output.shape(), *plan.output_shape());
+            assert_eq!(
+                secret
+                    .decrypt(&profile, output.ciphertext())
+                    .unwrap()
+                    .coefficients(),
+                plain.coefficients()
+            );
+            reset();
+        }
+    }
+
+    #[test]
+    #[ignore = "unselected F257 N256 q23 genuine full and scalar bootstrap; parent schedules native diagnostic"]
+    fn scalar_selected_f257_d2_matches_ring_and_independent_dense_h_full_phase() {
+        reset();
+        let profile =
+            BgvProfile::new(BgvParameters::derive(8, 257, 3, (60, 23), (60, 2), 2).unwrap())
+                .unwrap();
+        let precision = profile.plaintext_precision(1).unwrap();
+        let encoding = SlotEncoding::new(&profile, precision).unwrap();
+        let source = profile
+            .plan_switch_to_level(&profile.plan_fresh(precision).unwrap(), 0)
+            .unwrap();
+        let levels = [
+            20, 19, 18, 17, 16, 15, 14, 13, 13, 11, 10, 9, 8, 7, 6, 5, 4, 4,
+        ];
+        // Explicit finite unselected diagnostic ceilings. None are protocol policy.
+        let transform = CoefficientSlotBudget {
+            routing: SlotLinearBudget {
+                coefficient_bytes: 128 * 129 * 4,
+                layout_metadata_bytes: 16 * 1024,
+                preparation_scratch_bytes: 129 * 4,
+                output_residue_bytes: 16 << 20,
+                scratch_residue_bytes: 16 << 20,
+            },
+            owned_residue_bytes: 64 << 20,
+            trace_plaintext_bytes: 256 * 8,
+        };
+        let caps = BootstrapBudget {
+            decomposition: transform,
+            recomposition: transform,
+            upper_digits: UpperDigitsBudget {
+                compiler_steps: 1_000_000,
+                metadata_bytes: 16 << 20,
+                owned_residue_bytes: 64 << 20,
+                plaintext_bytes: 256 * 8,
+                backend_scratch_bytes: 16 << 20,
+                canonical_arithmetic_units: 1_u64 << 50,
+                scalar_word_operations: 1_u64 << 40,
+            },
+            canonical_arithmetic_units: 1_u64 << 50,
+            scalar_word_operations: 1_u64 << 40,
+            stream_owned_residue_bytes: 64 << 20,
+            stream_metadata_bytes: 1 << 20,
+            retained_preparation_bytes: 32 << 20,
+            input_owned_bytes: 16 << 20,
+            input_plaintext_bytes: 2 * 256 * 8,
+            input_arithmetic_units: 1_u64 << 40,
+            input_addition_words: 1_u64 << 30,
+        };
+        let ring = BootstrapPlan::new(
+            &profile,
+            &source,
+            BootstrapMessageSpace::Ring,
+            scalar_test_program(257, 3, 1),
+            &levels,
+            caps,
+        )
+        .unwrap();
+        let selected = BootstrapPlan::new(
+            &profile,
+            &source,
+            BootstrapMessageSpace::ScalarSlots,
+            scalar_test_program(257, 3, 1),
+            &levels,
+            caps,
+        )
+        .unwrap();
+        assert_eq!(selected.preparation.decomposition.banks(), 2);
+        assert_eq!(selected.preparation.decomposition.selected_banks(), 1);
+        assert_eq!(
+            ring.payload().input_arithmetic_units,
+            selected.payload().input_arithmetic_units
+        );
+        assert!(
+            selected.payload().canonical_arithmetic_units
+                < ring.payload().canonical_arithmetic_units
+        );
+        let (secret, key) = LocalBootstrapKey::generate_with(
+            &profile,
+            ring.galois_elements(),
+            LocalBootstrapSetupBudget {
+                retained_residue_bytes: 64 << 20,
+                returned_secret_bytes: 1 << 20,
+                plaintext_bytes: 256 * 8,
+            },
+            &mut FixtureEntropy::new([233; 64]),
+        )
+        .unwrap();
+        let slots: Vec<_> = (0_u64..128).map(|i| (i * 83 + 256) % 257).collect();
+        let plain = encoding.encode(&profile, &slots).unwrap();
+        for plan in [&ring, &selected] {
+            let input = key.encrypt_scalar(&profile, &encoding, &plain).unwrap();
+            let input = key.switch_scalar(&profile, input, 0).unwrap();
+            install(&secret);
+            let mut output = key.refresh_scalar(&profile, plan, input).unwrap();
+            assert_eq!(output.shape(), *plan.output_shape());
+            let clear = secret.decrypt(&profile, output.ciphertext()).unwrap();
+            assert_eq!(clear.coefficients(), plain.coefficients());
+            assert_eq!(&*encoding.decode(&clear).unwrap(), &slots);
+            OBSERVER.with(|o| {
+                let o = o.borrow();
+                let o = o.as_ref().unwrap();
+                assert!(
+                    o.homomorphic
+                        .iter()
+                        .enumerate()
+                        .any(|(i, &v)| i % 2 == 1 && v != 0)
+                );
+                assert_eq!(
+                    o.seen,
+                    [
+                        1,
+                        plan.preparation.decomposition.selected_banks(),
+                        plan.preparation.decomposition.selected_banks(),
+                        1
+                    ]
+                );
+            });
+            if plan.message_space() == BootstrapMessageSpace::ScalarSlots {
+                let mut expected_slots = slots.clone();
+                for _ in 0..2 {
+                    output = key.switch_scalar(&profile, output, 1).unwrap();
+                    output = key.square_scalar(&profile, output).unwrap();
+                    output = key.switch_scalar(&profile, output, 0).unwrap();
+                    let repeat = plan.admit_source(&profile, &output.shape(), caps).unwrap();
+                    assert!(repeat.shares_preparation(plan));
+                    output = key.refresh_scalar(&profile, &repeat, output).unwrap();
+                    for value in &mut expected_slots {
+                        *value = *value * *value % 257;
+                    }
+                    let clear = secret.decrypt(&profile, output.ciphertext()).unwrap();
+                    assert_eq!(&*encoding.decode(&clear).unwrap(), &expected_slots);
+                    assert_eq!(output.shape(), *repeat.output_shape());
+                }
+            }
+            reset();
+        }
     }
 }

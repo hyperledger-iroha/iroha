@@ -78,15 +78,14 @@ fn encode_pem(label: &str, der: &[u8]) -> String {
 const BASE64_TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 fn base64_encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    let mut chunks = data.chunks_exact(3);
-    for chunk in &mut chunks {
+    let (chunks, rem) = data.as_chunks::<3>();
+    for chunk in chunks {
         let n = u32::from(chunk[0]) << 16 | u32::from(chunk[1]) << 8 | u32::from(chunk[2]);
         out.push(BASE64_TABLE[((n >> 18) & 0x3F) as usize] as char);
         out.push(BASE64_TABLE[((n >> 12) & 0x3F) as usize] as char);
         out.push(BASE64_TABLE[((n >> 6) & 0x3F) as usize] as char);
         out.push(BASE64_TABLE[(n & 0x3F) as usize] as char);
     }
-    let rem = chunks.remainder();
     if !rem.is_empty() {
         let mut n = u32::from(rem[0]) << 16;
         if rem.len() == 2 {
@@ -1705,14 +1704,13 @@ mod sm4_ccm_compat {
         xor_full(&mut tag_block, &ctr);
         let mut counter = 1usize;
         {
-            let mut chunks = buffer.chunks_exact_mut(BLOCK_SIZE);
-            for chunk in &mut chunks {
+            let (chunks, rem) = buffer.as_chunks_mut::<BLOCK_SIZE>();
+            for chunk in chunks {
                 gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, counter)?;
                 encrypt_block_raw(&cipher, &mut ctr);
                 xor_partial(chunk, &ctr);
                 counter += 1;
             }
-            let rem = chunks.into_remainder();
             if !rem.is_empty() {
                 gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, counter)?;
                 encrypt_block_raw(&cipher, &mut ctr);
@@ -1750,14 +1748,13 @@ mod sm4_ccm_compat {
         let s0 = ctr;
         let mut counter = 1usize;
         {
-            let mut chunks = buffer.chunks_exact_mut(BLOCK_SIZE);
-            for chunk in &mut chunks {
+            let (chunks, rem) = buffer.as_chunks_mut::<BLOCK_SIZE>();
+            for chunk in chunks {
                 gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, counter)?;
                 encrypt_block_raw(&cipher, &mut ctr);
                 xor_partial(chunk, &ctr);
                 counter += 1;
             }
-            let rem = chunks.into_remainder();
             if !rem.is_empty() {
                 gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, counter)?;
                 encrypt_block_raw(&cipher, &mut ctr);

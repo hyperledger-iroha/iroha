@@ -1002,7 +1002,7 @@ fn account_capabilities_document_exact_public_bootstrap_policy() {
     );
     let schemas = component_schemas(&document);
     let schema = &schemas["AccountCapabilitiesV1"];
-    assert_eq!(schema["additionalProperties"].as_bool(), Some(false));
+    assert_eq!(schema["additionalProperties"].as_bool(), Some(true));
     assert_eq!(schema["x-iroha-max-bytes"].as_u64(), Some(4096));
     assert_eq!(
         schema["properties"]["schema_version"]["const"].as_u64(),

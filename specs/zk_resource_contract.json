@@ -636,107 +636,95 @@
       }
     },
     {
-      "id": "transaction.config_private_settlement_max_participants",
+      "id": "transaction.private_settlement_max_participants",
       "group": "transaction",
-      "what": "Dataspace legs of one atomic private settlement bundle.",
+      "what": "Ordered data space legs of one atomic private settlement bundle.",
       "unit": "count",
       "value": 255,
-      "source": "node_local",
+      "source": "committed",
       "class": "consensus",
       "owner": {
-        "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "symbol": "MAX_PARTICIPANTS",
-        "kind": "const",
+        "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+        "symbol": "max_participants",
+        "kind": "field",
         "anchor": [
-          "pub mod nexus {",
-          "pub mod atomic_private_settlement {"
+          "impl PrivateSettlementValidityLimitsV1 {",
+          "pub const fn protocol_default() -> Self {"
         ],
-        "expr": "255"
+        "expr": "ATOMIC_PRIVATE_SETTLEMENT_MAX_LEGS_V1 as u16"
       },
       "inclusive": true,
-      "defect": {
-        "owner": "F.4",
-        "summary": "The value is read from node configuration ([nexus]) and bound into State only through the Nexus consensus-policy digest (nexus_consensus_policy_preimage_with_runtime_policies, hashed into execution_policy_digest_v1 as nexus.policy_digest); two nodes configured differently decide differently until F.4 moves its source into committed State."
-      },
       "catalog": {
-        "id": "nexus_consensus_policy_v1",
-        "field": "atomic_private_settlement.max_participants"
+        "id": "private_settlement_validity_v1",
+        "field": "max_participants"
       },
       "enforcement": [
         {
           "stage": "follower",
           "path": "crates/iroha_core/src/state.rs",
-          "contains": "if participant_count > self.nexus.atomic_private_settlement.max_participants.get()",
-          "count": 2
+          "contains": "policy .current_limits .validate_admission("
         }
       ],
       "test_gap": {
         "owner": "P.20",
         "summary": "No test drives a settlement of exactly max_participants legs and one more through the State transition. Torii's structural_carrier_applies_governed_u16_participant_boundary covers the service's copy of the comparison only."
+      },
+      "committed_as": "World.parameters.custom[private_settlement_policy_v1].current_limits; authenticated absence selects the immutable native baseline, and a single governed pending update drains originally admissible obligations before activation.",
+      "refs": {
+        "ATOMIC_PRIVATE_SETTLEMENT_MAX_LEGS_V1": "transaction.private_settlement_native_max_legs"
       }
     },
     {
-      "id": "transaction.config_private_settlement_max_carrier_bytes",
+      "id": "transaction.private_settlement_max_carrier_bytes",
       "group": "transaction",
-      "what": "Largest canonical private settlement instruction frame and, independently, largest complete signed V1 wire that carries it when its binding is consumed.",
+      "what": "Maximum complete canonical SignedTransaction frame for new private payment admission, including a conservative reservation for its original Finalize and Abort.",
       "unit": "bytes",
       "value": 4194304,
-      "source": "node_local",
+      "source": "committed",
       "class": "consensus",
       "owner": {
-        "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "symbol": "MAX_CARRIER_BYTES",
-        "kind": "const",
+        "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+        "symbol": "max_carrier_bytes",
+        "kind": "field",
         "anchor": [
-          "pub mod nexus {",
-          "pub mod atomic_private_settlement {"
+          "impl PrivateSettlementValidityLimitsV1 {",
+          "pub const fn protocol_default() -> Self {"
         ],
-        "expr": "4 * 1024 * 1024"
+        "expr": "PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1 as u64"
       },
       "inclusive": true,
-      "defect": {
-        "owner": "F.4",
-        "summary": "The value is read from node configuration ([nexus]) and bound into State only through the Nexus consensus-policy digest (nexus_consensus_policy_preimage_with_runtime_policies, hashed into execution_policy_digest_v1 as nexus.policy_digest); two nodes configured differently decide differently until F.4 moves its source into committed State."
-      },
       "catalog": {
-        "id": "nexus_consensus_policy_v1",
-        "field": "atomic_private_settlement.max_carrier_bytes"
+        "id": "private_settlement_validity_v1",
+        "field": "max_carrier_bytes"
       },
-      "framing": "Instruction checks count the canonical Norito frame of the prepare barrier or receipt. Torii and the consumed Core carrier binding count the complete signed V1 wire: one version byte plus the canonical bare signed payload. Canonical signed-frame admission replaces that prefix with Header::SIZE plus the checked type padding, adding transaction.signed_frame_overhead_bytes (39); the 4 MiB wire limit therefore implies 4,194,343 framed bytes, not 4,194,304.",
+      "framing": "All SDK, Torii and Core comparisons use canonical SignedTransaction frame bytes. The sole V1 wire counting writer converts through canonical_frame_len_from_wire_len_v1 once; the header replacement is already included in this cap.",
       "enforcement": [
         {
           "stage": "follower",
-          "path": "crates/iroha_core/src/state.rs",
-          "contains": "> self.nexus.atomic_private_settlement.max_carrier_bytes.get()",
-          "count": 2
+          "path": "crates/iroha_core/src/private_settlement/carrier.rs",
+          "contains": ".signed_transaction_bytes .max(self.required_continuation_bytes) > max_signed_transaction_bytes"
         },
         {
           "stage": "follower",
-          "path": "crates/iroha_core/src/state.rs",
-          "contains": "let max_signed_transaction_bytes = self.nexus.atomic_private_settlement.max_carrier_bytes.get();"
-        },
-        {
-          "stage": "torii",
-          "path": "crates/iroha_core/src/private_settlement/coordinator.rs",
-          "contains": "if max_carrier_bytes == 0 || carrier_bytes > max_carrier_bytes {"
+          "path": "crates/iroha_data_model/src/parameter/system/resource_coherence.rs",
+          "contains": "if original_private_obligations { validate_private_settlement_continuation_context( max_transaction_bytes, max_signatures, limits, ) } else if explicit_private_policy && limits.max_carrier_bytes > max_transaction_bytes.get()"
         }
       ],
-      "test_gap": {
-        "owner": "P.20",
-        "summary": "No test submits a carrier of exactly the limit and one byte more through the State transition. substitution_expiry_and_carrier_bounds_fail_closed refuses a bundle against a one-byte limit in the coordinator, and Torii's carrier_wire_bound_counts_the_versioned_signed_envelope covers the service's copy."
+      "committed_as": "World.parameters.custom[private_settlement_policy_v1].current_limits; authenticated absence selects the immutable native baseline, and a single governed pending update drains originally admissible obligations before activation.",
+      "refs": {
+        "PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1": "transaction.private_settlement_native_receipt_bytes"
       },
-      "observations": [
+      "tests": [
         {
           "path": "crates/iroha_core/src/private_settlement/carrier.rs",
-          "contains": "let encoded_transaction = transaction.encode_wire_v1().map_err(|error| {",
-          "what": "The original transaction-scoped carrier binding retains the complete V1 signed wire length."
+          "name": "signed_prepare_registration_binds_barrier_fee_and_complete_transaction"
         },
         {
-          "path": "crates/iroha_torii/src/private_settlement.rs",
-          "contains": "private_settlement_carrier_within_wire_bound_v1",
-          "what": "Torii checks the same complete V1 wire unit."
+          "path": "crates/iroha_core/src/private_settlement/global_state.rs",
+          "name": "committed_register_refuses_the_first_byte_beyond_reserved_continuation_capacity"
         }
-      ]
+      ],
+      "test_note": "Exact conservative continuation reservation passes and one byte below refuses in signed Core carrier/State fixtures; proof bytes are explicitly synthetic. P.20 still requires genuine maximum-proof generation and complete network settlement."
     },
     {
       "id": "transaction.ivm_bytecode_size",
@@ -2390,95 +2378,87 @@
       "test_note": "The native verifier test rejects genuine Kaigi authorization and usage proofs with either cap one byte below the corresponding envelope or proof length, then accepts both exact lengths. The copy test binds both node configuration fields to verifier guardrails."
     },
     {
-      "id": "proof.config_private_settlement_max_proof_bytes",
+      "id": "proof.private_settlement_admission_max_proof_bytes",
       "group": "proof",
       "what": "Largest private-note proof of one settlement leg, held in the participant's sidecar.",
       "unit": "bytes",
       "value": 8388608,
-      "source": "node_local",
+      "source": "committed",
       "class": "consensus",
       "owner": {
-        "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "symbol": "MAX_PROOF_BYTES",
-        "kind": "const",
+        "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+        "symbol": "max_proof_bytes",
+        "kind": "field",
         "anchor": [
-          "pub mod nexus {",
-          "pub mod atomic_private_settlement {"
+          "impl PrivateSettlementValidityLimitsV1 {",
+          "pub const fn protocol_default() -> Self {"
         ],
-        "expr": "8 * 1024 * 1024"
+        "expr": "PRIVATE_SETTLEMENT_MAX_PROOF_BYTES_V1 as u64"
       },
       "inclusive": true,
-      "defect": {
-        "owner": "F.4",
-        "summary": "The value is read from node configuration ([nexus]) and bound into State only through the Nexus consensus-policy digest (nexus_consensus_policy_preimage_with_runtime_policies, hashed into execution_policy_digest_v1 as nexus.policy_digest); two nodes configured differently decide differently until F.4 moves its source into committed State."
-      },
       "catalog": {
-        "id": "nexus_consensus_policy_v1",
-        "field": "atomic_private_settlement.max_proof_bytes"
+        "id": "private_settlement_validity_v1",
+        "field": "max_proof_bytes"
       },
-      "unenforced": {
-        "owner": "F.4",
-        "summary": "The value is bound into the Nexus consensus-policy digest, and no state transition compares anything with it: only Torii's private-settlement service does (`observations`). Two nodes configured differently differ in the committed digest and in what their service accepts, not in an effect. F.4 moves the limit into committed State together with the comparison, or removes it from the digest."
-      },
-      "observations": [
-        {
-          "path": "crates/iroha_torii/src/private_settlement.rs",
-          "contains": "|| request.payload.proof.len() as u64 > config.max_proof_bytes.get()",
-          "what": "Torii refuses a leg submission whose proof is larger."
-        },
-        {
-          "path": "crates/iroha_torii/src/private_settlement.rs",
-          "contains": "|| material.proof.len() as u64 > config.max_proof_bytes.get()",
-          "what": "Torii refuses stored leg material whose proof is larger."
-        }
-      ],
       "test_gap": {
         "owner": "P.20",
-        "summary": "No state transition compares the value, so no test of one exists. P.20 tests the leg proof ceiling where the settlement relation verifies the proof."
-      }
+        "summary": "Committed source and selected-context binding are covered. Genuine maximum-size native proof generation, transport and complete settlement remain required qualification."
+      },
+      "committed_as": "World.parameters.custom[private_settlement_policy_v1].current_limits; authenticated absence selects the immutable native baseline, and a single governed pending update drains originally admissible obligations before activation.",
+      "refs": {
+        "PRIVATE_SETTLEMENT_MAX_PROOF_BYTES_V1": "proof.private_settlement_max_proof_bytes"
+      },
+      "enforcement": [
+        {
+          "stage": "torii",
+          "path": "crates/iroha_torii/src/private_settlement.rs",
+          "contains": "request.payload.proof.len() as u64 > config.max_proof_bytes"
+        },
+        {
+          "stage": "torii",
+          "path": "crates/iroha_torii/src/private_settlement.rs",
+          "contains": "material.proof.len() as u64 > config.max_proof_bytes"
+        }
+      ]
     },
     {
-      "id": "proof.config_private_settlement_max_capsule_bytes",
+      "id": "proof.private_settlement_admission_max_capsule_bytes",
       "group": "proof",
       "what": "Largest encrypted audit capsule of one settlement leg.",
       "unit": "bytes",
       "value": 1048576,
-      "source": "node_local",
+      "source": "committed",
       "class": "consensus",
       "owner": {
-        "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "symbol": "MAX_CAPSULE_BYTES",
-        "kind": "const",
+        "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+        "symbol": "max_capsule_bytes",
+        "kind": "field",
         "anchor": [
-          "pub mod nexus {",
-          "pub mod atomic_private_settlement {"
+          "impl PrivateSettlementValidityLimitsV1 {",
+          "pub const fn protocol_default() -> Self {"
         ],
         "expr": "1024 * 1024"
       },
       "inclusive": true,
-      "defect": {
-        "owner": "F.4",
-        "summary": "The value is read from node configuration ([nexus]) and bound into State only through the Nexus consensus-policy digest (nexus_consensus_policy_preimage_with_runtime_policies, hashed into execution_policy_digest_v1 as nexus.policy_digest); two nodes configured differently decide differently until F.4 moves its source into committed State."
-      },
       "catalog": {
-        "id": "nexus_consensus_policy_v1",
-        "field": "atomic_private_settlement.max_capsule_bytes"
+        "id": "private_settlement_validity_v1",
+        "field": "max_capsule_bytes"
       },
-      "unenforced": {
-        "owner": "F.4",
-        "summary": "The value is bound into the Nexus consensus-policy digest, and no state transition compares anything with it: only Torii's private-settlement service does (`observations`). Two nodes configured differently differ in the committed digest and in what their service accepts, not in an effect. F.4 moves the limit into committed State together with the comparison, or removes it from the digest."
-      },
-      "observations": [
+      "committed_as": "World.parameters.custom[private_settlement_policy_v1].current_limits; authenticated absence selects the immutable native baseline, and a single governed pending update drains originally admissible obligations before activation.",
+      "enforcement": [
         {
+          "stage": "torii",
           "path": "crates/iroha_torii/src/private_settlement.rs",
-          "contains": "config.max_capsule_bytes.get(),",
-          "what": "Torii bounds the audit capsule of a submitted or stored leg."
+          "contains": "audit_capsule_within_canonical_bound( &request.payload.audit_capsule, config.max_capsule_bytes,"
         }
       ],
-      "test_gap": {
-        "owner": "P.20",
-        "summary": "No state transition compares the value, so no test of one exists. P.20 tests the capsule ceiling with the audit relation."
-      }
+      "tests": [
+        {
+          "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+          "name": "every_selected_padding_reserves_complete_capsule_at_auditor_boundaries"
+        }
+      ],
+      "test_note": "The native capsule geometry is tested exactly and one byte below for every enabled padding class and 1/32 auditors. Genuine maximum-proof settlement remains P.20 qualification."
     },
     {
       "id": "proof.config_max_verify_batch",
@@ -5311,7 +5291,7 @@
       "unit": "count",
       "value": 256,
       "source": "node_local",
-      "class": "consensus",
+      "class": "local_defer",
       "owner": {
         "path": "crates/iroha_config/src/parameters/defaults.rs",
         "symbol": "SIDECAR_MAX_RECORDS",
@@ -5323,18 +5303,6 @@
         "expr": "256"
       },
       "inclusive": true,
-      "defect": {
-        "owner": "F.4",
-        "summary": "The value is read from node configuration ([nexus]) and bound into State only through the Nexus consensus-policy digest (nexus_consensus_policy_preimage_with_runtime_policies, hashed into execution_policy_digest_v1 as nexus.policy_digest); two nodes configured differently decide differently until F.4 moves its source into committed State."
-      },
-      "catalog": {
-        "id": "nexus_consensus_policy_v1",
-        "field": "atomic_private_settlement.sidecar_max_records"
-      },
-      "unenforced": {
-        "owner": "F.4",
-        "summary": "The value is bound into the Nexus consensus-policy digest, and no state transition compares anything with it: only Torii's private-settlement service does (`observations`: it sizes the node's sidecar store). Two nodes configured differently differ in the committed digest and in what their service accepts, not in an effect. F.4 moves the limit into committed State together with the comparison, or removes it from the digest."
-      },
       "observations": [
         {
           "path": "crates/iroha_torii/src/private_settlement.rs",
@@ -5344,8 +5312,12 @@
       ],
       "test_gap": {
         "owner": "P.20",
-        "summary": "No state transition compares the value, so no test of one exists. The sidecar store is a local resource; F.4 decides whether its size stays in the digest."
-      }
+        "summary": "Qualify exact local capacity and one-over refusal with genuine sidecars and cold pending-payment recovery; a digest-independence test does not establish that full storage boundary."
+      },
+      "validity": false,
+      "on_exhaustion": "local_refusal",
+      "guarded_by": "private_settlement_sidecar_bytes_are_twelve_mib_per_record",
+      "note": "Local store capacity is excluded from the Nexus consensus preimage and AMX authority digest. Exhaustion cannot establish successful or rejected execution, release unresolved reservations, or authorize a new payment. The config regression private_sidecar_capacity_does_not_change_payment_consensus_identity checks independence of both digest projections."
     },
     {
       "id": "storage.config_private_settlement_sidecar_max_total_bytes",
@@ -5354,7 +5326,7 @@
       "unit": "bytes",
       "value": 3221225472,
       "source": "node_local",
-      "class": "consensus",
+      "class": "local_defer",
       "owner": {
         "path": "crates/iroha_config/src/parameters/defaults.rs",
         "symbol": "SIDECAR_MAX_TOTAL_BYTES",
@@ -5366,20 +5338,8 @@
         "expr": "12 * 1024 * 1024 * SIDECAR_MAX_RECORDS as u64"
       },
       "inclusive": true,
-      "defect": {
-        "owner": "F.4",
-        "summary": "The value is read from node configuration ([nexus]) and bound into State only through the Nexus consensus-policy digest (nexus_consensus_policy_preimage_with_runtime_policies, hashed into execution_policy_digest_v1 as nexus.policy_digest); two nodes configured differently decide differently until F.4 moves its source into committed State."
-      },
-      "catalog": {
-        "id": "nexus_consensus_policy_v1",
-        "field": "atomic_private_settlement.sidecar_max_total_bytes"
-      },
       "refs": {
         "SIDECAR_MAX_RECORDS": "storage.config_private_settlement_sidecar_max_records"
-      },
-      "unenforced": {
-        "owner": "F.4",
-        "summary": "The value is bound into the Nexus consensus-policy digest, and no state transition compares anything with it: only Torii's private-settlement service does (`observations`: it sizes the node's sidecar store). Two nodes configured differently differ in the committed digest and in what their service accepts, not in an effect. F.4 moves the limit into committed State together with the comparison, or removes it from the digest."
       },
       "observations": [
         {
@@ -5390,8 +5350,12 @@
       ],
       "test_gap": {
         "owner": "P.20",
-        "summary": "No state transition compares the value, so no test of one exists. The sidecar store is a local resource; F.4 decides whether its size stays in the digest."
-      }
+        "summary": "Qualify exact local capacity and one-over refusal with genuine sidecars and cold pending-payment recovery; a digest-independence test does not establish that full storage boundary."
+      },
+      "validity": false,
+      "on_exhaustion": "local_refusal",
+      "guarded_by": "private_settlement_sidecar_bytes_are_twelve_mib_per_record",
+      "note": "Local store capacity is excluded from the Nexus consensus preimage and AMX authority digest. Exhaustion cannot establish successful or rejected execution, release unresolved reservations, or authorize a new payment. The config regression private_sidecar_capacity_does_not_change_payment_consensus_identity checks independence of both digest projections."
     },
     {
       "id": "storage.config_uploaded_model_max_plaintext_bytes",
@@ -11612,13 +11576,243 @@
         }
       ],
       "test_note": "The supported fixed policy round-trips within the cap. The oversized JSON control serializes a 256-character string, whose JSON quotes make the payload 258 bytes, and requires JsonTooLarge. No valid exactly-256-byte or exactly-257-byte policy is constructed. The separate original-owner test preserves a JSON resource refusal; these source references are not a fresh runtime test claim."
+    },
+    {
+      "id": "transaction.private_settlement_policy_json_max_bytes",
+      "group": "transaction",
+      "what": "Largest canonical JSON payload of the typed private_settlement_policy_v1 custom parameter. The same fixed schema bound applies to authoring and committed extraction; authenticated absence selects the immutable native baseline, while a malformed present parameter never defaults.",
+      "unit": "bytes",
+      "value": 4096,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+        "symbol": "MAX_PAYLOAD_BYTES",
+        "kind": "const",
+        "anchor": [
+          "impl PrivateSettlementPolicyV1 {"
+        ],
+        "expr": "4_096"
+      },
+      "inclusive": true,
+      "framing": "Counts UTF-8 bytes of the complete canonical JSON payload, excluding the custom parameter identity and outer transaction framing.",
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+          "contains": "let payload = norito::core::classify_decode_attempt(|| Json::try_new(self))?; if payload.get().len() > Self::MAX_PAYLOAD_BYTES {"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+          "contains": "let payload = parameter.payload(); if payload.get().len() > Self::MAX_PAYLOAD_BYTES {"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+          "name": "extension_absence_preserves_parameters_and_present_values_never_default"
+        },
+        {
+          "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+          "name": "extension_codec_refusals_retain_original_scope_owners"
+        }
+      ],
+      "test_note": "The extension round-trips its supported baseline and rejects malformed, wrong-identity and invalid present values. The oversized control is a 4096-character JSON string whose quotes make 4098 bytes; it is not a valid policy at exactly the cap or one byte over. The separate codec test preserves original local refusal custody. These source references do not claim a fresh runtime test result."
+    },
+    {
+      "id": "transaction.private_settlement_native_max_legs",
+      "group": "transaction",
+      "what": "Fixed native V1 ordered leg shape.",
+      "unit": "count",
+      "value": 255,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/nexus/private_settlement.rs",
+        "symbol": "ATOMIC_PRIVATE_SETTLEMENT_MAX_LEGS_V1",
+        "kind": "const",
+        "expr": "u8::MAX as usize"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+          "contains": "usize::from(self.max_participants)",
+          "count": 2
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_data_model/src/nexus/private_settlement/tests.rs",
+          "name": "manifest_enforces_two_through_255_canonical_legs"
+        }
+      ]
+    },
+    {
+      "id": "transaction.private_settlement_native_receipt_bytes",
+      "group": "transaction",
+      "what": "Fixed native receipt/control transport ceiling and source of the complete canonical carrier default.",
+      "unit": "bytes",
+      "value": 4194304,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/nexus/private_settlement.rs",
+        "symbol": "PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1",
+        "kind": "const",
+        "expr": "4 * 1024 * 1024"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+          "contains": "( \"max_carrier_bytes\", self.max_carrier_bytes, PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1 as u64, )"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_data_model/src/nexus/private_settlement/tests/cleanup_envelope.rs",
+          "name": "original_large_roster_cleanup_fits_the_complete_admitted_carrier_envelope"
+        }
+      ]
+    },
+    {
+      "id": "transaction.private_settlement_cleanup_frame_bytes",
+      "group": "transaction",
+      "what": "Fixed canonical SignedTransaction envelope retained for original Finalize and Abort while the matching authenticated World cut contains staged private-settlement locks. It does not raise generic transaction floors on histories with absent extension and no such obligations.",
+      "unit": "bytes",
+      "value": 4194304,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+        "symbol": "PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1",
+        "kind": "const",
+        "expr": "PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1 as u64"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/parameter/system/resource_coherence.rs",
+          "contains": "if max_transaction_bytes.get() < cleanup_frame {"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_data_model/src/parameter/system/resource_coherence.rs",
+          "name": "native_cleanup_original_signatures_and_complete_envelope_cannot_be_tightened_away"
+        },
+        {
+          "path": "crates/iroha_data_model/src/parameter/system/resource_coherence.rs",
+          "name": "original_generic_caps_remain_valid_without_private_obligations"
+        },
+        {
+          "path": "crates/iroha_data_model/src/parameter/system/resource_coherence.rs",
+          "name": "original_private_obligations_keep_cleanup_through_both_successor_caps"
+        }
+      ],
+      "refs": {
+        "PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1": "transaction.private_settlement_native_receipt_bytes"
+      }
+    },
+    {
+      "id": "transaction.private_settlement_max_carrier_signers",
+      "group": "transaction",
+      "what": "Maximum genuine signatures in any native private carrier; full original non-signing sponsor roster is retained.",
+      "unit": "count",
+      "value": 16,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+        "symbol": "PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1",
+        "kind": "const",
+        "expr": "16"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/private_settlement/carrier.rs",
+          "contains": "transaction.signature_count() > iroha_data_model::privacy::PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_core/src/private_settlement/carrier.rs",
+          "name": "original_multisig_roster_keeps_sixteen_signer_boundary_and_refuses_seventeen"
+        }
+      ]
+    },
+    {
+      "id": "proof.private_settlement_native_capsule_bytes",
+      "group": "proof",
+      "what": "Hard canonical capsule range of the fixed native relation; committed admission may tighten it.",
+      "unit": "bytes",
+      "value": 16777216,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+        "symbol": "PRIVATE_SETTLEMENT_MAX_CAPSULE_BYTES_V1",
+        "kind": "const",
+        "expr": "16 * 1024 * 1024"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+          "contains": "( \"max_capsule_bytes\", self.max_capsule_bytes, PRIVATE_SETTLEMENT_MAX_CAPSULE_BYTES_V1, )"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+          "name": "native_policy_ranges_accept_exact_and_refuse_first_over"
+        }
+      ],
+      "test_note": "Exact and first-over values exercise the selectable policy range. This does not claim a genuine capsule of the maximum range value exists under the fixed padding/auditor geometry; complete maximum settlement remains separate P.20 qualification."
+    },
+    {
+      "id": "storage.privacy_protocol_policy_key_frame_bytes",
+      "group": "storage",
+      "what": "Canonical fixed Model-owned protocol policy key; JSON hex is exactly twice the bounded frame extent.",
+      "unit": "bytes",
+      "value": 128,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/privacy/protocol_policy_key.rs",
+        "symbol": "MAX_POLICY_KEY_FRAME_BYTES",
+        "kind": "const",
+        "expr": "128"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "storage",
+          "path": "crates/iroha_data_model/src/privacy/protocol_policy_key.rs",
+          "contains": "encoded.len() > 2 * MAX_POLICY_KEY_FRAME_BYTES"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_data_model/src/privacy/protocol_policy_key.rs",
+          "name": "policy_key_roundtrip_is_bounded_and_canonical"
+        }
+      ]
     }
   ],
   "relations": [
     {
       "id": "transaction_cap_fits_block_payload",
       "expr": "transaction.max_tx_bytes + block.payload_transaction_reserve_bytes <= block.max_block_bytes",
-      "why": "A transaction admitted under the committed cap must fit the effective block payload after its non-transaction reserve. Pure policy checks and the complete-invocation, executed-genesis, governance and restore hooks validate the next and following effective heights and any later pending privacy-policy boundary under the following effective cap; a rejected candidate rolls back without changing any parameter.",
+      "why": "A transaction admitted under the committed cap must fit the effective block payload after its non-transaction reserve. Pure policy checks and the complete-invocation, executed-genesis, governance and restore hooks validate the next and following effective heights and every later pending privacy or private-payment policy boundary under the following effective cap; a rejected candidate rolls back without changing any parameter.",
       "expect": {
         "today": "holds",
         "x2_target": "holds"
@@ -11691,7 +11885,7 @@
         {
           "stage": "follower",
           "path": "crates/iroha_data_model/src/parameter/system/resource_coherence.rs",
-          "contains": "for (effective_height, cap) in [ (next, next_max_block_bytes), (after_next, after_next_max_block_bytes), ] .into_iter() .chain(later_policy_boundary) {"
+          "contains": "let mut boundaries = [ Some((next, next_max_block_bytes)), Some((after_next, after_next_max_block_bytes)), later_policy_boundary, later_private_boundary, ]; boundaries.sort_by_key(|boundary| boundary.map(|(height, _)| height)); for (effective_height, cap) in boundaries.into_iter().flatten() {"
         },
         {
           "stage": "follower",
@@ -11701,17 +11895,22 @@
         {
           "stage": "follower",
           "path": "crates/iroha_data_model/src/parameter/system/resource_coherence.rs",
+          "contains": "let later_private_boundary = private .pending_update .as_ref() .filter(|pending| pending.effective_at_height > after_next) .map(|pending| (pending.effective_at_height, after_next_max_block_bytes));"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/parameter/system/resource_coherence.rs",
           "contains": "validate_privacy_chain_limits(max_transaction_bytes, cap, limits) .and_then(|()| {"
         },
         {
           "stage": "follower",
           "path": "crates/iroha_core/src/resource_coherence.rs",
-          "contains": "validate_successor_resource_limits( committed_height, parameters.transaction().max_tx_bytes(), parameters.transaction().max_signatures(), next_cap, after_next_cap, world.privacy_consensus_policy(), )?;"
+          "contains": "validate_successor_resource_limits( committed_height, parameters.transaction().max_tx_bytes(), parameters.transaction().max_signatures(), next_cap, after_next_cap, world.privacy_consensus_policy(), parameters .custom() .contains_key(iroha_data_model::privacy::PrivateSettlementPolicyV1::parameter_id()) .then_some(&private_policy), world .private_settlement_staged_locks() .iter() .next() .is_some(), )"
         },
         {
           "stage": "follower",
           "path": "crates/iroha_core/src/resource_coherence.rs",
-          "contains": "validate_successor_resource_limits( committed_height, parameters.transaction().max_tx_bytes(), parameters.transaction().max_signatures(), next, after_next, world.privacy_consensus_policy(), )?;"
+          "contains": "validate_successor_resource_limits( committed_height, parameters.transaction().max_tx_bytes(), parameters.transaction().max_signatures(), next, after_next, world.privacy_consensus_policy(), parameters .custom() .contains_key(iroha_data_model::privacy::PrivateSettlementPolicyV1::parameter_id()) .then_some(&private_policy), world .private_settlement_staged_locks() .iter() .next() .is_some(), )"
         },
         {
           "stage": "follower",
@@ -11842,12 +12041,12 @@
         {
           "stage": "follower",
           "path": "crates/iroha_core/src/resource_coherence.rs",
-          "contains": "validate_successor_resource_limits( committed_height, parameters.transaction().max_tx_bytes(), parameters.transaction().max_signatures(), next_cap, after_next_cap, world.privacy_consensus_policy(), )?;"
+          "contains": "validate_successor_resource_limits( committed_height, parameters.transaction().max_tx_bytes(), parameters.transaction().max_signatures(), next_cap, after_next_cap, world.privacy_consensus_policy(), parameters .custom() .contains_key(iroha_data_model::privacy::PrivateSettlementPolicyV1::parameter_id()) .then_some(&private_policy), world .private_settlement_staged_locks() .iter() .next() .is_some(), )"
         },
         {
           "stage": "follower",
           "path": "crates/iroha_core/src/resource_coherence.rs",
-          "contains": "validate_successor_resource_limits( committed_height, parameters.transaction().max_tx_bytes(), parameters.transaction().max_signatures(), next, after_next, world.privacy_consensus_policy(), )?;"
+          "contains": "validate_successor_resource_limits( committed_height, parameters.transaction().max_tx_bytes(), parameters.transaction().max_signatures(), next, after_next, world.privacy_consensus_policy(), parameters .custom() .contains_key(iroha_data_model::privacy::PrivateSettlementPolicyV1::parameter_id()) .then_some(&private_policy), world .private_settlement_staged_locks() .iter() .next() .is_some(), )"
         }
       ]
     },
@@ -12479,32 +12678,46 @@
     },
     {
       "id": "private_settlement_carrier_within_includable_transaction",
-      "expr": "transaction.config_private_settlement_max_carrier_bytes + transaction.signed_frame_overhead_bytes + block.payload_transaction_reserve_bytes <= block.max_block_bytes",
-      "why": "Convert the private signed V1 wire limit to its exact supported canonical frame before adding the global selection reserve. Current bounds yield 4,259,879 bytes including reserve; fixed 16 MiB block and 10 MiB transaction caps remain unchanged.",
+      "expr": "transaction.private_settlement_max_carrier_bytes + block.payload_transaction_reserve_bytes <= block.max_block_bytes",
+      "why": "The committed private limit already counts the complete canonical SignedTransaction frame. Successor resource coherence checks an explicit private policy against the generic transaction cap and authenticated block reserve. Same-cut staged locks additionally require the original 4 MiB cleanup envelope and sixteen signature slots. With no extension and no such obligations, the fixed baseline does not introduce a new generic floor. No wire/header conversion is added twice.",
       "expect": {
         "today": "holds",
         "x2_target": "holds"
       },
-      "open": {
-        "owner": "F.4",
-        "summary": "Defaults satisfy the numeric relation. F.4 still must move the carrier limit into authoritative committed State and reject incoherent governed policies."
-      }
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/parameter/system/resource_coherence.rs",
+          "contains": "if original_private_obligations { validate_private_settlement_continuation_context( max_transaction_bytes, max_signatures, limits, ) } else if explicit_private_policy && limits.max_carrier_bytes > max_transaction_bytes.get()"
+        }
+      ]
     },
     {
       "id": "private_settlement_carrier_within_transaction_cap",
-      "expr": "transaction.config_private_settlement_max_carrier_bytes + transaction.signed_frame_overhead_bytes <= transaction.max_tx_bytes",
-      "why": "Convert the complete private signed V1 wire to its canonical signed frame before comparing transaction admission. Header and compile-time checked type padding replace the sole version prefix; no cap is raised.",
+      "expr": "transaction.private_settlement_max_carrier_bytes <= transaction.max_tx_bytes",
+      "why": "The committed private limit already counts the complete canonical SignedTransaction frame. Successor resource coherence checks an explicit private policy against the generic transaction cap and authenticated block reserve. Same-cut staged locks additionally require the original 4 MiB cleanup envelope and sixteen signature slots. With no extension and no such obligations, the fixed baseline does not introduce a new generic floor. No wire/header conversion is added twice.",
       "expect": {
         "today": "holds",
         "x2_target": "holds"
-      }
+      },
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/parameter/system/resource_coherence.rs",
+          "contains": "if original_private_obligations { validate_private_settlement_continuation_context( max_transaction_bytes, max_signatures, limits, ) } else if explicit_private_policy && limits.max_carrier_bytes > max_transaction_bytes.get()"
+        }
+      ]
     },
     {
       "id": "private_settlement_sidecar_bytes_are_twelve_mib_per_record",
       "expr": "storage.config_private_settlement_sidecar_max_total_bytes == 12 * 1024 * 1024 * storage.config_private_settlement_sidecar_max_records",
-      "why": "The default byte total of the sidecar store is defined as 12 MiB for each retained record.",
+      "why": "The default byte total budgets 12 MiB per retained record. This numeric relation describes local custody capacity; it grants no consensus outcome authority and does not guarantee admission when the store is already full.",
       "expect": {
         "today": "holds"
+      },
+      "open": {
+        "owner": "P.20",
+        "summary": "Qualify exact capacity, one-over local refusal and cold retry with genuine original sidecars while preserving unresolved reservations. Local fullness may refuse additional custody; the default per-record allowance alone is not full workflow qualification."
       }
     },
     {
@@ -12583,7 +12796,7 @@
     },
     {
       "id": "private_settlement_proof_ceiling_admits_the_configured_leg_proof",
-      "expr": "proof.config_private_settlement_max_proof_bytes <= proof.private_settlement_max_proof_bytes",
+      "expr": "proof.private_settlement_admission_max_proof_bytes <= proof.private_settlement_max_proof_bytes",
       "why": "The data-model ceiling of a leg proof must admit every proof the configured settlement policy admits; today both are 8 MiB.",
       "expect": {
         "today": "holds"
@@ -12789,7 +13002,7 @@
       "group": "proof",
       "status": "not_implemented",
       "what": "The wire, verifier-work and output bounds of the Parliament anonymous ballot on the node path: the envelope (262,144 bytes) and entrypoint wire (263,168 bytes) of one anonymous input; the verifier input of one verification call (425,984 bytes); the committed per-block ballot verification reservations and verifier-input bytes of parliament_ballot_v1 (default 2 and 851,968, at most 8 and 3,407,872); the registration-proof reservations and verifier-input bytes per block (1 and 425,984); and the governance block-start output partition (1 MiB and 256 rows per block, rows of at most 256 KiB, 1 KiB and 16 KiB).",
-      "today": "The data model defines and validates these values; TransactionEntrypoint now carries the bounded canonical anonymous-ballot envelope, and execution output validation recognizes its permitted outcomes. The standalone iroha_parliament_ballot crate implements candidate protocol checks, but no node executes its verifier budget: Core and Torii defer anonymous-ballot admission and execution because the authenticated State/context adapter is unavailable, and no node crate depends on the typed ballot crate. Core does not yet enforce the committed parliament_ballot_v1 and parliament_lifecycle_v1 parameters or carry governance block-start rows in ExecutionOutputV1. The compared schema constants remain excluded with pinned values (completeness.excluded, the anonymous-ballot record); full node verifier and output-partition enforcement remains open.",
+      "today": "The data model defines and validates these values; TransactionEntrypoint now carries the bounded canonical anonymous-ballot envelope, and execution output validation recognizes its permitted outcomes. The standalone iroha_parliament_ballot crate implements candidate protocol checks, but no node executes its verifier budget: Core and Torii defer anonymous-ballot admission and execution because the authenticated State/context adapter is unavailable, and no node crate depends on the typed ballot crate. Core validates parliament_lifecycle_v1 payload admission, but does not yet consume the committed ballot and lifecycle policies in the authenticated State adapter or carry governance block-start rows in ExecutionOutputV1. The compared schema constants remain excluded with pinned values (completeness.excluded, the anonymous-ballot record); full node verifier and output-partition enforcement remains open.",
       "requires": [
         "Each value is a listed bound with the node site where admission, block validation or the governance block-start pass compares it, and a test at the bound and one over.",
         "The committed per-block budgets are validated when genesis or SetParameter installs parliament_ballot_v1 and are related to block.max_transactions and to the block wire and execution-output bounds they reserve from.",
@@ -13488,7 +13701,7 @@
       "function": "execution_policy_digest_v1",
       "field_form": "policy_push",
       "source": "committed",
-      "what": "The typed catalog behind the execution-policy digest committed with State, outside [zk] and [nexus]: the function hashes each field. The code is authoritative; this view records which of its fields are resource bounds of the transaction and proof path and why every other field is not. The listed bounds are the execution limits of the pipeline. Their values come from the committed custom parameter pipeline_validity_policy_v1 (iroha_data_model::pipeline_validity_policy::PipelineValidityPolicyV1, applied by iroha_core::pipeline_validity_policy), set by an authorized SetParameter in genesis or later and effective from the next block, or from the protocol default when a chain commits none; the node configuration schema has no key for them. Gas fees have a separate validated committed projection in iroha_core::pipeline_gas_policy. The excluded fields of [gov], oracle, content and the settlement router are still read from node configuration (census entries cfg.*, owner F.4). The retired crypto.default_hash, crypto.allowed_signing, crypto.sm2_distid_default and crypto.allowed_curve_ids entries are not fields of this digest. Ordinary signing and account-controller admission has the separately authenticated committed CryptoAdmissionPolicyV1 owner; this catalog removal does not qualify its consumers. Fraud admission is the exact committed FraudAdmissionPolicyV1 value, classified separately by fraud_admission_policy_v1; node endpoints and deadlines are excluded from the commitment. Two fields are digests of the other two policy catalogs (`digests`), whose fields are classified there. The checker reads the field list from the function, including names a loop takes from a literal table, and fails on a field that is neither or on a field it cannot name.",
+      "what": "The typed catalog behind the execution-policy digest committed with State, outside [zk] and [nexus]: the function hashes each field. The code is authoritative; this view records which of its fields are resource bounds of the transaction and proof path and why every other field is not. The listed bounds are the execution limits of the pipeline. Their values come from the committed custom parameter pipeline_validity_policy_v1 (iroha_data_model::pipeline_validity_policy::PipelineValidityPolicyV1, applied by iroha_core::pipeline_validity_policy), set by an authorized SetParameter in genesis or later and effective from the next block, or from the protocol default when a chain commits none; the node configuration schema has no key for them. Gas fees have a separate validated committed projection in iroha_core::pipeline_gas_policy. The excluded fields of [gov], oracle, content and the settlement router are still read from node configuration (census entries cfg.*, owner F.4). The retired crypto.default_hash, crypto.allowed_signing, crypto.sm2_distid_default and crypto.allowed_curve_ids entries are not fields of this digest. Ordinary signing and account-controller admission has the separately authenticated committed CryptoAdmissionPolicyV1 owner; this catalog removal does not qualify its consumers. Fraud admission is the exact committed FraudAdmissionPolicyV1 value, classified separately by fraud_admission_policy_v1; node endpoints and deadlines are excluded from the commitment. Two fields are digests of the other two policy catalogs (`digests`), whose fields are classified there. The checker reads the ordinary runtime field list from the function, including names a loop takes from a literal table, and fails on a field that is neither or on a field it cannot name. The separate push_frozen_runtime_provenance_v1 helper emits five immutable V1 signing slots (mode, require_sbom, require_slsa, trusted_signers, signature_threshold under governance.runtime_upgrade_provenance); they are not current runtime settings or resource bounds. Their original names, order, types and baseline values are pinned by the independent literal golden frozen_runtime_provenance_v1_matches_original_commitment_bytes; this textual scanner does not follow that helper.",
       "fields": {
         "pipeline.overlay_max_instructions": "queued_effects.config_overlay_max_instructions",
         "pipeline.overlay_max_bytes": "queued_effects.config_overlay_max_bytes",
@@ -13572,11 +13785,6 @@
             "governance.slash_ineligible_proof_bps",
             "governance.alias_teu_minimum",
             "governance.jdg_signature_schemes",
-            "governance.runtime_upgrade_provenance.mode",
-            "governance.runtime_upgrade_provenance.require_sbom",
-            "governance.runtime_upgrade_provenance.require_slsa",
-            "governance.runtime_upgrade_provenance.trusted_signers",
-            "governance.runtime_upgrade_provenance.signature_threshold",
             "governance.viral.incentive_pool_account",
             "governance.viral.escrow_account",
             "governance.viral.reward_asset_definition_id",
@@ -13780,14 +13988,8 @@
       "struct": "NexusConsensusPolicyPreimageV1",
       "field_form": "struct_tree",
       "source": "node_local",
-      "what": "The typed Nexus consensus-policy preimage is defined and built in iroha_config::parameters::actual. Its current lifetime parameter borrows the exact original committed RootFeePolicy through Option<PayloadRef>; it does not create a node-local monetary fallback. The ten listed resource bounds retain their node-local classification and F.4 defects. The code is authoritative: the checker reads this struct and its nested same-file structs, checks that the named function constructs it, and requires every leaf field to be listed or excluded with a reason. The digest remains bound into execution_policy_digest_v1 as nexus.policy_digest. Monetary staking fields are no longer in this preimage; current monetary consumer and authority qualification remain separate obligations.",
+      "what": "Typed Nexus consensus-policy preimage. Four uploaded-model and DA-ingest resource bounds remain node-local F.4 defects. Private-payment validity is now committed in World.privacy_consensus_policy; local sidecar capacity is absent from this digest.",
       "fields": {
-        "atomic_private_settlement.max_participants": "transaction.config_private_settlement_max_participants",
-        "atomic_private_settlement.max_carrier_bytes": "transaction.config_private_settlement_max_carrier_bytes",
-        "atomic_private_settlement.max_proof_bytes": "proof.config_private_settlement_max_proof_bytes",
-        "atomic_private_settlement.max_capsule_bytes": "proof.config_private_settlement_max_capsule_bytes",
-        "atomic_private_settlement.sidecar_max_records": "storage.config_private_settlement_sidecar_max_records",
-        "atomic_private_settlement.sidecar_max_total_bytes": "storage.config_private_settlement_sidecar_max_total_bytes",
         "uploaded_models.max_plaintext_bytes_per_model": "storage.config_uploaded_model_max_plaintext_bytes",
         "uploaded_models.max_chunk_count_per_model": "storage.config_uploaded_model_max_chunk_count",
         "da.ingest_quota_max_count_per_account": "storage.config_da_ingest_quota_max_count_per_account",
@@ -13831,6 +14033,26 @@
           ]
         },
         {
+          "reason": "Immutable original V1 signing slots, restored with exact historical types, order and frozen baseline values by NexusConsensusAtomicPrivateSettlementV1::frozen_v1. These are not runtime admission settings or local capacity ceilings. Current private-payment bounds retain their separate committed classifications in private_settlement_validity_v1, and local sidecar capacities retain their storage.* classifications. The independent literal golden frozen_private_settlement_v1_matches_original_commitment_bytes_and_position pins this 15-field payload and its position in the complete preimage; changing a live limit or operational capacity cannot alter these slots.",
+          "fields": [
+            "atomic_private_settlement.proof_profile_version",
+            "atomic_private_settlement.max_participants",
+            "atomic_private_settlement.max_expiry_blocks",
+            "atomic_private_settlement.audit_timeout_blocks",
+            "atomic_private_settlement.prepare_timeout_blocks",
+            "atomic_private_settlement.commit_timeout_blocks",
+            "atomic_private_settlement.capsule_padding_classes_bytes",
+            "atomic_private_settlement.max_proof_bytes",
+            "atomic_private_settlement.max_capsule_bytes",
+            "atomic_private_settlement.max_carrier_bytes",
+            "atomic_private_settlement.sidecar_retention_blocks",
+            "atomic_private_settlement.sidecar_max_records",
+            "atomic_private_settlement.sidecar_max_total_bytes",
+            "atomic_private_settlement.default_min_auditor_approvals",
+            "atomic_private_settlement.permitted_policy_versions"
+          ]
+        },
+        {
           "reason": "Timing of shared Hugging Face lease pools and the endorsement committee: a grace period and an identity set with its quorum, not bounds on bytes, counts or work.",
           "fields": [
             "hf_shared_leases.drain_grace.seconds",
@@ -13846,34 +14068,6 @@
             "axt.max_clock_skew_ms",
             "axt.proof_cache_ttl_slots",
             "axt.replay_retention_slots"
-          ]
-        },
-        {
-          "reason": "Retired atomic private settlement enable, activation-height and notice fields. This empty classification retains no active parameter; current native and regenerated authority/history validation remain pending.",
-          "fields": []
-        },
-        {
-          "reason": "Relation and audit-policy identity of atomic private settlement (proof profile version, permitted policy versions, minimum auditor approvals): which relation and policy apply, not a resource bound. P.20 and F.4 own them.",
-          "fields": [
-            "atomic_private_settlement.proof_profile_version",
-            "atomic_private_settlement.default_min_auditor_approvals",
-            "atomic_private_settlement.permitted_policy_versions"
-          ]
-        },
-        {
-          "reason": "Validity windows of atomic private settlement measured in blocks (expiry span, audit, prepare and commit timeouts, sidecar retention): windows, not bounds on bytes, counts or work. The expiry span is compared in the same State check as the two listed bounds.",
-          "fields": [
-            "atomic_private_settlement.max_expiry_blocks",
-            "atomic_private_settlement.audit_timeout_blocks",
-            "atomic_private_settlement.prepare_timeout_blocks",
-            "atomic_private_settlement.commit_timeout_blocks",
-            "atomic_private_settlement.sidecar_retention_blocks"
-          ]
-        },
-        {
-          "reason": "The list of padded capsule plaintext classes: a shape table of four sizes, not one bound. Its largest class (262,144 bytes) is below proof.config_private_settlement_max_capsule_bytes, which is the listed ceiling.",
-          "fields": [
-            "atomic_private_settlement.capsule_padding_classes_bytes"
           ]
         },
         {
@@ -14007,6 +14201,39 @@
           "fields": [
             "attesters.engine_id",
             "attesters.public_key"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "private_settlement_validity_v1",
+      "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+      "struct": "PrivateSettlementValidityLimitsV1",
+      "field_form": "struct_tree",
+      "source": "committed",
+      "what": "Single committed native V1 private payment admission contract with one pending governed successor and an original-obligation drain. Complete selected context authenticates this exact World cell and the optional native protocol row/absence. Local custody capacities are excluded.",
+      "fields": {
+        "max_participants": "transaction.private_settlement_max_participants",
+        "max_carrier_bytes": "transaction.private_settlement_max_carrier_bytes",
+        "max_proof_bytes": "proof.private_settlement_admission_max_proof_bytes",
+        "max_capsule_bytes": "proof.private_settlement_admission_max_capsule_bytes"
+      },
+      "excluded": [
+        {
+          "reason": "Committed exclusive admission/drain and phase/retention windows measured in heights, not byte/work upper bounds.",
+          "fields": [
+            "max_expiry_blocks",
+            "audit_timeout_blocks",
+            "prepare_timeout_blocks",
+            "commit_timeout_blocks",
+            "sidecar_retention_blocks"
+          ]
+        },
+        {
+          "reason": "Closed native padding-class selection and minimum auditor authorization threshold; upper capsule envelope and fixed auditor shape are independently bounded.",
+          "fields": [
+            "capsule_padding_classes",
+            "min_auditor_approvals"
           ]
         }
       ]
@@ -14385,6 +14612,12 @@
         "path": "crates/iroha/src/client/native_payment/session.rs",
         "kind": "const",
         "comparisons": true
+      },
+      {
+        "path": "crates/iroha_private_settlement/src/native_session/files.rs",
+        "kind": "const",
+        "matching": "^NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES$",
+        "why": "Pin the sole native closed path/control descriptor input ceiling under its source owner; arbitrary local path lengths are not a committed payment-validity bound."
       }
     ],
     "excluded": [
@@ -15167,10 +15400,6 @@
         "path": "crates/iroha_config/src/parameters/defaults.rs",
         "reason": "Hard ceilings applied when node configuration is parsed (parameters/user.rs): the largest value a node may configure for the settlement bound of the same name listed above. A transaction meets the configured value, never the ceiling.",
         "symbols": [
-          "MAX_PARTICIPANTS_LIMIT",
-          "MAX_PROOF_BYTES_LIMIT",
-          "MAX_CAPSULE_BYTES_LIMIT",
-          "MAX_CARRIER_BYTES_LIMIT",
           "SIDECAR_MAX_RECORDS_LIMIT",
           "SIDECAR_MAX_TOTAL_BYTES_LIMIT"
         ],
@@ -15178,31 +15407,15 @@
           "pub mod nexus {"
         ],
         "exprs": {
-          "MAX_PARTICIPANTS_LIMIT": "255",
-          "MAX_PROOF_BYTES_LIMIT": "8 * 1024 * 1024",
-          "MAX_CAPSULE_BYTES_LIMIT": "16 * 1024 * 1024",
-          "MAX_CARRIER_BYTES_LIMIT": "4 * 1024 * 1024",
           "SIDECAR_MAX_RECORDS_LIMIT": "4_096",
           "SIDECAR_MAX_TOTAL_BYTES_LIMIT": "12 * 1024 * 1024 * SIDECAR_MAX_RECORDS_LIMIT as u64"
         }
       },
       {
         "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "reason": "The largest distance between admission and expiry of a settlement bundle, in blocks: a validity window (catalog nexus_consensus_policy_v1 excludes it for the same reason).",
+        "reason": "Local storage budgets of a Nexus node (the cap on filesystem headroom reserved from automatic storage sizing, hot WSV memory, the enforcement scan interval, the pending evidence peer-key pool) and the retry and backlog limits of its relay worker: process-local pools and schedules that the consensus-policy digest leaves out. Exhausting one defers local work.",
         "symbols": [
-          "MAX_EXPIRY_BLOCKS"
-        ],
-        "module": [
-          "pub mod nexus {"
-        ],
-        "exprs": {
-          "MAX_EXPIRY_BLOCKS": "7_200"
-        }
-      },
-      {
-        "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "reason": "Local storage budgets of a Nexus node (hot WSV memory, the enforcement scan interval, the pending evidence peer-key pool) and the retry and backlog limits of its relay worker: process-local pools and schedules that the consensus-policy digest leaves out. Exhausting one defers local work.",
-        "symbols": [
+          "AUTO_STORAGE_HEADROOM_MAX_BYTES",
           "BUDGET_ENFORCE_INTERVAL_BLOCKS",
           "MAX_WSV_MEMORY_BYTES",
           "CONSENSUS_EVIDENCE_PENDING_PEER_KEYS_MAX_BYTES"
@@ -15211,6 +15424,7 @@
           "pub mod nexus {"
         ],
         "exprs": {
+          "AUTO_STORAGE_HEADROOM_MAX_BYTES": "64 * 1024 * 1024 * 1024",
           "BUDGET_ENFORCE_INTERVAL_BLOCKS": "10",
           "MAX_WSV_MEMORY_BYTES": "Bytes(8 * 1024 * 1024 * 1024)",
           "CONSENSUS_EVIDENCE_PENDING_PEER_KEYS_MAX_BYTES": "4 * 31 * iroha_data_model::sumeragi_lanes::MAX_LANE_CUSTODY_SIGNERS * CONSENSUS_EVIDENCE_PENDING_PEER_KEY_BYTES"
@@ -15578,6 +15792,16 @@
         "exprs": {
           "P2P_ENCRYPTION_OVERHEAD_BYTES": "core::mem::size_of::<Nonce<ChaCha20Poly1305>>() + core::mem::size_of::<Tag<ChaCha20Poly1305>>()",
           "MAX_WIRE_ENCRYPTED_FRAME_BYTES": "u32::MAX as usize"
+        }
+      },
+      {
+        "path": "crates/iroha_p2p/src/lib.rs",
+        "reason": "The most host-profile identities one handshake advertises (specs/live_runtime_upgrades.md §6, \"Handshake\"): the fixed capacity of the hello's host-profile set. It sizes the handshake record a peer compares against its committed selection's host profiles; no transaction, block or proof meets it.",
+        "symbols": [
+          "MAX_HANDSHAKE_HOST_PROFILES"
+        ],
+        "exprs": {
+          "MAX_HANDSHAKE_HOST_PROFILES": "8"
         }
       },
       {
@@ -16538,7 +16762,7 @@
               "RESERVED_TRIGGER_METADATA_KEYS"
             ],
             "exprs": {
-              "RESERVED_TRIGGER_METADATA_KEYS": "[ TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY, \"__registered_at_ms\", DATA_TRIGGER_SCOPE_AUTHORIZATION_METADATA_KEY, DATA_TRIGGER_SCOPE_AUTHORIZATION_GRANTEE_METADATA_KEY, ]"
+              "RESERVED_TRIGGER_METADATA_KEYS": "[ TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY, \"__registered_at_ms\", DATA_TRIGGER_SCOPE_AUTHORIZATION_METADATA_KEY, DATA_TRIGGER_SCOPE_AUTHORIZATION_GRANTEE_METADATA_KEY, TRIGGER_RUNTIME_EXPECTATION_METADATA_KEY, ]"
             }
           },
           {
@@ -18420,7 +18644,7 @@
         ]
       },
       {
-        "reason": "The Kaigi conferencing product: relay manifest, registry, participant, nullifier, commitment and metadata bounds of its records and the identity frame of its authorization. A record of this group that travels in a transaction is inside transaction.max_tx_bytes (10 MiB) and transaction.max_instructions whatever its own ceiling says. A ceiling above 10 MiB here therefore never decides the admission of a transaction: it bounds what the product reads from its own files, evidence, requests, queries or served projections, or it cannot be reached.",
+        "reason": "The Kaigi conferencing product: relay manifest, registry, participant, nullifier, commitment and metadata bounds of its records, the identity frame of its authorization, and the proof-size bound its client writes into the two governed Kaigi verifying-key records (64 KiB, which the Kaigi verifier enforces below the native PIPA-R ceilings proof.config_pipa_r_max_proof_bytes and proof.native_max_proof_bytes). A record of this group that travels in a transaction is inside transaction.max_tx_bytes (10 MiB) and transaction.max_instructions whatever its own ceiling says. A ceiling above 10 MiB here therefore never decides the admission of a transaction: it bounds what the product reads from its own files, evidence, requests, queries or served projections, or it cannot be reached.",
         "files": [
           {
             "path": "crates/iroha_data_model/src/kaigi/authorization.rs",
@@ -18463,6 +18687,15 @@
             ],
             "exprs": {
               "KAIGI_RELAY_HEALTH_NOTES_MAX_CHARS_V1": "512"
+            }
+          },
+          {
+            "path": "crates/iroha_core_zk/src/kaigi_client_v1.rs",
+            "symbols": [
+              "KAIGI_MAX_PROOF_BYTES_V1"
+            ],
+            "exprs": {
+              "KAIGI_MAX_PROOF_BYTES_V1": "64 * 1024"
             }
           }
         ]
@@ -18810,18 +19043,14 @@
           {
             "path": "crates/iroha_data_model/src/nexus/private_settlement.rs",
             "symbols": [
-              "ATOMIC_PRIVATE_SETTLEMENT_MAX_LEGS_V1",
               "PRIVATE_SETTLEMENT_MAX_AUDITORS_V1",
               "PRIVATE_SETTLEMENT_MAX_AUDIT_MEMO_BYTES_V1",
-              "PRIVATE_SETTLEMENT_MAX_AUDIT_POLICY_REFERENCES_V1",
-              "PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1"
+              "PRIVATE_SETTLEMENT_MAX_AUDIT_POLICY_REFERENCES_V1"
             ],
             "exprs": {
-              "ATOMIC_PRIVATE_SETTLEMENT_MAX_LEGS_V1": "u8::MAX as usize",
               "PRIVATE_SETTLEMENT_MAX_AUDITORS_V1": "32",
               "PRIVATE_SETTLEMENT_MAX_AUDIT_MEMO_BYTES_V1": "2 * 1024",
-              "PRIVATE_SETTLEMENT_MAX_AUDIT_POLICY_REFERENCES_V1": "32",
-              "PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1": "4 * 1024 * 1024"
+              "PRIVATE_SETTLEMENT_MAX_AUDIT_POLICY_REFERENCES_V1": "32"
             }
           },
           {
@@ -21324,7 +21553,7 @@
         ]
       },
       {
-        "reason": "Fixed widths of an encoding, compared by name: header, prefix, frame, packet, record, tag, checksum, digest, accumulator and hash-block sizes, the length prefix of a vector, the payload room of a fixed-size VPN cell, the exact request sizes of the KAGEMUSHA signing tools and the exact raw lengths of the fixed values and proofs of the Parliament anonymous ballot (32 to 233,012 bytes). A decoder refuses a buffer shorter than the width or a record that is not exactly its frame. The width is the layout of one record; it bounds no variable amount. The ZK-ACE byte packing takes at most its limb width (7 bytes) for each field limb. The record width of Kura's block-hash file (one hash) and the width of one processed Pasta scalar in the key-size prediction of the KAGEMUSHA artifact preflight are of this kind: each multiplies a count into a size, and the scalar width is also one of three candidate payload sizes of a column of which the prediction takes the least.",
+        "reason": "Fixed widths of an encoding, compared by name: header, prefix, frame, packet, record, tag, checksum, digest, accumulator and hash-block sizes, the radix of the I105 account-address alphabet (the size of its symbol table), the length prefix of a vector, the payload room of a fixed-size VPN cell, the exact request sizes of the KAGEMUSHA signing tools and the exact raw lengths of the fixed values and proofs of the Parliament anonymous ballot (32 to 233,012 bytes). A decoder refuses a buffer shorter than the width or a record that is not exactly its frame. The width is the layout of one record; it bounds no variable amount. The ZK-ACE byte packing takes at most its limb width (7 bytes) for each field limb. The record width of Kura's block-hash file (one hash) and the width of one processed Pasta scalar in the key-size prediction of the KAGEMUSHA artifact preflight are of this kind: each multiplies a count into a size, and the scalar width is also one of three candidate payload sizes of a column of which the prediction takes the least.",
         "files": [
           {
             "path": "crates/iroha_core/src/kura.rs",
@@ -21378,10 +21607,12 @@
           {
             "path": "crates/iroha_data_model/src/account/address.rs",
             "symbols": [
-              "I105_CHECKSUM_LEN"
+              "I105_CHECKSUM_LEN",
+              "I105_BASE_U8"
             ],
             "exprs": {
-              "I105_CHECKSUM_LEN": "6"
+              "I105_CHECKSUM_LEN": "6",
+              "I105_BASE_U8": "105"
             }
           },
           {
@@ -21662,7 +21893,7 @@
         ]
       },
       {
-        "reason": "Durations compared by name: lifetimes, TTLs, grace periods and a cache-prune interval, in milliseconds or seconds, and the longest Parliament lifecycle window, enactment delay, ballot notice and casting window (seven days). A time window is not a byte, count or work bound.",
+        "reason": "Durations compared by name: lifetimes, TTLs, grace periods and a cache-prune interval, a local finality-read retry pause cap, in milliseconds or seconds, and the longest Parliament lifecycle window, enactment delay, ballot notice and casting window (seven days). A time window is not a byte, count or work bound.",
         "files": [
           {
             "path": "crates/iroha_data_model/src/sorafs/moderation_ledger.rs",
@@ -21727,6 +21958,15 @@
             "exprs": {
               "MAX_VOTE_NOTICE_MS": "604_800_000",
               "MAX_CASTING_WINDOW_MS": "604_800_000"
+            }
+          },
+          {
+            "path": "crates/iroha_torii/src/finality_interval.rs",
+            "symbols": [
+              "LADDER_STEP_RETRY_CAP"
+            ],
+            "exprs": {
+              "LADDER_STEP_RETRY_CAP": "Duration::from_secs(300)"
             }
           }
         ]
@@ -25281,7 +25521,6 @@
           {
             "exprs": {
               "MAX_LEAD": "16",
-              "RECENT": "64",
               "MAX_ADVANCE": "1_024",
               "MAX_COVERAGE_AGE": "Duration::from_secs(30 * 60)",
               "SCRUB_CHUNK": "128"
@@ -25289,7 +25528,6 @@
             "path": "crates/iroha_core/src/sumeragi/finality/retained.rs",
             "symbols": [
               "MAX_LEAD",
-              "RECENT",
               "MAX_ADVANCE",
               "MAX_COVERAGE_AGE",
               "SCRUB_CHUNK"
@@ -25354,6 +25592,131 @@
             ],
             "exprs": {
               "FOLD_FAIRNESS_CANCELLATIONS": "2"
+            }
+          }
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/query/native_context_archive/packed.rs",
+        "reason": "Fixed local packing geometry for the same length- and hash-checked canonical record: header width, complete anchor-piece granularity, the lane sharing threshold, and a bounded scratch/read-poll chunk. These values choose representation and read granularity; they do not change the canonical record admission ceiling, authenticated bytes, or monetary validity. The original record owner still admits the complete canonical extent.",
+        "symbols": [
+          "HEADER_LEN",
+          "ANCHOR_PIECE_LEN",
+          "LANES_SHARED_MIN",
+          "STEP"
+        ],
+        "exprs": {
+          "HEADER_LEN": "4 + 8 + 32 + 4",
+          "ANCHOR_PIECE_LEN": "4096",
+          "LANES_SHARED_MIN": "4096",
+          "STEP": "4096"
+        }
+      },
+      {
+        "reason": "Closed native BLS authority allocation geometry, not a new request or protocol ceiling. The helper shares the original committee constructor's BTree, credential Arc, compact/core key and pairing backing calculation for the existing maximum31-validator roster. The existing finality request pool prepays two such retained authorities and five generic result metadata lifetimes; no owner, inherited counter or aggregate budget is enlarged. The actual owned epoch vector and PoP capacities must fit this typed extent after all original native validation. The 48-byte constant is the fixed canonical BLS-normal compressed public-key width, not a configurable payload limit. maximum_query_committee_layout_matches_original_constructor_and_inherited_refusal compares this derived layout with the genuine original constructor and refuses one byte short in its inherited counter.",
+        "files": [
+          {
+            "path": "crates/iroha_core/src/sumeragi/crypto.rs",
+            "symbols": [
+              "maximum_query_committee_allocation_bytes"
+            ],
+            "exprs": {
+              "maximum_query_committee_allocation_bytes": "let count = iroha_data_model::sumeragi::epoch::MAX_VALIDATORS; query_committee_layout_bytes( count, std::iter::repeat_n( ( consensus::PUBLIC_KEY_LEN, consensus::PUBLIC_KEY_LEN.checked_add(std::mem::size_of::<u8>())?, ), count, ), ) .ok()"
+            }
+          },
+          {
+            "path": "crates/iroha_crypto/src/signature/bls/consensus.rs",
+            "symbols": [
+              "PUBLIC_KEY_LEN"
+            ],
+            "exprs": {
+              "PUBLIC_KEY_LEN": "48"
+            },
+            "term_of": {
+              "PUBLIC_KEY_LEN": [
+                "crates/iroha_core/src/sumeragi/crypto.rs: maximum_query_committee_allocation_bytes"
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "path": "crates/iroha_private_settlement/src/native_session/files.rs",
+        "reason": "The native confidential-payment host admits at most 16 KiB of complete caller-selected UTF-8 path/control descriptor bytes before its first copy or queue retention. This closed local descriptor carries no witness, signed transaction, proof or independently verified authority; all referenced files and client credential sources separately debit the original host input budget before bounded reads. A longer descriptor refuses only local construction or explicit staging and changes no payment validity, reserved input, pending journal or finality result. The exact descriptor-byte boundary and first byte over it are exercised by closed_descriptors_refuse_unknown_duplicate_and_first_over_before_copy in crates/iroha_private_settlement/src/native_session/files/tests.rs; those capture assertions do not claim that arbitrary ceiling-sized bytes are valid descriptor JSON. This is local input/custody shape inventory, separate from committed carrier and proof ceilings.",
+        "symbols": [
+          "NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES"
+        ],
+        "exprs": {
+          "NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES": "16 * 1024"
+        }
+      },
+      {
+        "reason": "Shapes of the runtime governance records of the live-upgrade foundation (specs/live_runtime_upgrades.md): the JSON ceiling of the committed notice policy (runtime_upgrade_policy_v1), provenance policy (runtime_provenance_policy_v1) and emergency panel (runtime_emergency_panel_v1) parameters, checked before decoding; the text length, reference count, carrier-schema nodes, depth, members and declared length bound, and initial storage bytes a runtime definition descriptor may hold; and the lifetime of an emergency containment endorsement. Change-set admission and containment check them on governance records, and a proposal carries at most one endorsement per trusted release signer the committed provenance policy lists; an instruction or proof is judged by the definitions a selection activates, so they bound no transaction, block or proof. The one exception is the wire-ID length of an instruction envelope (§5.2): it is the definition text limit by construction, so every wire ID an interface can declare fits, and it is a structural decode rule of an envelope that travels inside transaction.max_tx_bytes, not a separate resource bound.",
+        "files": [
+          {
+            "path": "crates/iroha_data_model/src/parameter/runtime_upgrade_policy.rs",
+            "symbols": [
+              "MAX_PAYLOAD_BYTES"
+            ],
+            "exprs": {
+              "MAX_PAYLOAD_BYTES": "1_024"
+            }
+          },
+          {
+            "path": "crates/iroha_data_model/src/parameter/runtime_emergency_panel.rs",
+            "symbols": [
+              "MAX_PAYLOAD_BYTES"
+            ],
+            "exprs": {
+              "MAX_PAYLOAD_BYTES": "16 * 1024"
+            }
+          },
+          {
+            "path": "crates/iroha_data_model/src/parameter/runtime_provenance_policy.rs",
+            "symbols": [
+              "MAX_PAYLOAD_BYTES"
+            ],
+            "exprs": {
+              "MAX_PAYLOAD_BYTES": "16 * 1024"
+            }
+          },
+          {
+            "path": "crates/iroha_data_model/src/runtime/definition.rs",
+            "symbols": [
+              "MAX_DEFINITION_TEXT_BYTES",
+              "MAX_DEFINITION_REFERENCES",
+              "MAX_CARRIER_NODES",
+              "MAX_CARRIER_DEPTH",
+              "MAX_CARRIER_MEMBERS",
+              "MAX_CARRIER_LENGTH_BOUND",
+              "MAX_INITIAL_BYTES"
+            ],
+            "exprs": {
+              "MAX_DEFINITION_TEXT_BYTES": "192",
+              "MAX_DEFINITION_REFERENCES": "4096",
+              "MAX_CARRIER_NODES": "256",
+              "MAX_CARRIER_DEPTH": "16",
+              "MAX_CARRIER_MEMBERS": "64",
+              "MAX_CARRIER_LENGTH_BOUND": "1 << 20",
+              "MAX_INITIAL_BYTES": "64 * 1024"
+            }
+          },
+          {
+            "path": "crates/iroha_data_model/src/isi/envelope.rs",
+            "symbols": [
+              "MAX_INSTRUCTION_WIRE_ID_BYTES"
+            ],
+            "exprs": {
+              "MAX_INSTRUCTION_WIRE_ID_BYTES": "crate::runtime::definition::MAX_DEFINITION_TEXT_BYTES"
+            }
+          },
+          {
+            "path": "crates/iroha_data_model/src/runtime/lifecycle.rs",
+            "symbols": [
+              "ENDORSEMENT_LIFETIME_MS"
+            ],
+            "exprs": {
+              "ENDORSEMENT_LIFETIME_MS": "30 * 60 * 1000"
             }
           }
         ]
@@ -26369,6 +26732,12 @@
               "path": "crates/iroha_core_zk/src/bin/kagemusha_wallet_artifacts/session.rs",
               "sites": {
                 "(1..=3600).contains(&request.token_lifetime_seconds)": 1
+              }
+            },
+            {
+              "path": "crates/iroha_torii/src/finality_interval.rs",
+              "sites": {
+                "(pause * 2).min(LADDER_STEP_RETRY_CAP)": 1
               }
             }
           ]
@@ -28145,6 +28514,12 @@
               }
             },
             {
+              "path": "crates/iroha_torii/src/sns_lease.rs",
+              "sites": {
+                "(unit * 2).min(NATIVE_FINALITY_MAX_JOURNAL_BYTES)": 1
+              }
+            },
+            {
               "path": "crates/iroha_core/src/kura/lane_geometry/catalog_validation.rs",
               "sites": {
                 "record.operations.len() > MAX_GEOMETRY_BINDINGS.saturating_mul(2)": 1
@@ -28609,13 +28984,35 @@
           ]
         },
         {
-          "reason": "Conservative local allocation accounting for native finality root/committee materialization. The minimum nonzero Vec capacity of four is included in checked geometric storage demand before reserve_decode_allocation. It is not a committee-validity minimum or an admission ceiling; a genuine funding refusal stays a typed local execution deferral. The actual four-validator native prefix is exercised by finite_finality_interval_under_original_codec_checks_each_real_quorum_once.",
+          "reason": "Nonshipping certified-payment fixture geometry shared by Core and Torii through iroha-core-tests. Each reconciliation string leaves two bytes for its JSON quotes under the existing MAX_JSON_BYTES limit. The receipt-size lower-bound assertion checks that the original near-maximum reconciliation text survived genuine settlement; its 16 KiB difference is fixture framing slack, not an admission or validity ceiling. maximum_payment_finality_fits_default_native_graph_custody, maximum_successful_payment_finality_fits_default_native_graph_custody, and full_payment_blocks_use_actual_native_owner_for_every_receipt_and_last_http_slice consume these real signed and executed originals.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/sumeragi/test_chain/native_payment.rs",
+              "sites": {
+                "remaining.min(iroha_primitives::json::MAX_JSON_BYTES - 2)": 1,
+                "norito::canonical_frame_len(receipt).unwrap() >= maximum - 16 * 1024": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Original full-native finality frame accounting accepts one through 64 proof destinations, matching the existing interval reader's count ceiling. The checked frame formula funds credential and destination controls for that same bounded response; this local shape refusal does not change block, transaction, proof or settlement validity and never upgrades an inherited allocation owner. native_frame_profile_refuses_invalid_extents_without_saturating covers zero and first-over (65) destinations as well as arithmetic overflow.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/sumeragi/finality/profile.rs",
+              "sites": {
+                "(1..=64).contains(&maximum_proofs)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Conservative local allocation accounting for native finality root/committee materialization. The minimum nonzero Vec capacity of four is included in checked geometric storage demand before reserve_decode_allocation and in the closed retained-authority layout. It is not a committee-validity minimum or an admission ceiling; a genuine funding refusal stays a typed local execution deferral. All seven metadata lifetimes remain prepaid: five generic result-graph bounds and two closed native authorities. The latter include original maximum31-validator member/PoP capacities, compact keys, core keys, BTree backing, credential Arcs, pairing scratch and authority Arc; actual material capacities are checked only after the original native validation order. maximum_native_authority_fits_typed_retention_and_exact_boundary_refuses and validated_authority_cannot_escape_with_unbudgeted_material_capacity cover the typed extent, while narrowed_retention_preserves_bad_pop_and_oversized_roster_rejections preserves rejection precedence. The actual four-validator native prefix is exercised by finite_finality_interval_under_original_codec_checks_each_real_quorum_once.",
           "files": [
             {
               "path": "crates/iroha_core/src/sumeragi/certified_chain/query_reader.rs",
               "sites": {
-                "count .max(4)": 1,
-                "count.max(4)": 1
+                "count.max(4)": 2
               }
             }
           ]
@@ -28858,6 +29255,17 @@
         {
           "files": [
             {
+              "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
+              "sites": {
+                "entries.len() > 3": 1
+              }
+            }
+          ],
+          "reason": "The bounded trigger-source producer admits only its audited registration metadata grammar: the paired u64 registration fields and the fixed canonical runtime-consent digest. Three is that closed field set's cardinality, not the general trigger metadata quota. Unknown fields still refuse this source path; invocation, scope authorization and lifecycle coverage remain separate."
+        },
+        {
+          "files": [
+            {
               "path": "crates/iroha_data_model/src/sumeragi_finality/compact.rs",
               "sites": {
                 "proof.height() >= 2": 2,
@@ -28915,6 +29323,23 @@
               "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/scheduling/archive_admission.rs",
               "sites": {
                 "count >= 16": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Runtime governance record rules of the live-upgrade foundation: the emergency panel's threshold must be at least two thirds of each panel (the literals are the terms of that ratio), and a runtime definition's names, wire IDs, namespaces and codecs are printable ASCII (the literals are the code points 0x20 and 0x7E). A quorum fraction and a character class bound no size, count or work.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/parameter/runtime_emergency_panel.rs",
+              "sites": {
+                "3 * threshold < 2 * size": 1
+              }
+            },
+            {
+              "path": "crates/iroha_data_model/src/runtime/definition.rs",
+              "sites": {
+                "(0x20..=0x7e).contains(&byte)": 1
               }
             }
           ]

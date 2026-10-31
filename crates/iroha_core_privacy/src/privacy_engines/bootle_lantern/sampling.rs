@@ -145,7 +145,9 @@ impl BootleSamplingProfileV1 {
         // The profile limbs are fixed u64 values, not target-sized bigint words.
         let mut bytes = [0_u8; 64];
         for (chunk, limb) in bytes
-            .chunks_exact_mut(8)
+            .as_chunks_mut::<8>()
+            .0
+            .iter_mut()
             .zip(REJECTION_M_Q256_LIMBS_V1[self.index()])
         {
             chunk.copy_from_slice(&limb.to_le_bytes());

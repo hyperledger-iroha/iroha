@@ -1,5 +1,8 @@
 //! Genuine native interval source/authority, finite work and retirement controls.
 
+#[path = "maximum_payment.rs"]
+mod maximum_payment;
+
 use super::*;
 use crate::{
     state::{StateReadOnly, World},
@@ -17,7 +20,7 @@ fn limits(from: u64, to: u64) -> NativeFinalityProofIntervalLimits {
         NonZeroU64::new(to).unwrap(),
         NonZeroUsize::new(MAX_FINALITY_BLOCK_BYTES).unwrap(),
         NonZeroUsize::new(usize::MAX).unwrap(),
-        Instant::now() + std::time::Duration::from_secs(900),
+        Instant::now() + std::time::Duration::from_mins(15),
     )
     .unwrap()
 }
@@ -851,4 +854,111 @@ fn check_stop(chain: &CertifiedTestChain) {
     assert!(original.consumed_allocated_bytes() > consumed);
     drop(retained);
     assert_eq!(budget.reserved_bytes(), reserved);
+}
+
+#[test]
+fn finite_interval_preserves_oversized_header_and_bad_gap_failure_order() {
+    with_chain(check_oversized_header_gap_order);
+}
+#[inline(never)]
+fn check_oversized_header_gap_order(chain: &CertifiedTestChain) {
+    let original = chain.committed(4);
+    let certificate = original.block().commit_certificate().unwrap();
+    let mut header: iroha_sumeragi::message::BlockHeader =
+        norito::decode_canonical(certificate.consensus_header()).unwrap();
+    let key = iroha_sumeragi::types::PublicKey::new(vec![7; 48]).unwrap();
+    header.skipped_leaders = vec![key; iroha_sumeragi::types::MAX_COMMITTEE_SIZE + 1];
+    let original_gap = chain.committed(2);
+    let original_gap_qc = original_gap
+        .block()
+        .commit_certificate()
+        .unwrap()
+        .commit_qc()
+        .to_vec();
+    // Construct genuine wrong-cardinality evidence before corrupting any ancestry.
+    // The regular helper deliberately reauthenticates the current executed tip.
+    let rejected_gap_qc = chain.commit_qc(
+        2,
+        original_gap.core_hash(),
+        original_gap.result(),
+        Signers::BelowQuorum,
+    );
+    assert_eq!(rejected_gap_qc.signers.count_ones(), 2);
+    let rejected_gap_qc = norito::encode_canonical(&rejected_gap_qc).unwrap();
+    chain
+        .kura()
+        .corrupt_commit_header_for_testing(
+            NonZeroUsize::new(4).unwrap(),
+            norito::encode_canonical(&header).unwrap(),
+        )
+        .unwrap();
+    chain
+        .kura()
+        .corrupt_commit_certificate_for_testing(
+            NonZeroUsize::new(2).unwrap(),
+            Some(rejected_gap_qc.clone()),
+        )
+        .unwrap();
+    let view = chain.state().view();
+    let source = NativeFinalityProofSource::new(
+        view.chain_id(),
+        view.network_id(),
+        view.block_hashes(),
+        view.kura(),
+    );
+    let owner = test_budget(view.execution_budget());
+    let expected = super::super::build_proof(&view, 4).unwrap_err();
+    let ProofError::Chain(expected) = expected else {
+        panic!("native bad gap must reject")
+    };
+    let actual = build_proof_interval(&source, &owner, &limits(4, 4), &AtomicBool::new(false))
+        .err()
+        .unwrap();
+    let NativeFinalityProofIntervalError::Native(actual_native) = &actual else {
+        panic!("must preserve native rejection")
+    };
+    assert_eq!(*actual_native, NativeFinalityProofRefusal::from(expected));
+    assert!(matches!(
+        actual,
+        NativeFinalityProofIntervalError::Native(NativeFinalityProofRefusal::Certificate {
+            height: 2,
+            ..
+        })
+    ));
+    chain
+        .kura()
+        .corrupt_commit_certificate_for_testing(
+            NonZeroUsize::new(2).unwrap(),
+            Some(original_gap_qc),
+        )
+        .unwrap();
+    assert!(matches!(
+        build_proof_interval(&source, &owner, &limits(4, 4), &AtomicBool::new(false)),
+        Err(NativeFinalityProofIntervalError::Native(
+            NativeFinalityProofRefusal::HeaderMismatch { height: 4 }
+        ))
+    ));
+    // An intrinsically malformed target header retains its earlier C1 rejection,
+    // before the same bad gap, rather than becoming a projected trusted cursor.
+    chain
+        .kura()
+        .corrupt_commit_certificate_for_testing(
+            NonZeroUsize::new(2).unwrap(),
+            Some(rejected_gap_qc),
+        )
+        .unwrap();
+    chain
+        .kura()
+        .corrupt_commit_header_for_testing(NonZeroUsize::new(4).unwrap(), vec![0])
+        .unwrap();
+    let (actual, counts) = relation_counts::measure(|| {
+        build_proof_interval(&source, &owner, &limits(4, 4), &AtomicBool::new(false))
+    });
+    assert!(matches!(
+        actual,
+        Err(NativeFinalityProofIntervalError::Native(
+            NativeFinalityProofRefusal::Malformed { height: 4 }
+        ))
+    ));
+    assert!(counts.qcs.is_empty());
 }

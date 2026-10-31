@@ -644,8 +644,10 @@ pub(super) mod tests {
             .uniform(&moduli, degree, &mut output);
         let bytes = raw(CoinPurpose::PublicKeyMask, 8 * 4 * output.len());
         let mut words = bytes
-            .chunks_exact(8)
-            .map(|chunk| u64::from_le_bytes(chunk.try_into().expect("eight bytes")));
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|chunk| u64::from_le_bytes(*chunk));
         let mut rejected = 0_usize;
         for (limb, &modulus) in moduli.iter().enumerate() {
             let mask = (1_u64 << (64 - modulus.leading_zeros())) - 1;

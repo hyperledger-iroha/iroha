@@ -5,7 +5,9 @@
 //! - the key files the configuration names (`validator.key`, `transport.key`, `streaming.key` and
 //!   the `authority/*.key` network-authority keys). The configuration parser reads them, so every
 //!   one that exists passes [`verify_config_key_custody`] first, whenever the node file is loaded
-//!   (including `--check-config` and `--check-storage`);
+//!   (including `--check-config` and `--check-storage`). A missing node-local identity
+//!   (`transport.key` or `streaming.key` completed from `data_dir` and not pinned by a configured
+//!   public key) is created first ([`create_local_identities`]);
 //! - the runtime-only secrets (`runtime_signer.key`, `beacon.cred`), which
 //!   [`NodeSecretsV1`] opens only for a real start, after the complete configuration has passed the
 //!   offline checks: `--check-config` and `--check-storage` never open them.
@@ -47,12 +49,15 @@ use crate::{
     },
 };
 use iroha_allocation::AllocationBudget;
-use iroha_config::parameters::{
-    actual::{
-        DataDir, NodeRole, NodeSecretFile, Root as Config, SoracloudRuntimeMutationSignerBinding,
-        Sumeragi, node_runtime_signer,
+use iroha_config::{
+    node_config::LocalIdentity,
+    parameters::{
+        actual::{
+            DataDir, NodeRole, NodeSecretFile, Root as Config,
+            SoracloudRuntimeMutationSignerBinding, Sumeragi, node_runtime_signer,
+        },
+        is_production_runtime_handle,
     },
-    is_production_runtime_handle,
 };
 use iroha_core::beacon::{
     GlobalThresholdBeaconPartialSignerV1,
@@ -124,6 +129,13 @@ pub enum NodeSecretsErrorV1 {
     },
     /// A fixed secret file does not hold one canonical record of its kind.
     Malformed(NodeSecretFile),
+    /// A missing node-local identity file could not be created.
+    Create {
+        /// File being created.
+        file: NodeSecretFile,
+        /// Native failure, or `None` when key generation failed.
+        kind: Option<ErrorKind>,
+    },
     /// A loaded secret does not match its public binding in the configuration.
     BindingMismatch {
         /// Offending file.
@@ -161,6 +173,20 @@ impl fmt::Display for NodeSecretsErrorV1 {
             Self::Malformed(file) => write!(
                 formatter,
                 "node secret `secrets/{}` does not hold one canonical record",
+                file.relative_path()
+            ),
+            Self::Create {
+                file,
+                kind: Some(kind),
+            } => write!(
+                formatter,
+                "node-local identity `secrets/{}` could not be created ({kind}): `<data_dir>/secrets` \
+                 must be an owner-only directory of this user, reached through trusted directories",
+                file.relative_path()
+            ),
+            Self::Create { file, kind: None } => write!(
+                formatter,
+                "node-local identity `secrets/{}` could not be created: key generation failed",
                 file.relative_path()
             ),
             Self::BindingMismatch { file, detail } => write!(
@@ -382,6 +408,63 @@ fn existing_secret_path(
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
         Err(_) => Err(refused(RuntimeCredentialErrorV1::InvalidSource)),
     }
+}
+
+/// Create each missing node-local identity file the configuration reads from `<data_dir>/secrets/`
+/// (`iroha_config::node_config::NodeConfigReader::local_identities`) with a fresh Ed25519 key.
+///
+/// Nothing outside the node binds these identities: the validator key certifies the `SoraNet`
+/// transport key at every handshake, and the streaming key only encrypts this node's session
+/// snapshots. The `secrets` directory is created owner-only when absent and each file is
+/// published create-new with owner-only access, so an existing file is never replaced; every file
+/// then passes [`verify_config_key_custody`] like any other key file the parser reads. Returns the
+/// created files with their public keys.
+///
+/// # Errors
+///
+/// [`NodeSecretsErrorV1::Custody`] when an existing file cannot be admitted and
+/// [`NodeSecretsErrorV1::Create`] when a missing one cannot be created.
+pub fn create_local_identities(
+    data_dir: &DataDir,
+    identities: &[NodeSecretFile],
+) -> Result<Vec<(NodeSecretFile, PublicKey)>, NodeSecretsErrorV1> {
+    let mut missing = Vec::new();
+    for &file in identities {
+        if existing_secret_path(data_dir, file)?.is_none() {
+            missing.push(file);
+        }
+    }
+    let Some(&first) = missing.first() else {
+        return Ok(Vec::new());
+    };
+    let directory =
+        iroha_fs::PrivateDirectory::open_or_create(data_dir.secrets_dir()).map_err(|error| {
+            NodeSecretsErrorV1::Create {
+                file: first,
+                kind: Some(error.kind()),
+            }
+        })?;
+    let mut created = Vec::with_capacity(missing.len());
+    for file in missing {
+        let identity = LocalIdentity::generate()
+            .map_err(|_| NodeSecretsErrorV1::Create { file, kind: None })?;
+        match directory.write_atomic(
+            file.relative_path(),
+            identity.record(),
+            iroha_fs::PublishMode::CreateNew,
+        ) {
+            Ok(()) => created.push((file, identity.public_key().clone())),
+            // A concurrent launcher created it first; the custody check admits that file.
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(NodeSecretsErrorV1::Create {
+                    file,
+                    kind: Some(error.kind()),
+                });
+            }
+        }
+    }
+    Ok(created)
 }
 
 /// Check the custody of every [`CONFIG_KEY_FILES_V1`] file that exists under

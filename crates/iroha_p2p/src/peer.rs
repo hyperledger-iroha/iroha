@@ -78,7 +78,7 @@ fn test_network_id(seed: &str) -> iroha_data_model::NetworkId {
 }
 #[cfg(test)]
 fn test_ticket_revocation_store() -> Arc<Mutex<TicketRevocationStore>> {
-    let limits = TicketRevocationStoreLimits::new(1_024, Duration::from_secs(900))
+    let limits = TicketRevocationStoreLimits::new(1_024, Duration::from_mins(15))
         .expect("test replay-store limits must be valid");
     let store = TicketRevocationStore::in_memory(limits)
         .expect("test in-memory replay store must be available");
@@ -6088,6 +6088,14 @@ mod state {
                 );
                 return Err(crate::Error::HandshakeConsensusMismatch { reason });
             }
+            let required = caps.required_host_profiles.map_or_else(
+                crate::HostProfileSet::default,
+                super::super::RequiredHostProfiles::current,
+            );
+            if let Some(reason) = host_profile_mismatch(&required, &peer_config.host_profiles) {
+                iroha_logger::warn!(%reason, "peer rejected due to consensus config mismatch");
+                return Err(crate::Error::HandshakeConsensusMismatch { reason });
+            }
         }
         Ok(())
     }
@@ -6116,14 +6124,24 @@ mod state {
                 hex_bytes(&got.native_config_fingerprint),
             ));
         }
-        if expected.ivm_gas_schedule_hash != got.ivm_gas_schedule_hash {
-            return Some(format!(
-                "ivm_gas_schedule_hash mismatch (expected 0x{}, got 0x{})",
-                hex_bytes(&expected.ivm_gas_schedule_hash),
-                hex_bytes(&got.ivm_gas_schedule_hash),
-            ));
-        }
         None
+    }
+    /// Why a peer implementing `supported` cannot serve a committed selection that activates
+    /// `required` (`specs/live_runtime_upgrades.md` §6, "Handshake"). Dormant profiles the peer
+    /// carries beyond `required` never matter.
+    pub(super) fn host_profile_mismatch(
+        required: &crate::HostProfileSet,
+        supported: &crate::HostProfileSet,
+    ) -> Option<String> {
+        if !supported.is_canonical() {
+            return Some("host profile set is not canonical".to_string());
+        }
+        required.first_missing_from(supported).map(|missing| {
+            format!(
+                "peer does not implement active host profile 0x{}",
+                hex_bytes(&missing)
+            )
+        })
     }
     pub(super) fn hex_bytes(bytes: &[u8]) -> String {
         use core::fmt::Write as _;

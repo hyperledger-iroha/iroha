@@ -34,6 +34,10 @@ pub enum PlanMetadataError {
 /// Matrix coefficients, shared layout graphs and upper-DAG element storage are
 /// separately charged by their existing budgets. Every inline handle is counted.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Every resource ceiling names its explicit byte unit; public fields and payload scopes stay unambiguous."
+)]
 pub struct PlanMetadataRequirement {
     /// Rust owning object, including its inline nested fields and handles.
     pub inline_bytes: usize,
@@ -155,7 +159,7 @@ pub(super) fn transfer_scratch(profile: &BgvProfile) -> Result<usize, PlanMetada
         .max(modulus))
 }
 
-/// SlotEncoding::new's public interpolation buffer; its inline value is Copy.
+/// `SlotEncoding::new`'s public interpolation buffer; its inline value is Copy.
 pub(super) fn encoding_scratch(slots: usize) -> Result<usize, PlanMetadataError> {
     sum(&[
         size_of::<SlotEncoding>(),
@@ -270,6 +274,7 @@ mod tests {
                 super::super::BootstrapPlan::metadata_requirement(
                     profile,
                     profile.plaintext_precision(1).unwrap(),
+                    super::super::BootstrapMessageSpace::Ring,
                     &blueprint,
                 )
                 .unwrap()

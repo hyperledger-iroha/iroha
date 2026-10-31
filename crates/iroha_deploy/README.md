@@ -1,8 +1,9 @@
 # iroha_deploy
 
 The shared deployment engine for Kagami and Mochi developer environments and
-operator network/dataspace workflows. This crate owns native localnet generation,
-persistent supervision, context selection, definition parsing and finality verification. `iroha_cli` wires
+operator network/dataspace workflows. This crate owns native Sora network and developer
+localnet generation, persistent supervision, context selection, definition parsing and
+finality verification. `iroha_cli` wires
 `iroha dataspace plan/apply/status` to the existing native deployment engine;
 the broader network/host engine remains in the phase plan below.
 
@@ -11,7 +12,7 @@ The design, file formats and phase plan are in
 
 What exists so far:
 
-- `genesis::sccp`: canonical Taira localnets initialize SCCP inside genesis with
+- `genesis::sccp`: canonical Taira networks initialize SCCP inside genesis with
   a fresh OS-random nonce, a minimum one-hour epoch, 21-day unbonding and a
   10,000-basis-point slash ceiling. Generation one comes from the native signed
   committee; no route is seeded. Public nonce and signed-network markers live in
@@ -105,9 +106,17 @@ What exists so far:
   lookup, including absent registries and errors. Successful lookup also retains the
   original deadline. Kagami and Mochi use this shared check for deployment and publication;
   source, bytecode and local-only packages keep lazy registry resolution.
-- `localnet` and `genesis`: canonical configuration generation, independent private
-  authority seeds, profile policy and genuine core genesis execution. CLI parsing
-  stays in Kagami; generation and process ownership have no CLI or GUI dependency.
+- `sora_network` and `genesis`: canonical configuration generation, independent private
+  authority seeds, profile policy and genuine core genesis execution for Nexus, the public
+  Taira chain and the private dataspace presets (`kagami sora-network`), plus owner-private
+  roots. `network` signs genesis and writes the shared `network.toml` for validators that
+  hold their own keys (`kagami network create`), with no Sora profile. `localnet` is the dedicated developer generator behind `kagami localnet generate`
+  and `kagami localnet up`: it refuses public chain identities and Sora profiles, and emits
+  peer configs limited to node essentials with no faucet, onboarding, fee sponsorship,
+  alias setup or SoraNet VPN operator. Its `service_authorities` module is the opt-in
+  storage layer of managed networks (`kagami localnet up --with-storage`): three storage
+  providers, their network services and the `dev.universal` publication namespace. CLI
+  parsing stays in Kagami; generation and process ownership have no CLI or GUI dependency.
   Retained private-root fee policies decode under the validated child's account
   profile; verification restores the parent caller's profile on success and failure.
 - `bootstrap`: native discovery through an installed HTTPS root, chain label and address

@@ -1766,13 +1766,8 @@ mod tests {
                     iroha_primitives::json::Json::new(metadata),
                 )))
                 .expect("install the signed SCCP handshake fixture");
-            block
-                .set_parameter_for_testing(
-                    crate::daemon_fixture_crypto_policy()
-                        .into_parameter()
-                        .expect("encode the explicit keeper fixture crypto policy"),
-                )
-                .expect("install the keeper fixture's committed crypto policy");
+            // Leave the crypto policy absent for the first admission probe; the
+            // subsequent probes install explicit disallowed and allowed policies.
             block
                 .set_parameter_for_testing(Parameter::Custom(
                     iroha_config::parameters::defaults::nexus::fees::genesis_policy()
@@ -1798,11 +1793,18 @@ mod tests {
                 .commit_world_overlay_for_testing()
                 .expect("commit SCCP parameters");
         }
-        let key = KeyPair::random();
+        let key = KeyPair::from_seed(vec![0x5c; 32], iroha_crypto::Algorithm::Ed25519);
         let authority = AccountId::new(key.public_key().clone());
         assert!(
             state.view().world().account(&authority).is_err(),
             "the keeper key has no account"
+        );
+        assert!(
+            state
+                .transaction_admission_parameters()
+                .crypto_policy()
+                .is_none(),
+            "the initial probe requires a missing committed crypto policy"
         );
         let error = submit_transaction_at(
             &state,

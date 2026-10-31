@@ -20,7 +20,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     originals_root: JByteArray<'_>,
     registration_source: JByteArray<'_>,
 ) -> jlong {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let result = run(|| {
             let arrays = [
                 &app_manifest,
@@ -34,13 +34,8 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
             ];
             // Check every original extent before copying any Java array or invoking platform.
             for (index, (array, bound)) in arrays.into_iter().zip(RUNTIME_BOUNDS).enumerate() {
-                let length = env
-                    .get_array_length(array)
-                    .map_err(|_| Failure::code(INVALID))?;
-                if length < 0
-                    || length as usize > bound
-                    || (length == 0 && matches!(index, 0 | 1 | 2 | 5))
-                {
+                let length = array.len(env).map_err(|_| Failure::code(INVALID))?;
+                if length > bound || (length == 0 && matches!(index, 0 | 1 | 2 | 5)) {
                     return Err(Failure::code(INVALID));
                 }
             }
@@ -62,7 +57,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
                 registration_source: &originals[7],
             };
             install(input, true, || {
-                let platform = AndroidPlatform::new(&mut env, &platform)?;
+                let platform = AndroidPlatform::new(env, &platform)?;
                 let root = platform
                     .custody_root()
                     .map_err(|error| Failure::unavailable(UNAVAILABLE, error))?;

@@ -23,7 +23,7 @@ use iroha_data_model::{
 
 /// Typed original causes; resource refusals are never converted to proof invalidity.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum X509Error {
+pub enum X509Error {
     #[error(transparent)]
     Custody(#[from] CustodyError),
     #[error(transparent)]
@@ -45,7 +45,7 @@ pub(crate) enum X509Error {
 /// This is custody, not proof acceptance. The statement's bounded retained clone
 /// keeps its conservative original-pool allowance until after its destruction.
 /// No method extracts or clones this owner.
-pub(crate) struct X509Binding {
+pub struct X509Binding {
     statement: IrohaZkX509StarkP256StatementV1,
     source: HashOf<SignedTransaction>,
     call: Hash,
@@ -213,4 +213,4 @@ impl Invocation<'_, '_> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests;
+pub mod tests;

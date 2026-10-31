@@ -335,6 +335,7 @@ mod canonical_history;
 mod committed_execution_read;
 mod contract_event_journal;
 pub(crate) mod native_execution_tip;
+pub mod upgrade_checkpoint;
 #[cfg(test)]
 mod world_view_admission_parameters_tests;
 pub use native_execution_tip::NativeExecutionTip;
@@ -1268,7 +1269,10 @@ macro_rules! with_world_overlay_fields {
             verifying_keys_by_circuit,
             pedersen_params,
             poseidon_params,
-            runtime_upgrades,
+            runtime_change_sets,
+            runtime_containments,
+            runtime_definitions,
+            runtime_selection,
             privacy_consensus_policy,
             privacy_protocol_policies,
             kagemusha_wallet_ledger,
@@ -1612,6 +1616,12 @@ macro_rules! initial_world_field {
     (musubi_replication_shortfall_releases, $execution:ident) => {
         scalar_cell_custody::initialize(0, $execution)?
     };
+    (runtime_definitions, $execution:ident) => {
+        crate::runtime::founded_definitions().map_err(|error| error.to_string())?
+    };
+    (runtime_selection, $execution:ident) => {
+        Cell::new(crate::runtime::founded_selection().map_err(|error| error.to_string())?)
+    };
     ($field:ident, $execution:ident) => {
         Default::default()
     };
@@ -1690,11 +1700,15 @@ macro_rules! build_world_transaction_from_fields {
         [$($suffix:ident,)*]
     ) => {{
         let authorization_identities = axt_authorization_identities($state);
+        let uid_binding_execution = $state.uid_binding_run.as_mut().map(|run| run.transaction());
+        let policy_decode_controls = $state.policy_decode_controls.clone();
         // Split fields through one concrete mutable borrow, without repeatedly
         // borrowing the entire prepaid owner through DerefMut.
         let fields = &mut **$state.fields.as_mut().expect("original World block fields");
         Box::new(WorldTransaction {
             execution_deferral: std::cell::RefCell::default(),
+            uid_binding_execution,
+            policy_decode_controls,
             dataspace_catalog: fields.dataspace_catalog.clone(),
             quantity_mutation_observation: fastpq_quantity_capture::QuantityMutationObservation::default(),
             axt_last_authorization_identities: authorization_identities,
@@ -4332,16 +4346,28 @@ pub struct WorldData {
         iroha_data_model::confidential::ConfidentialParamsId,
         iroha_data_model::confidential::PoseidonParams,
     >,
-    /// Registry of runtime upgrades keyed by manifest id.
-    pub(crate) runtime_upgrades: Storage<
-        iroha_data_model::runtime::RuntimeUpgradeId,
-        iroha_data_model::runtime::RuntimeUpgradeRecord,
+    /// Governed runtime change sets by identity, with their lifecycle
+    /// (`specs/live_runtime_upgrades.md` §6).
+    pub(crate) runtime_change_sets: Storage<
+        iroha_data_model::runtime::lifecycle::ChangeSetId,
+        iroha_data_model::runtime::lifecycle::ChangeSetRecordV1,
     >,
+    /// Emergency containments of runtime definitions by identity
+    /// (`specs/live_runtime_upgrades.md` §7.1).
+    pub(crate) runtime_containments:
+        Storage<[u8; 32], iroha_data_model::runtime::lifecycle::ContainmentRecordV1>,
+    /// Published live-upgrade definitions by identity (`specs/live_runtime_upgrades.md` §3).
+    pub(crate) runtime_definitions: Storage<
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::definition::DefinitionDescriptorV1,
+    >,
+    /// The one selection the universal root executes.
+    pub(crate) runtime_selection: Cell<iroha_data_model::runtime::definition::RootSelectionV1>,
     /// Singleton chain-wide privacy admission policy and pending update.
     pub(crate) privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Optional committed resource policies keyed by closed protocol identity.
     pub(crate) privacy_protocol_policies: Storage<
-        crate::privacy_state::PrivacyProtocolPolicyKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1,
         iroha_data_model::privacy::PrivacyProtocolPolicyV1,
     >,
     /// Canonical KAGEMUSHA reserve ledger, permanent replay indexes and historical objects.
@@ -4936,6 +4962,10 @@ pub struct WorldData {
 }
 /// One World execution owner, including joint release of every field writer.
 pub struct WorldBlock<'world> {
+    /// Original native binding decoder bank, independent of rollbackable World fields.
+    pub(crate) uid_binding_run: Option<asset_uid::binding_custody::retry::BindingRun>,
+    /// Original canonical policy counters shared by this native execution attempt.
+    pub(crate) policy_decode_controls: Option<crate::execution_attempt::PolicyDecodeControls>,
     publication: block_field::AggregatePublication,
     // Preserve one allocation through acquisition, execution and publication.
     // Moving State or a runtime result must not copy this complete inventory
@@ -5313,19 +5343,31 @@ pub struct WorldBlockFields<'world> {
         iroha_data_model::confidential::ConfidentialParamsId,
         iroha_data_model::confidential::PoseidonParams,
     >,
-    /// Registry of runtime upgrades
-    pub(crate) runtime_upgrades: StorageField<
+    /// Governed runtime change sets by identity.
+    pub(crate) runtime_change_sets: StorageField<
         'world,
-        iroha_data_model::runtime::RuntimeUpgradeId,
-        iroha_data_model::runtime::RuntimeUpgradeRecord,
+        iroha_data_model::runtime::lifecycle::ChangeSetId,
+        iroha_data_model::runtime::lifecycle::ChangeSetRecordV1,
     >,
+    /// Emergency containments of runtime definitions by identity.
+    pub(crate) runtime_containments:
+        StorageField<'world, [u8; 32], iroha_data_model::runtime::lifecycle::ContainmentRecordV1>,
+    /// Published live-upgrade definitions.
+    pub(crate) runtime_definitions: StorageField<
+        'world,
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::definition::DefinitionDescriptorV1,
+    >,
+    /// The root's selection for this block scope.
+    pub(crate) runtime_selection:
+        CellField<'world, iroha_data_model::runtime::definition::RootSelectionV1>,
     /// Singleton chain-wide privacy admission policy for this block scope.
     pub(crate) privacy_consensus_policy:
         CellField<'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Optional committed resource policies keyed by closed protocol identity.
     pub(crate) privacy_protocol_policies: StorageField<
         'world,
-        crate::privacy_state::PrivacyProtocolPolicyKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1,
         iroha_data_model::privacy::PrivacyProtocolPolicyV1,
     >,
     /// Canonical KAGEMUSHA ledger overlay.
@@ -6126,7 +6168,7 @@ impl WorldBlock<'_> {
         collect_reverts!(self.account_roles, AccountRole);
         collect_reverts!(self.tx_sequences, TxSequence);
         collect_reverts!(self.verifying_keys, VerifyingKey);
-        collect_reverts!(self.runtime_upgrades, RuntimeUpgrade);
+        collect_reverts!(self.runtime_change_sets, RuntimeChangeSet);
         collect_reverts!(self.privacy_protocol_policies, PrivacyProtocolPolicy);
         collect_reverts!(self.kagemusha_wallet_ledger, KagemushaWalletLedger);
         collect_reverts!(
@@ -6232,7 +6274,7 @@ impl WorldBlock<'_> {
         collect_payload!(self.account_roles, AccountRole);
         collect_payload!(self.tx_sequences, TxSequence);
         collect_payload!(self.verifying_keys, VerifyingKey);
-        collect_payload!(self.runtime_upgrades, RuntimeUpgrade);
+        collect_payload!(self.runtime_change_sets, RuntimeChangeSet);
         collect_payload!(self.privacy_protocol_policies, PrivacyProtocolPolicy);
         collect_payload!(self.kagemusha_wallet_ledger, KagemushaWalletLedger);
         collect_payload!(
@@ -6329,6 +6371,7 @@ impl WorldBlock<'_> {
             governance_unlock_stats,
             parliament_attempt_counts,
             privacy_consensus_policy,
+            runtime_selection,
             musubi_registry_policy,
             musubi_resolver_index_revision,
             musubi_replication_shortfall_releases,
@@ -6445,7 +6488,9 @@ impl WorldBlock<'_> {
             verifying_keys_by_circuit,
             pedersen_params,
             poseidon_params,
-            runtime_upgrades,
+            runtime_change_sets,
+            runtime_containments,
+            runtime_definitions,
             privacy_protocol_policies,
             kagemusha_wallet_ledger,
             private_settlement_governance,
@@ -6679,6 +6724,10 @@ impl WorldBlock<'_> {
 /// not copy every store's checkpoint onto each caller's stack. Dropping the box
 /// without applying it restores the original store and cell checkpoints.
 pub struct WorldTransaction<'block, 'world> {
+    /// Original native occurrence owner survives this disposable transaction's rollback.
+    pub(crate) uid_binding_execution: Option<asset_uid::binding_custody::retry::BindingInvocation>,
+    /// Policy decoder controls outlive this disposable transaction journal.
+    pub(crate) policy_decode_controls: Option<crate::execution_attempt::PolicyDecodeControls>,
     /// Sticky local refusal; model-owned instruction APIs cannot serialize this owner.
     pub(crate) execution_deferral:
         std::cell::RefCell<crate::execution_attempt::ExecutionAttemptState>,
@@ -7041,19 +7090,34 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::confidential::ConfidentialParamsId,
         iroha_data_model::confidential::PoseidonParams,
     >,
-    /// Registry of runtime upgrades
-    pub(crate) runtime_upgrades: StorageTransaction<
+    /// Governed runtime change sets by identity.
+    pub(crate) runtime_change_sets: StorageTransaction<
         'block,
-        iroha_data_model::runtime::RuntimeUpgradeId,
-        iroha_data_model::runtime::RuntimeUpgradeRecord,
+        iroha_data_model::runtime::lifecycle::ChangeSetId,
+        iroha_data_model::runtime::lifecycle::ChangeSetRecordV1,
     >,
+    /// Emergency containments of runtime definitions by identity.
+    pub(crate) runtime_containments: StorageTransaction<
+        'block,
+        [u8; 32],
+        iroha_data_model::runtime::lifecycle::ContainmentRecordV1,
+    >,
+    /// Published live-upgrade definitions.
+    pub(crate) runtime_definitions: StorageTransaction<
+        'block,
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::definition::DefinitionDescriptorV1,
+    >,
+    /// The root's selection for this transaction.
+    pub(crate) runtime_selection:
+        CellTransaction<'block, 'world, iroha_data_model::runtime::definition::RootSelectionV1>,
     /// Singleton chain-wide privacy admission policy for this transaction.
     pub(crate) privacy_consensus_policy:
         CellTransaction<'block, 'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Optional committed resource policies keyed by closed protocol identity.
     pub(crate) privacy_protocol_policies: StorageTransaction<
         'block,
-        crate::privacy_state::PrivacyProtocolPolicyKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1,
         iroha_data_model::privacy::PrivacyProtocolPolicyV1,
     >,
     /// Canonical KAGEMUSHA ledger transaction.
@@ -9299,19 +9363,31 @@ pub struct WorldView<'world> {
         iroha_data_model::confidential::ConfidentialParamsId,
         iroha_data_model::confidential::PoseidonParams,
     >,
-    /// Registry of runtime upgrades
-    pub(crate) runtime_upgrades: StorageView<
+    /// Governed runtime change sets by identity.
+    pub(crate) runtime_change_sets: StorageView<
         'world,
-        iroha_data_model::runtime::RuntimeUpgradeId,
-        iroha_data_model::runtime::RuntimeUpgradeRecord,
+        iroha_data_model::runtime::lifecycle::ChangeSetId,
+        iroha_data_model::runtime::lifecycle::ChangeSetRecordV1,
     >,
+    /// Emergency containments of runtime definitions by identity.
+    pub(crate) runtime_containments:
+        StorageView<'world, [u8; 32], iroha_data_model::runtime::lifecycle::ContainmentRecordV1>,
+    /// Published live-upgrade definitions.
+    pub(crate) runtime_definitions: StorageView<
+        'world,
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::definition::DefinitionDescriptorV1,
+    >,
+    /// The root's selection.
+    pub(crate) runtime_selection:
+        CellView<'world, iroha_data_model::runtime::definition::RootSelectionV1>,
     /// Singleton chain-wide privacy admission policy view.
     pub(crate) privacy_consensus_policy:
         CellView<'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Optional committed resource policies keyed by closed protocol identity.
     pub(crate) privacy_protocol_policies: StorageView<
         'world,
-        crate::privacy_state::PrivacyProtocolPolicyKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1,
         iroha_data_model::privacy::PrivacyProtocolPolicyV1,
     >,
     /// Public private-settlement governance projection view.
@@ -11603,9 +11679,7 @@ const PIPELINE_AUTO_WORKER_MIN: usize = 2;
 const PIPELINE_AUTO_WORKER_MAX: usize = 8;
 fn resolve_pipeline_worker_threads(configured: usize) -> usize {
     if configured == 0 {
-        let detected = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1);
+        let detected = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         detected.clamp(PIPELINE_AUTO_WORKER_MIN, PIPELINE_AUTO_WORKER_MAX)
     } else {
         configured.max(1)
@@ -12838,7 +12912,7 @@ mod history_reader_releases;
 pub(crate) use history_reader_releases::StateViewReleases;
 #[path = "state/view_acquisition.rs"]
 pub(crate) mod view_acquisition;
-pub use view_acquisition::StateViewError;
+pub use view_acquisition::{StateViewError, StateViewWaiter};
 
 /// Original executing State fields, jointly retired by their enclosing owner.
 #[expect(
@@ -13834,21 +13908,78 @@ impl<'state> StateBlock<'state> {
             crate::privacy::PrivacyBlockBudgetV1::new(pending.next_limits)
                 .expect("validated scheduled privacy limits construct a block budget");
     }
-    fn apply_due_privacy_protocol_limits(&mut self) {
+    fn apply_due_privacy_protocol_limits(
+        &mut self,
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
+        use crate::pipeline_gas_policy::{ParameterIngressAttemptError, ParameterIngressError};
+        use iroha_data_model::privacy::{PrivacyProtocolIdV1, PrivacyProtocolPolicyKeyV1};
         let incoming_height = self._curr_block.height().get();
+        let key = PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+        let mut private = crate::private_settlement::policy::read(
+            self.world.parameters.get(),
+            self.world.privacy_protocol_policies.get(&key),
+            incoming_height.saturating_sub(1),
+        )?;
         let updates = crate::privacy_state::plan_due_privacy_protocol_limits_v1(
             &self.world.privacy_protocol_policies,
             incoming_height,
         )
-        .unwrap_or_else(|error| {
-            panic!(
-                "persisted privacy protocol policy table is invalid at block height \
-                     {incoming_height}: {error}"
+        .map_err(|error| {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error.to_string())
+        })?;
+        let mut private_changed = false;
+        if let Some(pending) = private.pending_update
+            && pending.effective_at_height == incoming_height
+        {
+            private.current_limits = pending.next_limits;
+            private.pending_update = None;
+            private_changed = true;
+        }
+        if private
+            .protocol_closure_drain
+            .is_some_and(|drain| drain.effective_at_height == incoming_height)
+        {
+            private.protocol_closure_drain = None;
+            private_changed = true;
+        }
+        // Prepare the exact retained successor before mutating either committed owner.
+        // An absent extension remains absent during untouched baseline replay.
+        let successor = if private_changed {
+            let parameter = iroha_data_model::parameter::Parameter::Custom(
+                private
+                    .to_custom_parameter()
+                    .map_err(crate::private_settlement::policy::attempt)?,
+            );
+            let pool = self.world.sccp_committee_generations.allocation_budget();
+            let prepared = ParameterIngressAttemptError::observe(|| {
+                self.world
+                    .parameters
+                    .get()
+                    .prepare_parameter(&parameter, pool)
+            })
+            .map_err(|error| parameter_ingress_attempt_error(error, |error| error.to_string()))?;
+            Some(
+                prepared
+                    .into_successor(self.world.parameters.get(), pool)
+                    .map_err(|(_, error)| {
+                        parameter_ingress_attempt_error(
+                            ParameterIngressAttemptError::Original(
+                                ParameterIngressError::Retention(error),
+                            ),
+                            |error| error.to_string(),
+                        )
+                    })?,
             )
-        });
+        } else {
+            None
+        };
         for (key, record) in updates {
             self.world.privacy_protocol_policies.insert(key, record);
         }
+        if let Some(successor) = successor {
+            *self.world.parameters.get_mut() = successor;
+        }
+        Ok(())
     }
     fn activate_due_public_lane_validators(&mut self, current_epoch: u64) {
         let block_height = self._curr_block.height().get();
@@ -14792,7 +14923,7 @@ pub struct StateView<'state> {
     /// Exact transaction security domain for this view.
     pub network_id: iroha_data_model::NetworkId,
     /// Lifetime diagnostic owner; keep last so snapshot fields release first.
-    created_at: StateViewLifetimeDiagnostic,
+    _lifetime_diagnostic: StateViewLifetimeDiagnostic,
 }
 /// Lightweight state snapshot intended for query-heavy paths.
 ///
@@ -21278,10 +21409,19 @@ macro_rules! world_ro_accessors {
             storage poseidon_params:
                 iroha_data_model::confidential::ConfidentialParamsId =>
                 iroha_data_model::confidential::PoseidonParams;
-            /// Runtime upgrade registry (read-only).
-            storage runtime_upgrades:
-                iroha_data_model::runtime::RuntimeUpgradeId =>
-                iroha_data_model::runtime::RuntimeUpgradeRecord;
+            /// Governed runtime change sets by identity (read-only).
+            storage runtime_change_sets:
+                iroha_data_model::runtime::lifecycle::ChangeSetId =>
+                iroha_data_model::runtime::lifecycle::ChangeSetRecordV1;
+            /// Emergency containments of runtime definitions (read-only).
+            storage runtime_containments:
+                [u8; 32] => iroha_data_model::runtime::lifecycle::ContainmentRecordV1;
+            /// Published live-upgrade definitions (read-only).
+            storage runtime_definitions:
+                iroha_data_model::runtime::definition::DefinitionId =>
+                iroha_data_model::runtime::definition::DefinitionDescriptorV1;
+            /// The selection the universal root executes.
+            cell_ref runtime_selection: iroha_data_model::runtime::definition::RootSelectionV1;
             /// Retained canonical merge-hint values.
             cell_ref merge_hint_roots: Vec<Hash>;
             /// Retained canonical reduced merge-root value; not the World state root.
@@ -21544,9 +21684,13 @@ macro_rules! world_ro_accessors {
             cell_ref soradns_history_len: u64;
             /// Authoritative singleton privacy policy (read-only).
             cell_ref privacy_consensus_policy: iroha_data_model::privacy::PrivacyConsensusPolicyV1;
+            /// Outstanding original native private-settlement custody in this exact World cut.
+            storage private_settlement_staged_locks:
+                crate::private_settlement::global_state::PrivateSettlementStagedLockKeyV1 =>
+                crate::private_settlement::global_state::PrivateSettlementStagedLockRecordV1;
             /// Optional committed privacy resource policies (read-only).
             storage privacy_protocol_policies:
-                crate::privacy_state::PrivacyProtocolPolicyKeyV1 =>
+                iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1 =>
                 iroha_data_model::privacy::PrivacyProtocolPolicyV1;
         );
     };
@@ -24880,6 +25024,8 @@ impl WorldTransaction<'_, '_> {
         // off its heap allocation before applying the individual fields.
         let Self {
             execution_deferral: _,
+            uid_binding_execution: _,
+            policy_decode_controls: _,
             dataspace_catalog: _,
             quantity_mutation_observation: _,
             retail_fee_now_ms: _,
@@ -25007,7 +25153,10 @@ impl WorldTransaction<'_, '_> {
             private_dataspaces: _,
             pedersen_params: _,
             poseidon_params: _,
-            runtime_upgrades: _,
+            runtime_change_sets: _,
+            runtime_containments: _,
+            runtime_definitions: _,
+            runtime_selection: _,
             privacy_consensus_policy: _,
             privacy_protocol_policies: _,
             kagemusha_wallet_ledger: _,
@@ -25234,7 +25383,10 @@ impl WorldTransaction<'_, '_> {
         self.private_dataspaces.apply();
         self.pedersen_params.apply();
         self.poseidon_params.apply();
-        self.runtime_upgrades.apply();
+        self.runtime_change_sets.apply();
+        self.runtime_containments.apply();
+        self.runtime_definitions.apply();
+        self.runtime_selection.apply();
         self.privacy_consensus_policy.apply();
         self.privacy_protocol_policies.apply();
         self.kagemusha_wallet_ledger.apply();
@@ -25679,6 +25831,20 @@ impl WorldTransaction<'_, '_> {
         id: &AssetId,
         dataspace_hint: Option<DataSpaceId>,
     ) -> Result<AssetId, Error> {
+        let scope = self.resolve_asset_scope_for_hint(id, dataspace_hint)?;
+        Ok(AssetId::with_scope(
+            id.definition().clone(),
+            id.account().clone(),
+            scope,
+        ))
+    }
+    /// Resolve only the balance scope, allowing admitted callers to retain their
+    /// own fallible account-copy owner rather than creating an unfunded identifier.
+    pub(crate) fn resolve_asset_scope_for_hint(
+        &self,
+        id: &AssetId,
+        dataspace_hint: Option<DataSpaceId>,
+    ) -> Result<AssetBalanceScope, Error> {
         let definition = self
             .asset_definition(id.definition())
             .map_err(Error::from)?;
@@ -25699,11 +25865,7 @@ impl WorldTransaction<'_, '_> {
                 ));
             }
             self.ensure_confined_asset_route(home)?;
-            return Ok(AssetId::with_scope(
-                id.definition().clone(),
-                id.account().clone(),
-                AssetBalanceScope::Dataspace(home),
-            ));
+            return Ok(AssetBalanceScope::Dataspace(home));
         }
         let ambient_dataspace = self.current_dataspace_id;
         let compatible_requested_dataspace = requested_dataspace.filter(|requested| {
@@ -25741,11 +25903,7 @@ impl WorldTransaction<'_, '_> {
                 }
             }
         }
-        Ok(AssetId::with_scope(
-            id.definition().clone(),
-            id.account().clone(),
-            expected_scope,
-        ))
+        Ok(expected_scope)
     }
     /// Canonicalize an [`AssetId`] into the current execution scope.
     ///
@@ -26038,15 +26196,15 @@ impl WorldTransaction<'_, '_> {
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]
 impl<'block, 'world> WorldTransaction<'block, 'world> {
-    /// Test helper: mutable access to runtime upgrade registry.
-    pub fn runtime_upgrades_mut(
+    /// Test helper: mutable access to the governed runtime change sets.
+    pub fn runtime_change_sets_mut(
         &mut self,
     ) -> &mut StorageTransaction<
         'block,
-        iroha_data_model::runtime::RuntimeUpgradeId,
-        iroha_data_model::runtime::RuntimeUpgradeRecord,
+        iroha_data_model::runtime::lifecycle::ChangeSetId,
+        iroha_data_model::runtime::lifecycle::ChangeSetRecordV1,
     > {
-        &mut self.runtime_upgrades
+        &mut self.runtime_change_sets
     }
     /// Provides mutable access to the pin-manifest registry for test scaffolding.
     pub fn pin_manifests_mut_for_testing(
@@ -26367,10 +26525,7 @@ impl State {
     /// Callers must first acquire the Queue reservation-transition fence when
     /// both owners are needed. On refusal, release all other guards before
     /// waiting on this exact mutex observation; a wake requires a fresh probe.
-    #[expect(
-        dead_code,
-        reason = "TODO: connect nonblocking native publication admission to the lifecycle fence and its exact ReleaseWait observation"
-    )]
+    #[cfg(test)]
     pub(crate) fn try_lock_lane_lifecycle_work_admission(
         &self,
     ) -> Result<PublicationGuard<'_>, iroha_allocation::release::ReleaseWait> {
@@ -27007,10 +27162,6 @@ impl State {
         let mut cursors = self.da_shard_cursors.write();
         self.advance_da_shard_cursors_into(&mut cursors, &lane_config, block_height, records.iter())
     }
-    #[expect(
-        single_use_lifetimes,
-        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
-    )]
     fn advance_da_shard_cursors_into<'a>(
         &self,
         cursors: &mut DaShardCursorIndex,
@@ -27107,10 +27258,6 @@ impl State {
         let mut cursors = self.da_receipt_cursors.write();
         self.advance_da_receipt_cursors_into(&mut cursors, block_height, records.iter())
     }
-    #[expect(
-        single_use_lifetimes,
-        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
-    )]
     fn advance_da_receipt_cursors_into<'a>(
         &self,
         cursors: &mut DaReceiptCursorIndex,
@@ -27866,12 +28013,15 @@ impl State {
                 "incompatible persisted SoraFS moderation V1 policy/appeal/anchor/case state; regenerate first-release genesis and snapshots: {error}"
             ))
         })?;
-        crate::smartcontracts::ivm::active_runtime_abi_hash(&world.view(), u64::MAX)
-            .unwrap_or_else(|error| {
-                panic!(
-                    "persisted active runtime ABI is incompatible with this node during state initialization: {error:?}"
-                )
-            });
+        // A restored State is executed only by a release that implements its selection.
+        let catalog = crate::runtime::release_catalog().map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(error.to_string())
+        })?;
+        if let Some(definition) = catalog.unsupported(world.runtime_selection.view().get()) {
+            return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "this release cannot execute the restored runtime selection: definition {definition} is not implemented"
+            )));
+        }
         contract_subject_restore::rebuild(&mut world).expect(
             "incompatible contract lifecycle state; regenerate first-release genesis and snapshots",
         );
@@ -28241,8 +28391,6 @@ impl State {
                             .expect("valid default JDG signature scheme")
                     })
                     .collect(),
-                runtime_upgrade_provenance:
-                    iroha_config::parameters::actual::RuntimeUpgradeProvenancePolicy::default(),
                 viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
                 sorafs_pin_policy: iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
                 sorafs_pin_fee_asset_id:
@@ -29314,11 +29462,12 @@ impl State {
             drop(waker);
         }
     }
-    /// Create a block after validating the persisted active runtime ABI.
+    /// Create a block after validating that every host profile the committed
+    /// runtime selection activates is published.
     ///
     /// # Errors
-    /// Returns the stable admission reason when persisted governance state
-    /// selects an ABI surface different from this binary.
+    /// Returns the stable admission reason when the committed selection names
+    /// a definition the World does not hold.
     pub fn try_block(
         &self,
         curr_block: BlockHeader,
@@ -29327,11 +29476,7 @@ impl State {
         self.block_with_pristine_stage(curr_block, |block| {
             // Validate the acquired predecessor, before any start effects. A
             // separate World view can belong to a different publication.
-            crate::smartcontracts::ivm::active_runtime_abi_hash(
-                &block.world,
-                curr_block.height().get(),
-            )
-            .map(|_| ())
+            crate::smartcontracts::ivm::active_host_abi_hashes(&block.world).map(|_| ())
         })
     }
     #[expect(
@@ -29472,17 +29617,15 @@ impl State {
         // Privacy resource limits are persisted state, not a verifier-time projection.
         // Plan every due tightening before applying any of them so malformed
         // restored state cannot leave the block overlay partially updated.
-        sb.apply_due_privacy_protocol_limits();
-        crate::smartcontracts::ivm::active_runtime_abi_hash(
-            &sb.world,
-            sb._curr_block.height().get(),
-        )
-        .unwrap_or_else(|error| {
-            panic!(
-                "persisted active runtime ABI is incompatible with this node at block height {}: {error:?}",
-                sb._curr_block.height().get()
-            )
-        });
+        sb.apply_due_privacy_protocol_limits()
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                    StateBlockStartError::ExecutionDeferred(original)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                    StateBlockStartError::Policy(error)
+                }
+            })?;
         // Activate any pending public-lane validators whose scheduled epoch has begun.
         let epoch_length = sb
             .world
@@ -29740,58 +29883,18 @@ impl State {
             current_slot,
         );
         apply_confidential_transitions(&mut wtx, &transitions, sb.zk.registry_max_delta_per_block);
-        let upgrades_to_activate: Vec<(iroha_data_model::runtime::RuntimeUpgradeId, u16)> = wtx
-            .runtime_upgrades
+        // Governed runtime change sets take effect before ordinary execution of their height.
+        let committee: Vec<iroha_crypto::PublicKey> = sb
+            .commit_topology
+            .get()
             .iter()
-            .filter_map(|(id, rec)| {
-                if matches!(
-                    rec.status,
-                    iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed
-                ) && rec.manifest.start_height == now_h
-                    && now_h < rec.manifest.end_height
-                {
-                    Some((*id, rec.manifest.abi_version))
-                } else {
-                    None
-                }
-            })
+            .map(|peer| peer.public_key().clone())
             .collect();
-        for (id, abi_version) in upgrades_to_activate {
-            if let Some(mut rec) = wtx.runtime_upgrades.get(&id).cloned()
-                && matches!(
-                    rec.status,
-                    iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed
-                )
-                && rec.manifest.start_height == now_h
-                && now_h < rec.manifest.end_height
-            {
-                crate::smartcontracts::ivm::validate_runtime_upgrade_manifest_abi(
-                    &rec.manifest,
-                )
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "scheduled runtime upgrade {id:?} is incompatible with this node at activation height {now_h}: {error:?}"
-                    )
-                });
-                rec.status = iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(now_h);
-                wtx.runtime_upgrades.insert(id, rec);
-                wtx.emit_events(Some(
-                    iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeEvent::Activated(
-                        iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeActivated {
-                            id,
-                            abi_version,
-                            at_height: now_h,
-                        },
-                    ),
-                ));
-                #[cfg(feature = "telemetry")]
-                {
-                    if let Some(telemetry) = wtx.telemetry {
-                        telemetry.inc_runtime_upgrade_event("activated");
-                    }
-                }
-            }
-        }
+        let now_ms = u64::try_from(sb._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX);
+        crate::runtime::change_set::activate_due(&mut wtx, now_h, now_ms, &committee)?;
+        // Containment leases end after the height's change sets apply, so a ratification that
+        // takes a contained definition over is never undone by the expiry it replaces.
+        crate::runtime::containment::expire_due(&mut wtx, now_h, now_ms);
         // Collect candidates to open (avoid borrow conflicts)
         let to_open: Vec<(String, u64, u64)> = wtx
             .governance_referenda
@@ -30088,13 +30191,6 @@ impl State {
             axt_lane_map,
         )?;
         update_oracle_change_pipeline(&mut wtx, now_h, &static_policy.oracle.governance);
-        crate::smartcontracts::ivm::active_runtime_abi_hash(&wtx, now_h).unwrap_or_else(
-            |error| {
-                panic!(
-                    "runtime-upgrade registry became invalid after activation at height {now_h}: {error:?}"
-                )
-            },
-        );
         // Classify this original block-start child before its existing publication.
         // Raw quantity leases remain a refusal; only successful apply advances lineage.
         let mut quantity_candidate = fastpq_quantity_capture::QuantityCandidateArchive::default();
@@ -31664,8 +31760,9 @@ impl State {
             .view_lock_contention_log
             .lock()
             .should_emit(now, STATE_VIEW_LOCK_CONTENTION_WARN_COOLDOWN);
+        // Readers retry and succeed; this explains slowness rather than reporting a fault.
         if let Some(suppressed_since_last) = suppressed {
-            warn!(
+            debug!(
                 caller = %caller,
                 suppressed_since_last,
                 cooldown_ms = STATE_VIEW_LOCK_CONTENTION_WARN_COOLDOWN.as_millis(),
@@ -31872,7 +31969,7 @@ impl State {
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
                 network_id: self.network_id,
-                created_at: Instant::now().into(),
+                _lifetime_diagnostic: Instant::now().into(),
             })
         }
     }
@@ -33289,6 +33386,17 @@ impl State {
             .iter()
             .map(|entry| (entry.alias.clone(), entry.id))
             .collect();
+        // Rows naming a dataspace outside the catalog are dropped only when this update changes
+        // the catalog, which happens only before genesis. Afterwards such a row is committed
+        // World state its blocks certify: dropping it at a restart would leave the restarted
+        // node with a World that differs from its stored accumulator and from its peers'.
+        let dataspace_catalog_changed = previous_nexus
+            .dataspace_catalog
+            .entries()
+            .iter()
+            .map(|entry| (entry.alias.clone(), entry.id))
+            .collect::<BTreeMap<_, _>>()
+            != dataspace_ids_by_alias;
         // This must precede lane-geometry publication, catalog replacement, and stale-token
         // pruning. A failed retirement therefore leaves both the binding and its authority path
         // intact so the owner can clear it and retry.
@@ -33579,6 +33687,7 @@ impl State {
             .uaid_dataspaces
             .view()
             .iter()
+            .filter(|_| dataspace_catalog_changed)
             .filter_map(|(uaid, bindings)| {
                 bindings
                     .iter()
@@ -33610,6 +33719,7 @@ impl State {
             .space_directory_manifests
             .view()
             .iter()
+            .filter(|_| dataspace_catalog_changed)
             .filter_map(|(uaid, manifests)| {
                 manifests
                     .iter()
@@ -33647,6 +33757,7 @@ impl State {
             .account_scope_directory
             .view()
             .iter()
+            .filter(|_| dataspace_catalog_changed)
             .filter_map(|(account_id, entry)| {
                 entry
                     .iter()
@@ -33679,6 +33790,7 @@ impl State {
             .axt_policies
             .view()
             .iter()
+            .filter(|_| dataspace_catalog_changed)
             .filter_map(|(dataspace_id, _)| {
                 (!dataspace_ids.contains(dataspace_id)).then_some(*dataspace_id)
             })
@@ -33727,6 +33839,9 @@ impl State {
                 }
             };
         let is_stale_dataspace_permission = |permission: &Permission| {
+            if !dataspace_catalog_changed {
+                return false;
+            }
             if let Ok(permission) =
                 iroha_executor_data_model::permission::query::CanReadRestrictedDataspace::try_from(
                     permission,
@@ -35987,6 +36102,18 @@ static DEFAULT_TEST_IDENTITIES: LazyLock<(
 )> = LazyLock::new(|| {
     let config_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_config/iroha_test_config.toml");
+    // The checked-in testing identities are compiled fixture data. Native Windows
+    // must not require the build checkout's filesystem to expose local file IDs.
+    // Ordinary operator configuration still uses its retained file reader.
+    #[cfg(windows)]
+    let reader = iroha_config::base::read::ConfigReader::new()
+        .without_env()
+        .with_toml_source(iroha_config::base::toml::TomlSource::inline(
+            include_str!("../../iroha_config/iroha_test_config.toml")
+                .parse()
+                .expect("checked-in default testing config must be valid TOML"),
+        ));
+    #[cfg(not(windows))]
     let reader = iroha_config::base::read::ConfigReader::new()
         .without_env()
         .read_toml_with_extends(&config_path)
@@ -36265,7 +36392,7 @@ pub trait StateReadOnly: WorldStateSnapshot {
             |protocol_id| {
                 world
                     .privacy_protocol_policies()
-                    .get(&crate::privacy_state::PrivacyProtocolPolicyKeyV1::new(
+                    .get(&iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
                         protocol_id,
                     ))
                     .copied()
@@ -37133,6 +37260,7 @@ pub(crate) fn consensus_owned_custom_parameter_ids()
         iroha_data_model::governance::anonymous_ballot::ParliamentCandidateTestingPolicyV1::parameter_id()
             .clone(),
         ReputationFinalizedArchiveRetentionRequestV1::parameter_id(),
+        iroha_data_model::privacy::PrivateSettlementPolicyV1::parameter_id().clone(),
     ];
     ids.extend(crate::pipeline_gas_policy::parameter_ids());
     ids
@@ -37179,6 +37307,7 @@ pub(crate) fn is_consensus_owned_custom_parameter(
             RootFeePolicy::PARAMETER_ID_STR,
             PublicLaneStakingPolicy::PARAMETER_ID_STR,
             "parliament_candidate_testing_v1",
+            "private_settlement_policy_v1",
             iroha_data_model::sorafs::reputation::REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_PARAMETER_ID_V1,
         ].contains(&name)
         || crate::pipeline_gas_policy::PARAMETER_NAMES.contains(&name)
@@ -41935,12 +42064,32 @@ impl StateTransaction<'_, '_> {
         }
         roster
     }
+    fn private_settlement_policy_v1(
+        &self,
+    ) -> Result<
+        iroha_data_model::privacy::PrivateSettlementPolicyV1,
+        PrivateSettlementGlobalStateErrorV1,
+    > {
+        let key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
+            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        );
+        crate::private_settlement::policy::read(
+            self.world.parameters.get(),
+            self.world.privacy_protocol_policies.get(&key),
+            self.block_height(),
+        )
+        .map_err(|error| {
+            if let crate::execution_attempt::ExecutionAttemptError::Deferred(original) = error {
+                self.world.record_execution_deferral(original);
+            }
+            PrivateSettlementGlobalStateErrorV1::Capability
+        })
+    }
     // Native relation availability and committed policy are the admission owner.
     // Local configuration cannot impose an activation event on this first-release path.
     fn ensure_private_settlement_admitted_v1(
         &self,
     ) -> core::result::Result<(), PrivateSettlementGlobalStateErrorV1> {
-        let config = &self.nexus.atomic_private_settlement;
         let protocol_id =
             iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
         let admitted = crate::privacy_state::resolve_admitted_privacy_protocol_v1(
@@ -41961,13 +42110,31 @@ impl StateTransaction<'_, '_> {
         if limits.max_input_count < required_inputs || limits.max_output_count < required_outputs {
             return Err(PrivateSettlementGlobalStateErrorV1::Capability);
         }
-        if config.proof_profile_version.get()
-            != u16::from(iroha_data_model::nexus::ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1)
-            || !config.permitted_policy_versions.contains(&u16::from(
-                iroha_data_model::nexus::ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
-            ))
-        {
-            return Err(PrivateSettlementGlobalStateErrorV1::Capability);
+        Ok(())
+    }
+    // A continuation still consumes structurally valid committed policy and the native
+    // verifier, but a valid later admission closure cannot revoke original obligations.
+    fn ensure_private_settlement_continuation_v1(
+        &self,
+    ) -> core::result::Result<(), PrivateSettlementGlobalStateErrorV1> {
+        crate::privacy_engines::atomic_private_settlement::validate_atomic_private_settlement_profile_v1()
+            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Capability)?;
+        self.world
+            .privacy_consensus_policy
+            .get()
+            .validate()
+            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Capability)?;
+        self.private_settlement_policy_v1()?;
+        let protocol = iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+        if let Some(policy) = self.world.privacy_protocol_policies.get(
+            &iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(protocol),
+        ) {
+            if policy.protocol_id != protocol {
+                return Err(PrivateSettlementGlobalStateErrorV1::Capability);
+            }
+            policy
+                .validate()
+                .map_err(|_| PrivateSettlementGlobalStateErrorV1::Capability)?;
         }
         Ok(())
     }
@@ -42079,28 +42246,28 @@ impl StateTransaction<'_, '_> {
         if barrier.manifest.network_id != self.network_id {
             return Err(PrivateSettlementGlobalStateErrorV1::Network);
         }
-        let participant_count = u16::try_from(barrier.manifest.legs.len())
-            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Bounds)?;
-        let expiry_span = barrier
-            .manifest
-            .expiry_height
-            .checked_sub(barrier.manifest.authority_context_height)
-            .ok_or(PrivateSettlementGlobalStateErrorV1::Bounds)?;
-        let carrier = iroha_data_model::isi::InstructionBox::from(
-            iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1::new(
-                barrier.clone(),
+        let policy = self.private_settlement_policy_v1()?;
+        let protocol = self.world.privacy_protocol_policies.get(
+            &iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
+                iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             ),
         );
-        let carrier_bytes = norito::encode_canonical(&carrier)
-            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Encoding)?
-            .len();
-        if participant_count > self.nexus.atomic_private_settlement.max_participants.get()
-            || expiry_span > self.nexus.atomic_private_settlement.max_expiry_blocks.get()
-            || u64::try_from(carrier_bytes).unwrap_or(u64::MAX)
-                > self.nexus.atomic_private_settlement.max_carrier_bytes.get()
-        {
-            return Err(PrivateSettlementGlobalStateErrorV1::Bounds);
-        }
+        let admission_deadline =
+            iroha_data_model::privacy::private_settlement_admission_deadline_v1(&policy, protocol);
+        policy
+            .current_limits
+            .validate_admission(
+                barrier.manifest.legs.len(),
+                barrier.manifest.authority_context_height,
+                barrier.manifest.expiry_height,
+                current_height,
+                admission_deadline,
+            )
+            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Bounds)?;
+        iroha_data_model::privacy::validate_private_settlement_sponsor_v1(
+            &barrier.manifest.sponsor,
+        )
+        .map_err(|_| PrivateSettlementGlobalStateErrorV1::Bounds)?;
         for (index, leg) in barrier.manifest.legs.iter().enumerate() {
             self.ensure_private_settlement_route_active_v1(leg.route)?;
             let authority = barrier
@@ -42146,27 +42313,12 @@ impl StateTransaction<'_, '_> {
         PrivateSettlementGlobalStateErrorV1,
     > {
         let current_height = self.block_height();
-        self.ensure_private_settlement_admitted_v1()?;
+        self.ensure_private_settlement_continuation_v1()?;
         if receipt.manifest.network_id != self.network_id {
             return Err(PrivateSettlementGlobalStateErrorV1::Network);
         }
-        let participant_count = u16::try_from(receipt.manifest.legs.len())
-            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Bounds)?;
-        let expiry_span = receipt
-            .manifest
-            .expiry_height
-            .checked_sub(receipt.manifest.authority_context_height)
-            .ok_or(PrivateSettlementGlobalStateErrorV1::Bounds)?;
-        let carrier_bytes = receipt
-            .canonical_carrier_bytes_len()
-            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Encoding)?;
-        if participant_count > self.nexus.atomic_private_settlement.max_participants.get()
-            || expiry_span > self.nexus.atomic_private_settlement.max_expiry_blocks.get()
-            || u64::try_from(carrier_bytes).unwrap_or(u64::MAX)
-                > self.nexus.atomic_private_settlement.max_carrier_bytes.get()
-        {
-            return Err(PrivateSettlementGlobalStateErrorV1::Bounds);
-        }
+        // Finalize consumes the original all-Prepare locks. It does not admit
+        // a new obligation under a policy that may have changed since Register.
         receipt
             .validate_shape()
             .map_err(|_| PrivateSettlementGlobalStateErrorV1::Receipt)?;
@@ -42241,7 +42393,7 @@ impl StateTransaction<'_, '_> {
         PrivateSettlementGlobalStateErrorV1,
     > {
         let current_height = self.block_height();
-        self.ensure_private_settlement_admitted_v1()?;
+        self.ensure_private_settlement_continuation_v1()?;
         if receipt.network_id != self.network_id {
             return Err(PrivateSettlementGlobalStateErrorV1::Network);
         }
@@ -42599,16 +42751,32 @@ impl StateTransaction<'_, '_> {
         payload_digest: Hash,
         instruction_digest: Hash,
     ) -> core::result::Result<(), PrivateSettlementCarrierBindingErrorV1> {
-        let max_signed_transaction_bytes =
-            self.nexus.atomic_private_settlement.max_carrier_bytes.get();
-        self.private_settlement_carrier_binding
-            .as_mut()
+        // SPEC: §13.4 HC491 removes only the pre-obligation genesis boundary.
+        if !cfg!(all(test, sumeragi_core_mutation = "HC491")) && self.block_height() <= 1 {
+            return Err(PrivateSettlementCarrierBindingErrorV1::GenesisCarrier);
+        }
+        let continuation = self
+            .private_settlement_carrier_binding
+            .as_ref()
             .ok_or(PrivateSettlementCarrierBindingErrorV1::MissingBinding)?
-            .consume(
-                payload_digest,
-                instruction_digest,
-                max_signed_transaction_bytes,
-            )
+            .is_continuation();
+        let max_signed_transaction_bytes = if continuation {
+            iroha_data_model::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1
+        } else {
+            self.private_settlement_policy_v1()
+                .map_err(|_| PrivateSettlementCarrierBindingErrorV1::Policy)?
+                .current_limits
+                .max_carrier_bytes
+        };
+        let binding = self
+            .private_settlement_carrier_binding
+            .as_mut()
+            .expect("original carrier binding was just checked");
+        binding.consume(
+            payload_digest,
+            instruction_digest,
+            max_signed_transaction_bytes,
+        )
     }
     /// Consume the exact signed direct privacy submission once.
     ///
@@ -43795,6 +43963,21 @@ impl StateTransaction<'_, '_> {
                 ) {
                     continue;
                 }
+                // A suspended callback must not reject the unrelated transaction whose data
+                // event matched it. The event is consumed; restoring the runtime never replays
+                // events skipped while this incarnation's consent was stale or restricted.
+                match crate::smartcontracts::isi::triggers::check_trigger_runtime(
+                    action.metadata(),
+                    action.executable(),
+                    &self.world,
+                    self._curr_block.height().get(),
+                ) {
+                    Ok(()) => {}
+                    Err(Error::Runtime(_)) => continue,
+                    // A local refusal is not a governance suspension. Retain its execution
+                    // deferral and refuse this attempt without consuming a committed event.
+                    Err(error) => return Err(ValidationFail::from(error).into()),
+                }
                 (action.executable().clone(), action.authority().clone())
             };
             if self.data_trigger_firings_in_tx >= MAX_DATA_TRIGGER_FIRINGS_PER_TRANSACTION {
@@ -44386,6 +44569,19 @@ impl StateTransaction<'_, '_> {
         _step_index: u32,
         nft_seq_base_override: Option<u64>,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
+        self.world
+            .triggers
+            .inspect_by_id(id, |action| {
+                crate::smartcontracts::isi::triggers::check_trigger_runtime(
+                    action.metadata(),
+                    executable,
+                    &self.world,
+                    self._curr_block.height().get(),
+                )
+            })
+            .ok_or_else(|| Error::from(FindError::Trigger(id.clone())))
+            .and_then(core::convert::identity)
+            .map_err(ValidationFail::from)?;
         let (res, _outcome_override): (_, Option<TriggerCompletedOutcome>) = match executable {
             ExecutableRef::Instructions(instructions) => {
                 let instruction_groups = std::collections::BTreeMap::from([(

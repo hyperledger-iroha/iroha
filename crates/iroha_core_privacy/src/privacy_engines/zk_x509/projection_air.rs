@@ -17,7 +17,7 @@ use super::private_table::{
 };
 
 #[path = "projection_sha_bus.rs"]
-pub(crate) mod hash_bus;
+pub mod hash_bus;
 use super::sha_call_bus_stark::ZkX509ShaCallBusChallengesV1;
 
 use super::io_air::{
@@ -3327,7 +3327,7 @@ pub mod tests {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("fixed account seed");
         AccountId::new(key_pair.public_key().clone())
     }
-    pub(crate) fn test_hash_bus_challenges_v1() -> ZkX509ShaCallBusChallengesV1 {
+    pub fn test_hash_bus_challenges_v1() -> ZkX509ShaCallBusChallengesV1 {
         use crate::privacy_engines::zk_x509::sha_call_bus_stark::ZkX509ShaCallBusLaneChallengesV1;
         ZkX509ShaCallBusChallengesV1 {
             lanes: core::array::from_fn(|lane| ZkX509ShaCallBusLaneChallengesV1 {

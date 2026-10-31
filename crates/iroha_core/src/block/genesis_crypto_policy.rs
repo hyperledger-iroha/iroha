@@ -16,7 +16,7 @@ use crate::{
 
 /// A private original-source selection; a height-one header cannot construct it.
 #[derive(Debug)]
-pub(crate) struct GenesisCryptoPolicy {
+pub struct GenesisCryptoPolicy {
     header: BlockHeader,
     coordinate: (usize, usize),
     parameter: CustomParameter,

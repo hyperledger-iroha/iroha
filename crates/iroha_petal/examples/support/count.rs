@@ -10,7 +10,7 @@ pub fn count_as_f64(count: impl TryInto<u64>) -> f64 {
         .unwrap_or_else(|_| panic!("count fits u64"));
     let high = u32::try_from(count >> 32).expect("upper count limb fits u32");
     let low = u32::try_from(count & u64::from(u32::MAX)).expect("lower count limb fits u32");
-    f64::from(high) * 4_294_967_296.0 + f64::from(low)
+    f64::mul_add(f64::from(high), 4_294_967_296.0, f64::from(low))
 }
 
 #[cfg(test)]

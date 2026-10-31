@@ -101,14 +101,13 @@ fn actual_graph_decoder_preserves_original_observer_and_rejects_saved_replay() {
     let result = zero
         .with(|| {
             ParameterIngressAttemptError::observe(|| {
-                read(&source, &pool).map_err(|error| {
+                read(&source, &pool).inspect_err(|error| {
                     if let ParameterIngressError::Codec(norito::Error::ScopedDecodeResource(
                         scope,
-                    )) = &error
+                    )) = error
                     {
                         original = Some(scope.clone());
                     }
-                    error
                 })
             })
         })

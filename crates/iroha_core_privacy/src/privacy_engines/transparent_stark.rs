@@ -375,6 +375,20 @@ pub trait PolynomialAirFieldV1: Copy {
     fn mul(self, rhs: Self) -> Self;
     /// Multiply by a base-field constant without changing the evaluation field.
     fn mul_base(self, rhs: GoldilocksFieldV1) -> Self;
+    /// Sum canonical product differences in increasing public index order.
+    /// Each tuple contributes `a*b - c*d`; the default preserves scalar/Fp4
+    /// arithmetic, while base-field implementations may use exact wider sums.
+    fn sum_product_differences_v1(
+        length: usize,
+        mut terms: impl FnMut(usize) -> (Self, Self, Self, Self),
+    ) -> Self {
+        let mut result = Self::ZERO;
+        for index in 0..length {
+            let (a, b, c, d) = terms(index);
+            result = result.add(a.mul(b)).sub(c.mul(d));
+        }
+        result
+    }
 }
 impl PolynomialAirFieldV1 for GoldilocksFieldV1 {
     const ZERO: Self = Self::ZERO;
@@ -396,6 +410,12 @@ impl PolynomialAirFieldV1 for GoldilocksFieldV1 {
     }
     fn mul_base(self, rhs: GoldilocksFieldV1) -> Self {
         Self::mul(self, rhs)
+    }
+    fn sum_product_differences_v1(
+        length: usize,
+        terms: impl FnMut(usize) -> (Self, Self, Self, Self),
+    ) -> Self {
+        product_difference::sum_v1(length, terms)
     }
 }
 impl PolynomialAirFieldV1 for GoldilocksFp4V1 {
@@ -466,12 +486,8 @@ impl GoldilocksFp4V1 {
     /// Decode the canonical fixed-width big-endian wire encoding.
     pub(crate) fn canonical_be_bytes(bytes: [u8; 32]) -> Option<Self> {
         let mut values = [0_u64; GOLDILOCKS_FP4_DEGREE_V1];
-        for (index, chunk) in bytes.chunks_exact(8).enumerate() {
-            values[index] = u64::from_be_bytes(
-                chunk
-                    .try_into()
-                    .expect("a 32-byte array has four exact 8-byte chunks"),
-            );
+        for (index, chunk) in bytes.as_chunks::<8>().0.iter().enumerate() {
+            values[index] = u64::from_be_bytes(*chunk);
         }
         Self::canonical(values)
     }
@@ -3134,7 +3150,7 @@ mod tests {
     }
     fn digest_from_words(words: [u64; 6]) -> PrivacyOuterDigestV1 {
         let mut bytes = [0; 48];
-        for (chunk, word) in bytes.chunks_exact_mut(8).zip(words) {
+        for (chunk, word) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(words) {
             chunk.copy_from_slice(&word.to_be_bytes());
         }
         PrivacyOuterDigestV1::from_bytes(bytes)
@@ -3716,7 +3732,9 @@ mod tests {
             let parent_level = u64::try_from(reference_levels.len()).expect("small tree depth");
             let previous = reference_levels.last().expect("reference Merkle level");
             let next = previous
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .enumerate()
                 .map(|(index, pair)| {
                     privacy_outer_merkle_node_v1(
@@ -4255,3 +4273,7 @@ mod outer_hash_experiment;
 #[cfg(test)]
 #[path = "transparent_stark_word_views_tests.rs"]
 mod word_views_tests;
+
+#[path = "transparent_stark_product_difference.rs"]
+mod product_difference;
+pub(crate) use product_difference::GOLDILOCKS_PRODUCT_DIFFERENCE_SCRATCH_BYTES_V1;

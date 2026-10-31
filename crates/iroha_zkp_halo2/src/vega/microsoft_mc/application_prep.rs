@@ -189,10 +189,7 @@ impl<'a> GovernedFigure9ApplicationPrep<'a> {
 
         let mut step_private = Vec::with_capacity(FIGURE9_STEP_COUNT);
         let mut step_instances = Vec::with_capacity(FIGURE9_STEP_COUNT);
-        for (public_values, rest_values) in step_public_values
-            .into_iter()
-            .zip(step_rest_values.into_iter())
-        {
+        for (public_values, rest_values) in step_public_values.into_iter().zip(step_rest_values) {
             let precommitted_blindings = sample_blindings(
                 &mut rng,
                 verifier_key.step_shape.precommitted / APPLICATION_COMMITMENT_WIDTH,

@@ -582,12 +582,10 @@ pub(super) mod tests {
         let issuer_y = Scalar::from_be_bytes_exact(hex32(ISSUER_Y)).expect("canonical issuer y");
         let digest = hex32(DEVICE_DIGEST);
         let digest_words = digest
-            .chunks_exact(4)
-            .map(|word| {
-                Scalar::from_u64(u64::from(u32::from_be_bytes(
-                    word.try_into().expect("word"),
-                )))
-            })
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|word| Scalar::from_u64(u64::from(u32::from_be_bytes(*word))))
             .collect::<Vec<_>>();
         let public = core::array::from_fn(|index| match index {
             0 => issuer_x,

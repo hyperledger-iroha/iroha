@@ -41,7 +41,7 @@ pub fn sample_f_bounded<T: PRNG>(
 ) -> bool {
     assert!((1..=10).contains(&logn));
     let degree = 1 << logn;
-    assert!(polynomial.len() == degree);
+    assert_eq!(polynomial.len(), degree);
     let (tab, zz) = match logn {
         9 => (&GTAB_9[..], 1),
         10 => (&GTAB_10[..], 1),

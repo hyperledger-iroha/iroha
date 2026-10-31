@@ -402,7 +402,7 @@ fn graph_original_profile_constructors_refuse_fresh_profile_lock_and_native_pare
             "genesis.signed.nrt",
             iroha_genesis::SIGNED_GENESIS_MAX_BYTES_V1,
         ),
-        (&runtime, "onboarding-signer.key", 4096),
+        (&generation, "client.toml", 1024 * 1024),
         (&authorities, "authorities.json", 512 * 1024),
     ] {
         let original = directory.read(name, maximum).unwrap();

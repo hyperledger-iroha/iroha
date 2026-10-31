@@ -840,9 +840,7 @@ pub fn validate_affine_batched_fri_theorem2_v1(
         || parameters.query_count > domain_size
         || certificate.claimed_query_error_bits == 0
         || terminal_size
-            .checked_shl(u32::from(certificate.fold_count))
-            .filter(|size| *size == domain_size)
-            .is_none()
+            .checked_shl(u32::from(certificate.fold_count)).as_ref().is_none_or(|size| *size != domain_size)
         || (parameters.terminal_degree_bound + 1)
             .checked_mul(usize::from(certificate.rho_denominator))
             .zip(terminal_size.checked_mul(usize::from(certificate.rho_numerator)))
@@ -2063,6 +2061,22 @@ pub struct StreamingRowCommitmentResultV1 {
     /// Exact requested vector rows keyed by ascending LDE index.
     pub(crate) opened_rows: BTreeMap<usize, Vec<F>>,
 }
+/// Only the coalescer can construct the preflighted variant's capability.
+/// Ordinary APIs always retain the complete canonical-field scan.
+enum StreamingColumnsV1<'a, C> {
+    Unchecked(&'a [C]),
+    Preflighted(joined_trace::PreflightedInitialColumnsV1<'a, C>),
+}
+
+impl<C> StreamingColumnsV1<'_, C> {
+    fn columns_v1(&self) -> &[C] {
+        match self {
+            Self::Unchecked(columns) => columns,
+            Self::Preflighted(columns) => columns.columns_v1(),
+        }
+    }
+}
+
 /// Bounded column-batch vector-row commitment builder.
 ///
 /// This is the bounded-memory replacement for retaining every LDE column.
@@ -2173,9 +2187,10 @@ impl StreamingRowCommitmentV1 {
         self.absorb_columns_with_packing_v1::<64, C>(columns)
     }
 
-    /// Initial joined commitments alone may coalesce two completed eight-column
-    /// batches. Their additional output owner and packing scratch are charged
-    /// by the separate initial-commit admission; selected replay stays at eight.
+    /// Original fully validated sixteen-column entry for the independent test
+    /// reference and generic-input refusal oracle. Production initial replay
+    /// uses the coalescer capability; ordinary query replay stays at eight.
+    #[cfg(test)]
     pub(crate) fn absorb_initial_columns_v1<C: AsRef<[F]> + Sync>(
         &mut self,
         columns: &[C],
@@ -2183,13 +2198,30 @@ impl StreamingRowCommitmentV1 {
         self.absorb_columns_with_packing_v1::<128, C>(columns)
     }
 
+    /// Accept only immutable fields proven by the initial coalescer's complete
+    /// incoming-batch preflight. Shape and stream-state checks remain mandatory.
+    fn absorb_preflighted_initial_columns_v1(
+        &mut self,
+        columns: joined_trace::PreflightedInitialColumnsV1<'_, &[F]>,
+    ) -> Result<(), AggregateStarkErrorV1> {
+        self.absorb_input_with_packing_v1::<128, _>(StreamingColumnsV1::Preflighted(columns))
+    }
+
     fn absorb_columns_with_packing_v1<const PACKED_BYTES: usize, C: AsRef<[F]> + Sync>(
         &mut self,
         columns: &[C],
     ) -> Result<(), AggregateStarkErrorV1> {
+        self.absorb_input_with_packing_v1::<PACKED_BYTES, C>(StreamingColumnsV1::Unchecked(columns))
+    }
+
+    fn absorb_input_with_packing_v1<const PACKED_BYTES: usize, C: AsRef<[F]> + Sync>(
+        &mut self,
+        input: StreamingColumnsV1<'_, C>,
+    ) -> Result<(), AggregateStarkErrorV1> {
         const {
             assert!(PACKED_BYTES == 64 || PACKED_BYTES == 128);
         }
+        let columns = input.columns_v1();
         if self.failed
             || columns.is_empty()
             || columns.len() > PACKED_BYTES / core::mem::size_of::<u64>()
@@ -2203,13 +2235,15 @@ impl StreamingRowCommitmentV1 {
         {
             return Err(AggregateStarkErrorV1::InvalidLayout);
         }
-        let noncanonical = |column: &C| !canonical_field_column_v1(column.as_ref());
-        if if self.rows >= 1 << 22 {
-            columns.par_iter().any(noncanonical)
-        } else {
-            columns.iter().any(noncanonical)
-        } {
-            return Err(AggregateStarkErrorV1::NonCanonicalField);
+        if matches!(&input, StreamingColumnsV1::Unchecked(_)) {
+            let noncanonical = |column: &C| !canonical_field_column_v1(column.as_ref());
+            if if self.rows >= 1 << 22 {
+                columns.par_iter().any(noncanonical)
+            } else {
+                columns.iter().any(noncanonical)
+            } {
+                return Err(AggregateStarkErrorV1::NonCanonicalField);
+            }
         }
         self.failed = true;
         let failure = self.digest_streams.absorb_v1::<PACKED_BYTES, C>(columns);
@@ -2368,7 +2402,7 @@ impl ZeroizingFieldColumnV1 {
 
 #[cfg(test)]
 #[path = "aggregate_stark/field_column_erasure_tests.rs"]
-pub(crate) mod field_column_erasure;
+pub mod field_column_erasure;
 
 impl core::ops::Deref for ZeroizingFieldColumnV1 {
     type Target = [F];
@@ -2383,9 +2417,17 @@ impl AsRef<[F]> for ZeroizingFieldColumnV1 {
 }
 impl Drop for ZeroizingFieldColumnV1 {
     fn drop(&mut self) {
+        #[cfg(test)]
+        let observed = field_column_inspection::before_v1(&self.0);
         self.zeroize_v1();
+        #[cfg(test)]
+        field_column_inspection::after_v1(observed, &self.0);
     }
 }
+/// Test-only counts around the original final-column eraser.
+#[cfg(test)]
+#[path = "aggregate_stark/field_column_inspection.rs"]
+pub(crate) mod field_column_inspection;
 fn zeroize_field_column_v1(values: &mut [F]) {
     for value in values {
         value.zeroize_v1();

@@ -361,6 +361,7 @@ REQUIRED_CATALOGS = (
     "execution_output_policy_v1",
     "fastpq_source_policy_v1",
     "fraud_admission_policy_v1",
+    "private_settlement_validity_v1",
 )
 CATALOG_FORMS = ("policy_push", "zk_policy_put", "struct_tree")
 TEST_ATTRIBUTE = re.compile(r"#\[\s*(?:tokio\s*::\s*)?test\b")
@@ -538,6 +539,8 @@ def evaluate_rust(expression: str, refs: dict, values: dict, where: str) -> int:
 
     def resolve(match: re.Match) -> str:
         path = match.group(0)
+        if path == "u8::MAX":
+            return "255"
         target = refs.get(path, refs.get(path.rsplit("::", 1)[-1]))
         if target is None:
             raise ContractError(

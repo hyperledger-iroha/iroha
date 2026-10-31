@@ -85,6 +85,7 @@ export function validatePackPaths(metadata) {
   for (const required of [
     "package.json",
     "atomic-private-settlement.d.ts",
+    "private-settlement.d.ts",
     "index.d.ts",
     "ivm-artifact.d.ts",
     "kotodama-compiler.d.ts",
@@ -93,6 +94,7 @@ export function validatePackPaths(metadata) {
     "sumeragi-typed.d.ts",
     "dist/index.js",
     "dist/atomicPrivateSettlement.js",
+    "dist/privateSettlement.js",
     "dist/ivmArtifact.js",
     "dist/kotodamaCompiler/browser.js",
     "dist/kotodamaCompiler/index.js",

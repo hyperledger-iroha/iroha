@@ -41,7 +41,7 @@ final class RuntimeGovernanceCanonicalAuthTests: XCTestCase {
             )!
             return (
                 response,
-                Data(#"{"abi_version":1,"upgrade_events_total":{"proposed":0,"activated":0,"canceled":0}}"#.utf8)
+                Data(#"{"abi_version":1,"upgrade_events_total":{"scheduled":0,"activated":0,"lapsed":0,"canceled":0}}"#.utf8)
             )
         }
 

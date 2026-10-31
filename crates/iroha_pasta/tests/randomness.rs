@@ -26,7 +26,7 @@ impl TryRng for FailingRng {
     type Error = EntropyUnavailable;
 
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-        self.try_next_u64().map(|word| word as u32)
+        self.try_next_u64().map(|word| (word & 0xFFFF_FFFF) as u32)
     }
 
     fn try_next_u64(&mut self) -> Result<u64, Self::Error> {

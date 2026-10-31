@@ -195,7 +195,7 @@ async fn build_jindo_action(
         metadata: Metadata::default(),
     };
     let provisional =
-        prepare_jindo_privacy_action_v1(context.clone(), jindo_witness()?, canonical_genesis_hash)
+        prepare_jindo_privacy_action_v1(&context, jindo_witness()?, canonical_genesis_hash)
             .wrap_err("prepare provisional native Jindo action for fee quoting")?;
     let quote = client
         .account_client()
@@ -213,7 +213,7 @@ async fn build_jindo_action(
     drop(provisional);
     context.fee_payment = quote.intent.clone();
     let prepared =
-        prepare_jindo_privacy_action_v1(context, jindo_witness()?, canonical_genesis_hash)
+        prepare_jindo_privacy_action_v1(&context, jindo_witness()?, canonical_genesis_hash)
             .wrap_err("prepare canonical native Jindo action with quoted fees")?;
     quote
         .validate_for_signed_payload(prepared.transaction_payload_for_fee_quote_v1())

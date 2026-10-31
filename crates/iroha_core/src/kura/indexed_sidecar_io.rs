@@ -310,10 +310,19 @@ impl Kura {
             #[cfg(test)]
             original_queued_sidecar_release_tests::fence_boundary(2);
             dir.push(PIPELINE_DIR_NAME);
+            #[cfg(not(windows))]
             if let Err(e) = std::fs::create_dir_all(&dir) {
                 iroha_logger::warn!(?e, ?dir, "failed to create pipeline dir");
                 return;
             }
+            #[cfg(windows)]
+            let _pipeline_directory = match self.ensure_native_pipeline_directory(&dir) {
+                Ok(directory) => directory,
+                Err(error) => {
+                    iroha_logger::warn!(?error, ?dir, "failed to retain pipeline directory");
+                    return;
+                }
+            };
             let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
             let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
             let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path) {
@@ -332,6 +341,7 @@ impl Kura {
                 Self::sidecar_physical_resource_paths(&data_path, &index_path),
             );
             let wrote = match sidecar.encode_framed() {
+                #[cfg(not(windows))]
                 Ok(buf) => Self::append_indexed_sidecar(
                     &data_path,
                     &index_path,
@@ -340,6 +350,14 @@ impl Kura {
                     "pipeline sidecar",
                     fsync_mode,
                     None,
+                ),
+                #[cfg(windows)]
+                Ok(buf) => self.append_native_pipeline(
+                    &data_path,
+                    &index_path,
+                    sidecar.height,
+                    &buf,
+                    matches!(fsync_mode, FsyncMode::Always),
                 ),
                 Err(err) => {
                     iroha_logger::warn!(
@@ -407,10 +425,23 @@ impl Kura {
         #[cfg(test)]
         original_queued_sidecar_release_tests::fence_boundary(3);
         dir.push(PIPELINE_DIR_NAME);
+        #[cfg(not(windows))]
         if let Err(err) = std::fs::create_dir_all(&dir) {
             iroha_logger::warn!(?err, ?dir, "failed to create pipeline dir for FASTPQ proof");
             return FastpqProofWriteResult::Retry;
         }
+        #[cfg(windows)]
+        let _pipeline_directory = match self.ensure_native_pipeline_directory(&dir) {
+            Ok(directory) => directory,
+            Err(error) => {
+                iroha_logger::warn!(
+                    ?error,
+                    ?dir,
+                    "failed to retain pipeline directory for FASTPQ proof"
+                );
+                return FastpqProofWriteResult::Retry;
+            }
+        };
         let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
         let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
         let Some(mut sidecar) = self.read_pipeline_sidecar(
@@ -481,6 +512,7 @@ impl Kura {
                 return FastpqProofWriteResult::Retry;
             }
         };
+        #[cfg(not(windows))]
         let wrote = Self::append_indexed_sidecar(
             &data_path,
             &index_path,
@@ -489,6 +521,14 @@ impl Kura {
             "pipeline sidecar",
             self.sidecar_fsync_mode(),
             None,
+        );
+        #[cfg(windows)]
+        let wrote = self.append_native_pipeline(
+            &data_path,
+            &index_path,
+            height,
+            &payload,
+            matches!(self.sidecar_fsync_mode(), FsyncMode::Always),
         );
         if wrote {
             let mut accounting_complete = before_bytes.is_some();
@@ -620,6 +660,24 @@ impl Kura {
         label: &str,
     ) -> Option<BoundSidecarIndexSnapshot> {
         Self::bound_sidecar_index_snapshot_classified(index, index_path, data_len, kind, label).ok()
+    }
+    fn bound_sidecar_index_snapshot_with_io(
+        index: &mut std::fs::File,
+        index_path: &Path,
+        data_len: u64,
+        kind: &str,
+        label: &str,
+        storage: &mut impl bound_progress_io::BoundProgressIo,
+    ) -> Option<BoundSidecarIndexSnapshot> {
+        match Self::bound_sidecar_index_snapshot_classified(
+            index, index_path, data_len, kind, label,
+        ) {
+            Ok(snapshot) => Some(snapshot),
+            Err(failure) => {
+                storage.retain_classification(failure);
+                None
+            }
+        }
     }
     fn bound_sidecar_index_snapshot_classified(
         index: &mut std::fs::File,
@@ -833,7 +891,7 @@ impl Kura {
         Ok(intent)
     }
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    fn recover_bound_progress_append_intent(
+    fn recover_bound_progress_append_intent_with_io(
         &self,
         namespace: &BoundProgressNamespace,
         data_path: &Path,
@@ -843,29 +901,35 @@ impl Kura {
         intent_path: &Path,
         mut intent_file: std::fs::File,
         kind: &str,
+        storage: &mut impl bound_progress_io::BoundProgressIo,
     ) -> bool {
-        let Ok(intent) = Self::decode_bound_progress_append_intent(
+        let intent = match Self::decode_bound_progress_append_intent(
             &mut intent_file,
             intent_path,
             namespace,
             data_path,
             index_path,
             kind,
-        ) else {
-            return false;
+        ) {
+            Ok(intent) => intent,
+            Err(failure) => {
+                storage.retain_classification(failure);
+                return false;
+            }
         };
         let accounting = self
             .begin_total_disk_usage_mutation()
             .with_resource_paths(Self::sidecar_physical_resource_paths(data_path, index_path));
         if let Some(build) = build {
             drop(build);
-            if let Err(error) = Self::remove_bound_progress_temp_if_present(namespace, build_path) {
+            if let Err(error) = storage.retire(namespace, build_path) {
                 warn!(
                     ?error,
                     ?build_path,
                     kind,
                     "failed to discard superseded append-intent build"
                 );
+                storage.retain_failure(Error::IO(error, (build_path).to_path_buf()));
                 return false;
             }
             if let Err(error) = Self::sync_bound_progress_intent_directories(namespace) {
@@ -875,10 +939,11 @@ impl Kura {
                     kind,
                     "failed to sync append-intent build cleanup"
                 );
+                storage.retain_failure(Error::IO(error, (build_path).to_path_buf()));
                 return false;
             }
         }
-        let mut data = match self.open_optional_bound_progress_file(namespace, data_path) {
+        let mut data = match storage.optional(self, namespace, data_path) {
             Ok(data) => data,
             Err(error) => {
                 warn!(
@@ -887,10 +952,11 @@ impl Kura {
                     kind,
                     "failed to bind progress data during append recovery"
                 );
+                storage.retain_failure(error);
                 return false;
             }
         };
-        let mut index = match self.open_optional_bound_progress_file(namespace, index_path) {
+        let mut index = match storage.optional(self, namespace, index_path) {
             Ok(index) => index,
             Err(error) => {
                 warn!(
@@ -899,6 +965,7 @@ impl Kura {
                     kind,
                     "failed to bind progress index during append recovery"
                 );
+                storage.retain_failure(error);
                 return false;
             }
         };
@@ -921,6 +988,7 @@ impl Kura {
                         kind,
                         "failed to stat progress append-recovery data"
                     );
+                    storage.retain_failure(Error::IO(error, (data_path).to_path_buf()));
                     return false;
                 }
             },
@@ -946,17 +1014,18 @@ impl Kura {
             };
             let mut payload = Vec::new();
             if payload.try_reserve_exact(payload_len).is_err() {
+                storage.retain_classification(BoundProgressRecoveryFailure::RetryableIo);
                 return false;
             }
             payload.resize(payload_len, 0);
             let Some(data) = data.as_mut() else {
                 return false;
             };
-            if data
-                .seek(SeekFrom::Start(intent.old_data_len))
-                .and_then(|_| data.read_exact(&mut payload))
-                .is_err()
-            {
+            if storage.io_failed(
+                data.seek(SeekFrom::Start(intent.old_data_len))
+                    .and_then(|_| data.read_exact(&mut payload)),
+                data_path,
+            ) {
                 return false;
             }
             BoundProgressAppendIntentV1::payload_digest(&payload) == intent.payload_hash
@@ -973,6 +1042,7 @@ impl Kura {
                         kind,
                         "failed to stat progress append-recovery index"
                     );
+                    storage.retain_failure(Error::IO(error, (index_path).to_path_buf()));
                     return false;
                 }
             };
@@ -1001,6 +1071,7 @@ impl Kura {
                             kind,
                             "invalid durable prepend preimage"
                         );
+                        storage.retain_classification(BoundProgressRecoveryFailure::InvalidData);
                         return false;
                     }
                 }
@@ -1014,6 +1085,7 @@ impl Kura {
                             kind,
                             "failed to validate the append-intent old index layout"
                         );
+                        storage.retain_classification(BoundProgressRecoveryFailure::InvalidData);
                         return false;
                     }
                 }
@@ -1025,17 +1097,22 @@ impl Kura {
                     kind,
                     "progress append intent is inconsistent with its old index layout"
                 );
+                storage.retain_classification(BoundProgressRecoveryFailure::InvalidData);
                 return false;
             }
             if !intent.old_index_bytes.is_empty()
-                && index
-                    .seek(SeekFrom::Start(intent.index_write_offset))
-                    .and_then(|_| index.write_all(&intent.old_index_bytes))
-                    .is_err()
+                && storage.io_failed(
+                    index
+                        .seek(SeekFrom::Start(intent.index_write_offset))
+                        .and_then(|_| index.write_all(&intent.old_index_bytes)),
+                    index_path,
+                )
             {
                 return false;
             }
-            if index.set_len(intent.old_index_len).is_err() || index.flush().is_err() {
+            if storage.io_failed(index.set_len(intent.old_index_len), index_path)
+                || storage.io_failed(index.flush(), index_path)
+            {
                 return false;
             }
         } else {
@@ -1049,6 +1126,7 @@ impl Kura {
                     kind,
                     "initial progress append intent has an invalid index layout"
                 );
+                storage.retain_classification(BoundProgressRecoveryFailure::InvalidData);
                 return false;
             }
         }
@@ -1056,12 +1134,13 @@ impl Kura {
             let Some(index) = index.as_mut() else {
                 return false;
             };
-            let Some(snapshot) = Self::bound_sidecar_index_snapshot(
+            let Some(snapshot) = Self::bound_sidecar_index_snapshot_with_io(
                 index,
                 index_path,
                 intent.old_data_len,
                 kind,
                 "append-intent preimage",
+                storage,
             ) else {
                 return false;
             };
@@ -1078,12 +1157,7 @@ impl Kura {
         }
         if roll_forward {
             if index.is_none() {
-                index = match Self::open_direct_sidecar_file_in_namespace(
-                    index_path,
-                    true,
-                    false,
-                    Some(namespace),
-                ) {
+                index = match storage.main_file(namespace, index_path, true) {
                     Ok(index) => Some(index),
                     Err(error) => {
                         warn!(
@@ -1092,6 +1166,7 @@ impl Kura {
                             kind,
                             "failed to create progress index during append recovery"
                         );
+                        storage.retain_failure(Error::IO(error, (index_path).to_path_buf()));
                         return false;
                     }
                 };
@@ -1099,22 +1174,24 @@ impl Kura {
             let Some(index) = index.as_mut() else {
                 return false;
             };
-            if index
-                .seek(SeekFrom::Start(intent.index_write_offset))
-                .and_then(|_| index.write_all(&intent.new_index_bytes))
-                .and_then(|()| index.set_len(intent.new_index_len))
-                .and_then(|()| index.flush())
-                .and_then(|()| index.sync_data())
-                .is_err()
-            {
+            if storage.io_failed(
+                index
+                    .seek(SeekFrom::Start(intent.index_write_offset))
+                    .and_then(|_| index.write_all(&intent.new_index_bytes))
+                    .and_then(|_| index.set_len(intent.new_index_len))
+                    .and_then(|_| index.flush())
+                    .and_then(|_| index.sync_data()),
+                index_path,
+            ) {
                 return false;
             }
-            let Some(snapshot) = Self::bound_sidecar_index_snapshot(
+            let Some(snapshot) = Self::bound_sidecar_index_snapshot_with_io(
                 index,
                 index_path,
                 intent.new_data_len,
                 kind,
                 "append-intent result",
+                storage,
             ) else {
                 return false;
             };
@@ -1146,76 +1223,83 @@ impl Kura {
             let Some(data) = data.as_ref() else {
                 return false;
             };
-            if !Self::sync_indexed_sidecar_bound_mutation(data, index, namespace, kind) {
+            if !Self::sync_indexed_sidecar_bound_mutation_with_io(
+                data, index, namespace, kind, storage,
+            ) {
                 return false;
             }
         } else if intent.pair_was_present {
             let (Some(data), Some(index)) = (data.as_ref(), index.as_ref()) else {
                 return false;
             };
-            if data.set_len(intent.old_data_len).is_err()
-                || !Self::sync_indexed_sidecar_bound_mutation(data, index, namespace, kind)
+            if storage.io_failed(data.set_len(intent.old_data_len), data_path)
+                || !Self::sync_indexed_sidecar_bound_mutation_with_io(
+                    data, index, namespace, kind, storage,
+                )
             {
                 return false;
             }
         } else {
             if let Some(mut index_file) = index.take() {
-                if index_file
-                    .seek(SeekFrom::Start(0))
-                    .and_then(|_| {
-                        index_file.write_all(&SidecarIndexLayout::base_header(intent.height))
-                    })
-                    .and_then(|()| index_file.set_len(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64))
-                    .and_then(|()| index_file.sync_data())
-                    .is_err()
-                {
+                if storage.io_failed(
+                    index_file
+                        .seek(SeekFrom::Start(0))
+                        .and_then(|_| {
+                            index_file.write_all(&SidecarIndexLayout::base_header(intent.height))
+                        })
+                        .and_then(|_| index_file.set_len(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64))
+                        .and_then(|_| index_file.sync_data()),
+                    index_path,
+                ) {
                     return false;
                 }
                 drop(index_file);
-                if let Err(error) =
-                    Self::remove_bound_progress_temp_if_present(namespace, index_path)
-                {
+                if let Err(error) = storage.retire(namespace, index_path) {
                     warn!(
                         ?error,
                         ?index_path,
                         kind,
                         "failed to remove rolled-back progress index"
                     );
+                    storage.retain_failure(Error::IO(error, (index_path).to_path_buf()));
                     return false;
                 }
             }
             if let Some(data_file) = data.take() {
-                if data_file.set_len(0).is_err() || data_file.sync_data().is_err() {
+                if storage.io_failed(data_file.set_len(0), data_path)
+                    || storage.io_failed(data_file.sync_data(), data_path)
+                {
                     return false;
                 }
                 drop(data_file);
-                if let Err(error) =
-                    Self::remove_bound_progress_temp_if_present(namespace, data_path)
-                {
+                if let Err(error) = storage.retire(namespace, data_path) {
                     warn!(
                         ?error,
                         ?data_path,
                         kind,
                         "failed to remove rolled-back progress data"
                     );
+                    storage.retain_failure(Error::IO(error, (data_path).to_path_buf()));
                     return false;
                 }
             }
             if let Err(error) = Self::sync_bound_progress_intent_directories(namespace) {
                 warn!(?error, kind, "failed to sync absent progress-pair rollback");
+                storage.retain_failure(Error::IO(error, (index_path).to_path_buf()));
                 return false;
             }
         }
         drop(index);
         drop(data);
         drop(intent_file);
-        if let Err(error) = Self::remove_bound_progress_temp_if_present(namespace, intent_path) {
+        if let Err(error) = storage.retire(namespace, intent_path) {
             warn!(
                 ?error,
                 ?intent_path,
                 kind,
                 "failed to clear recovered progress append intent"
             );
+            storage.retain_failure(Error::IO(error, (intent_path).to_path_buf()));
             return false;
         }
         if let Err(error) = Self::sync_bound_progress_intent_directories(namespace) {
@@ -1225,6 +1309,7 @@ impl Kura {
                 kind,
                 "failed to sync recovered append-intent cleanup"
             );
+            storage.retain_failure(Error::IO(error, (intent_path).to_path_buf()));
             return false;
         }
         if !Self::progress_mutation_namespace_unchanged(namespace) {
@@ -1241,6 +1326,7 @@ impl Kura {
             reason = "TODO: connect descriptor-bound progress publication; preserve crash recovery, namespace authentication and exact physical admission"
         )
     )]
+    #[cfg(not(windows))]
     fn recover_bound_progress_sidecar_artifacts(
         &self,
         data_path: &Path,
@@ -1277,6 +1363,7 @@ impl Kura {
         (snapshot.layout.entry_count > 0 || canonical_empty) && snapshot.indexed_end == data_len
     }
 
+    #[cfg(not(windows))]
     fn recover_bound_progress_sidecar_artifacts_in_namespace(
         &self,
         namespace: &BoundProgressNamespace,
@@ -1291,6 +1378,7 @@ impl Kura {
     }
     /// Recover a descriptor-bound progress pair and distinguish transient
     /// durability failure from malformed or ambiguous protocol state.
+    #[cfg(not(windows))]
     fn recover_bound_progress_sidecar_artifacts_in_namespace_classified(
         &self,
         namespace: &BoundProgressNamespace,
@@ -1298,41 +1386,52 @@ impl Kura {
         index_path: &Path,
         kind: &str,
     ) -> std::result::Result<(), BoundProgressRecoveryFailure> {
-        if self.recover_bound_progress_sidecar_artifacts_in_namespace_impl(
-            namespace, data_path, index_path, kind,
+        let storage = &mut bound_progress_io::ExistingBoundProgressIo::default();
+        if self.recover_bound_progress_sidecar_artifacts_in_namespace_impl_with_io(
+            namespace, data_path, index_path, kind, storage,
         ) {
             Ok(())
         } else {
-            Err(self
-                .classify_bound_progress_recovery_failure(namespace, data_path, index_path, kind))
+            Err(self.classify_bound_progress_recovery_failure_with_io(
+                namespace, data_path, index_path, kind, storage,
+            ))
         }
     }
     #[allow(clippy::too_many_lines)]
-    fn recover_bound_progress_sidecar_artifacts_in_namespace_impl(
+    #[cfg_attr(
+        all(not(test), not(windows)),
+        expect(
+            dead_code,
+            reason = "TODO: activate strict progress only with reviewed caller admission and recovery custody"
+        )
+    )]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn recover_bound_progress_sidecar_artifacts_in_namespace_impl_with_io(
         &self,
         namespace: &BoundProgressNamespace,
         data_path: &Path,
         index_path: &Path,
         kind: &str,
+        storage: &mut impl bound_progress_io::BoundProgressIo,
     ) -> bool {
         let temp_data_path = data_path.with_extension("norito.tmp");
         let temp_index_path = index_path.with_extension("index.tmp");
         let prepend_index_path = index_path.with_extension("index.prepend.tmp");
         let append_build_path = Self::bound_progress_append_build_path(index_path);
         let append_intent_path = Self::bound_progress_append_intent_path(index_path);
-        let open_optional =
-            |path: &Path| match self.open_optional_bound_progress_file(namespace, path) {
-                Ok(file) => Some(file),
-                Err(error) => {
-                    warn!(
-                        ?error,
-                        ?path,
-                        kind,
-                        "failed to bind progress sidecar recovery file"
-                    );
-                    None
-                }
-            };
+        let mut open_optional = |path: &Path| match storage.optional(self, namespace, path) {
+            Ok(file) => Some(file),
+            Err(error) => {
+                warn!(
+                    ?error,
+                    ?path,
+                    kind,
+                    "failed to bind progress sidecar recovery file"
+                );
+                storage.retain_failure(error);
+                None
+            }
+        };
         let Some(temp_data) = open_optional(&temp_data_path) else {
             return false;
         };
@@ -1367,7 +1466,7 @@ impl Kura {
             return false;
         }
         if let Some(append_intent) = append_intent {
-            return self.recover_bound_progress_append_intent(
+            return self.recover_bound_progress_append_intent_with_io(
                 namespace,
                 data_path,
                 index_path,
@@ -1376,6 +1475,7 @@ impl Kura {
                 &append_intent_path,
                 append_intent,
                 kind,
+                storage,
             );
         }
         if let Some(append_build) = append_build {
@@ -1383,8 +1483,12 @@ impl Kura {
             // renamed to the durable intent name, so a build alone is always
             // safe to discard.
             drop(append_build);
-            if !Self::discard_bound_progress_temps(namespace, &[append_build_path.as_path()], kind)
-            {
+            if !Self::discard_bound_progress_temps_with_io(
+                namespace,
+                &[append_build_path.as_path()],
+                kind,
+                storage,
+            ) {
                 return false;
             }
         }
@@ -1393,19 +1497,22 @@ impl Kura {
                 // The temp index is the rewrite commit marker. A lone data temp
                 // therefore precedes publication and is safe to discard.
                 drop(temp_data);
-                return Self::discard_bound_progress_temps(
+                return Self::discard_bound_progress_temps_with_io(
                     namespace,
                     &[temp_data_path.as_path()],
                     kind,
+                    storage,
                 );
             }
-            return self.repair_bound_progress_main_tail(namespace, data_path, index_path, kind);
+            return self.repair_bound_progress_main_tail_with_io(
+                namespace, data_path, index_path, kind, storage,
+            );
         };
         let temp_data_was_present = temp_data.is_some();
         let recovery_data = if let Some(temp_data) = temp_data {
             temp_data
         } else {
-            match self.open_optional_bound_progress_file(namespace, data_path) {
+            match storage.optional(self, namespace, data_path) {
                 Ok(Some(data)) => data,
                 Ok(None) => {
                     warn!(
@@ -1423,6 +1530,7 @@ impl Kura {
                         kind,
                         "failed to bind progress recovery payload"
                     );
+                    storage.retain_failure(error);
                     return false;
                 }
             }
@@ -1436,9 +1544,12 @@ impl Kura {
                     kind,
                     "failed to stat progress recovery payload"
                 );
+                storage.retain_failure(Error::IO(error, (data_path).to_path_buf()));
                 return false;
             }
         };
+        // This is the existing rewrite commit-marker predicate: an incomplete
+        // both-file image is deliberately discardable, not a failed operation.
         let temp_snapshot = Self::bound_sidecar_index_snapshot(
             &mut temp_index,
             &temp_index_path,
@@ -1456,17 +1567,19 @@ impl Kura {
                 // authoritative main pair.
                 drop(temp_index);
                 drop(recovery_data);
-                if !Self::discard_bound_progress_temps(
+                if !Self::discard_bound_progress_temps_with_io(
                     namespace,
                     &[temp_index_path.as_path()],
                     kind,
+                    storage,
                 ) {
                     return false;
                 }
-                return Self::discard_bound_progress_temps(
+                return Self::discard_bound_progress_temps_with_io(
                     namespace,
                     &[temp_data_path.as_path()],
                     kind,
+                    storage,
                 );
             }
             let indexed_end = temp_snapshot
@@ -1488,6 +1601,7 @@ impl Kura {
                 kind,
                 "failed to sync progress recovery payload"
             );
+            storage.retain_failure(Error::IO(error, (data_path).to_path_buf()));
             return false;
         }
         if let Err(error) = sync_indexed_sidecar_index(&temp_index) {
@@ -1497,18 +1611,16 @@ impl Kura {
                 kind,
                 "failed to sync progress recovery index"
             );
+            storage.retain_failure(Error::IO(error, (&temp_index_path).to_path_buf()));
             return false;
         }
-        if !Self::sync_bound_progress_mutation_directories(namespace, kind) {
+        if !Self::sync_bound_progress_mutation_directories_with_io(namespace, kind, storage) {
             return false;
         }
         if temp_data_was_present {
-            if let Err(error) = Self::promote_bound_progress_temp(
-                namespace,
-                &temp_data_path,
-                data_path,
-                &recovery_data,
-            ) {
+            if let Err(error) =
+                storage.publish(namespace, &temp_data_path, data_path, &recovery_data, true)
+            {
                 warn!(
                     source = ?error.source,
                     published = error.published,
@@ -1517,14 +1629,15 @@ impl Kura {
                     kind,
                     "failed to promote bound progress temp data"
                 );
+                storage.retain_failure(Error::IO(error.source, data_path.to_path_buf()));
                 return false;
             }
-            if !Self::sync_bound_progress_mutation_directories(namespace, kind) {
+            if !Self::sync_bound_progress_mutation_directories_with_io(namespace, kind, storage) {
                 return false;
             }
         }
         if let Err(error) =
-            Self::promote_bound_progress_temp(namespace, &temp_index_path, index_path, &temp_index)
+            storage.publish(namespace, &temp_index_path, index_path, &temp_index, true)
         {
             warn!(
                 source = ?error.source,
@@ -1534,18 +1647,29 @@ impl Kura {
                 kind,
                 "failed to promote bound progress temp index"
             );
+            storage.retain_failure(Error::IO(error.source, index_path.to_path_buf()));
             return false;
         }
-        Self::sync_indexed_sidecar_bound_mutation(&recovery_data, &temp_index, namespace, kind)
+        Self::sync_indexed_sidecar_bound_mutation_with_io(
+            &recovery_data,
+            &temp_index,
+            namespace,
+            kind,
+            storage,
+        )
     }
     #[allow(clippy::too_many_lines)]
-    fn classify_bound_progress_recovery_failure(
+    fn classify_bound_progress_recovery_failure_with_io(
         &self,
         namespace: &BoundProgressNamespace,
         data_path: &Path,
         index_path: &Path,
         kind: &str,
+        storage: &mut impl bound_progress_io::BoundProgressIo,
     ) -> BoundProgressRecoveryFailure {
+        if let Some(first) = storage.first_failure() {
+            return first;
+        }
         if namespace.data_path != data_path || namespace.index_path != index_path {
             return BoundProgressRecoveryFailure::InvalidData;
         }
@@ -1558,8 +1682,9 @@ impl Kura {
             let prepend_index_path = index_path.with_extension("index.prepend.tmp");
             let append_build_path = Self::bound_progress_append_build_path(index_path);
             let append_intent_path = Self::bound_progress_append_intent_path(index_path);
-            let open = |path: &Path| {
-                self.open_optional_bound_progress_file(namespace, path)
+            let mut open = |path: &Path| {
+                storage
+                    .optional(self, namespace, path)
                     .map_err(|error| BoundProgressRecoveryFailure::from_kura(&error))
             };
             let temp_data = open(&temp_data_path)?;
@@ -1708,14 +1833,15 @@ impl Kura {
             Err(failure) => failure,
         }
     }
-    fn repair_bound_progress_main_tail(
+    fn repair_bound_progress_main_tail_with_io(
         &self,
         namespace: &BoundProgressNamespace,
         data_path: &Path,
         index_path: &Path,
         kind: &str,
+        storage: &mut impl bound_progress_io::BoundProgressIo,
     ) -> bool {
-        let data = match self.open_optional_bound_progress_file(namespace, data_path) {
+        let data = match storage.optional(self, namespace, data_path) {
             Ok(data) => data,
             Err(error) => {
                 warn!(
@@ -1724,10 +1850,11 @@ impl Kura {
                     kind,
                     "failed to bind progress main payload"
                 );
+                storage.retain_failure(error);
                 return false;
             }
         };
-        let index = match self.open_optional_bound_progress_file(namespace, index_path) {
+        let index = match storage.optional(self, namespace, index_path) {
             Ok(index) => index,
             Err(error) => {
                 warn!(
@@ -1736,6 +1863,7 @@ impl Kura {
                     kind,
                     "failed to bind progress main index"
                 );
+                storage.retain_failure(error);
                 return false;
             }
         };
@@ -1761,6 +1889,7 @@ impl Kura {
                     kind,
                     "failed to stat progress main payload"
                 );
+                storage.retain_failure(Error::IO(error, (data_path).to_path_buf()));
                 return false;
             }
         };
@@ -1773,6 +1902,7 @@ impl Kura {
                     kind,
                     "failed to stat progress main index"
                 );
+                storage.retain_failure(Error::IO(error, (index_path).to_path_buf()));
                 return false;
             }
         };
@@ -1785,6 +1915,7 @@ impl Kura {
                     kind,
                     "progress main index layout is malformed"
                 );
+                storage.retain_classification(BoundProgressRecoveryFailure::InvalidData);
                 return false;
             }
         };
@@ -1795,12 +1926,13 @@ impl Kura {
             );
             return false;
         }
-        let Some(snapshot) = Self::bound_sidecar_index_snapshot(
+        let Some(snapshot) = Self::bound_sidecar_index_snapshot_with_io(
             &mut index,
             index_path,
             data_len,
             kind,
             "main tail repair",
+            storage,
         ) else {
             return false;
         };
@@ -1817,24 +1949,27 @@ impl Kura {
         );
         false
     }
-    fn discard_bound_progress_temps(
+    fn discard_bound_progress_temps_with_io(
         namespace: &BoundProgressNamespace,
         paths: &[&Path],
         kind: &str,
+        storage: &mut impl bound_progress_io::BoundProgressIo,
     ) -> bool {
         for path in paths {
-            if let Err(error) = Self::remove_bound_progress_temp_if_present(namespace, path) {
+            if let Err(error) = storage.retire(namespace, path) {
                 warn!(
                     ?error,
                     ?path,
                     kind,
                     "failed to discard an unpublished bound progress temp"
                 );
+                storage.retain_failure(Error::IO(error, (path).to_path_buf()));
                 return false;
             }
         }
-        Self::sync_bound_progress_mutation_directories(namespace, kind)
+        Self::sync_bound_progress_mutation_directories_with_io(namespace, kind, storage)
     }
+    #[cfg(not(windows))]
     #[must_use]
     fn recover_indexed_sidecar_artifacts(data_path: &Path, index_path: &Path, kind: &str) -> bool {
         let required_heights = BTreeSet::new();
@@ -1845,6 +1980,7 @@ impl Kura {
             kind,
         )
     }
+    #[cfg(not(windows))]
     #[must_use]
     fn recover_indexed_sidecar_artifacts_with_required_heights(
         data_path: &Path,
@@ -2426,6 +2562,7 @@ impl Kura {
         true
     }
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    #[cfg(not(windows))]
     fn append_preceding_indexed_sidecar(
         data_path: &Path,
         index_path: &Path,
@@ -2739,6 +2876,7 @@ impl Kura {
         true
     }
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    #[cfg(not(windows))]
     fn append_indexed_sidecar(
         data_path: &Path,
         index_path: &Path,
@@ -2862,6 +3000,7 @@ impl Kura {
             reason = "TODO: connect descriptor-bound progress publication; preserve crash recovery, namespace authentication and exact physical admission"
         )
     )]
+    #[cfg(not(windows))]
     fn append_indexed_bound_progress_sidecar(
         data_path: &Path,
         index_path: &Path,
@@ -2870,6 +3009,35 @@ impl Kura {
         payload: &[u8],
         kind: &str,
         namespace: &BoundProgressNamespace,
+    ) -> bool {
+        Self::append_indexed_bound_progress_sidecar_with_io(
+            data_path,
+            index_path,
+            height,
+            initial_base_height,
+            payload,
+            kind,
+            namespace,
+            &mut bound_progress_io::ExistingBoundProgressIo::default(),
+        )
+    }
+    #[cfg_attr(
+        all(not(test), not(windows)),
+        expect(
+            dead_code,
+            reason = "TODO: activate strict progress only with reviewed caller admission and recovery custody"
+        )
+    )]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn append_indexed_bound_progress_sidecar_with_io(
+        data_path: &Path,
+        index_path: &Path,
+        height: u64,
+        initial_base_height: u64,
+        payload: &[u8],
+        kind: &str,
+        namespace: &BoundProgressNamespace,
+        storage: &mut impl bound_progress_io::BoundProgressIo,
     ) -> bool {
         let Ok(payload_len) = u64::try_from(payload.len()) else {
             warn!(
@@ -2909,36 +3077,26 @@ impl Kura {
                     kind,
                     "failed to derive the bound progress namespace identity"
                 );
+                storage.retain_classification(BoundProgressRecoveryFailure::InvalidData);
                 return false;
             }
         };
         let build_path = Self::bound_progress_append_build_path(index_path);
         let intent_path = Self::bound_progress_append_intent_path(index_path);
         for artifact_path in [&build_path, &intent_path] {
-            match std::fs::symlink_metadata(artifact_path) {
-                Err(error) if error.kind() == ErrorKind::NotFound => {}
-                Ok(_) => {
-                    warn!(
-                        ?artifact_path,
-                        kind, "progress append recovery artifact must be resolved before mutation"
-                    );
-                    return false;
-                }
-                Err(error) => {
-                    warn!(
-                        ?error,
-                        ?artifact_path,
-                        kind,
-                        "failed to inspect progress append artifact"
-                    );
-                    return false;
-                }
+            if let Err(error) = storage.require_absent(namespace, artifact_path) {
+                warn!(
+                    ?error,
+                    ?artifact_path,
+                    kind,
+                    "progress append recovery artifact must be resolved before mutation"
+                );
+                storage.retain_failure(Error::IO(error, artifact_path.to_owned()));
+                return false;
             }
         }
-        let opened_data =
-            Self::open_direct_sidecar_file_in_namespace(data_path, false, false, Some(namespace));
-        let opened_index =
-            Self::open_direct_sidecar_file_in_namespace(index_path, false, false, Some(namespace));
+        let opened_data = storage.main_file(namespace, data_path, false);
+        let opened_index = storage.main_file(namespace, index_path, false);
         let (pair_was_present, mut data, mut index) = match (opened_data, opened_index) {
             (Ok(data), Ok(index)) => (true, Some(data), Some(index)),
             (Err(data_error), Err(index_error))
@@ -2949,13 +3107,19 @@ impl Kura {
             }
             (data, index) => {
                 warn!(
-                    data_error = ?data.err(),
-                    index_error = ?index.err(),
+                    data_error = ?data.as_ref().err(),
+                    index_error = ?index.as_ref().err(),
                     ?data_path,
                     ?index_path,
                     kind,
                     "progress main data and index are only partially present or unsafe"
                 );
+                if let Err(error) = data {
+                    storage.retain_failure(Error::IO(error, data_path.to_owned()));
+                }
+                if let Err(error) = index {
+                    storage.retain_failure(Error::IO(error, index_path.to_owned()));
+                }
                 return false;
             }
         };
@@ -2969,6 +3133,7 @@ impl Kura {
                         kind,
                         "failed to stat bound progress data"
                     );
+                    storage.retain_failure(Error::IO(error, (data_path).to_path_buf()));
                     return false;
                 }
             },
@@ -2989,6 +3154,7 @@ impl Kura {
                             kind,
                             "failed to stat bound progress index"
                         );
+                        storage.retain_failure(Error::IO(error, (index_path).to_path_buf()));
                         return false;
                     }
                 };
@@ -3008,6 +3174,7 @@ impl Kura {
                             kind,
                             "failed to read the recovered progress index layout"
                         );
+                        storage.retain_classification(BoundProgressRecoveryFailure::InvalidData);
                         return false;
                     }
                 };
@@ -3031,6 +3198,7 @@ impl Kura {
                     kind,
                     "failed to read the recovered progress target entry"
                 );
+                storage.retain_failure(Error::IO(error, (index_path).to_path_buf()));
                 return false;
             }
             let entry = SidecarIndexEntry::from_bytes(entry_bytes);
@@ -3043,6 +3211,7 @@ impl Kura {
                 };
                 let mut existing = Vec::new();
                 if existing.try_reserve_exact(existing_len).is_err() {
+                    storage.retain_classification(BoundProgressRecoveryFailure::RetryableIo);
                     return false;
                 }
                 existing.resize(existing_len, 0);
@@ -3069,14 +3238,15 @@ impl Kura {
                         kind,
                         "failed to read the existing progress payload"
                     );
+                    storage.retain_failure(Error::IO(error, (data_path).to_path_buf()));
                     return false;
                 }
                 if existing == payload {
                     let Some(index_file) = index.as_ref() else {
                         return false;
                     };
-                    return Self::sync_indexed_sidecar_bound_mutation(
-                        data_file, index_file, namespace, kind,
+                    return Self::sync_indexed_sidecar_bound_mutation_with_io(
+                        data_file, index_file, namespace, kind, storage,
                     ) && Self::progress_mutation_namespace_unchanged(namespace);
                 }
             }
@@ -3111,15 +3281,8 @@ impl Kura {
                 integrity_hash: Hash::prehashed([0; Hash::LENGTH]),
             }
             .seal();
-            return Self::execute_bound_progress_append(
-                data_path,
-                index_path,
-                payload,
-                kind,
-                namespace,
-                &(intent),
-                data,
-                index,
+            return Self::execute_bound_progress_append_with_io(
+                data_path, index_path, payload, kind, namespace, &intent, data, index, storage,
             );
         }
         if let Some(layout) = layout
@@ -3145,43 +3308,39 @@ impl Kura {
                         kind,
                         "cannot admit bounded progress prepend"
                     );
+                    storage.retain_classification(BoundProgressRecoveryFailure::InvalidData);
                     return false;
                 }
             };
-            return Self::execute_bound_progress_append(
-                data_path,
-                index_path,
-                payload,
-                kind,
-                namespace,
-                &(intent),
-                data,
-                index,
+            return Self::execute_bound_progress_append_with_io(
+                data_path, index_path, payload, kind, namespace, &intent, data, index, storage,
             );
         }
         let mut new_index_bytes = Vec::new();
-        let (layout, index_write_offset) = if let Some(layout) = layout {
-            (layout, old_index_len)
-        } else {
-            new_index_bytes
-                .extend_from_slice(&SidecarIndexLayout::base_header(initial_base_height));
-            let layout = match SidecarIndexLayout::based(
-                initial_base_height,
-                INDEXED_SIDECAR_BASE_HEADER_SIZE_U64,
-            ) {
-                Ok(layout) => layout,
-                Err(reason) => {
-                    warn!(
-                        reason,
-                        height,
-                        ?index_path,
-                        kind,
-                        "invalid initial progress index base"
-                    );
-                    return false;
-                }
-            };
-            (layout, 0)
+        let (layout, index_write_offset) = match layout {
+            Some(layout) => (layout, old_index_len),
+            None => {
+                new_index_bytes
+                    .extend_from_slice(&SidecarIndexLayout::base_header(initial_base_height));
+                let layout = match SidecarIndexLayout::based(
+                    initial_base_height,
+                    INDEXED_SIDECAR_BASE_HEADER_SIZE_U64,
+                ) {
+                    Ok(layout) => layout,
+                    Err(reason) => {
+                        warn!(
+                            reason,
+                            height,
+                            ?index_path,
+                            kind,
+                            "invalid initial progress index base"
+                        );
+                        storage.retain_classification(BoundProgressRecoveryFailure::InvalidData);
+                        return false;
+                    }
+                };
+                (layout, 0)
+            }
         };
         let Some(expected_height) = layout.next_height() else {
             return false;
@@ -3220,6 +3379,7 @@ impl Kura {
             .try_reserve(filler_len + PIPELINE_INDEX_ENTRY_SIZE)
             .is_err()
         {
+            storage.retain_classification(BoundProgressRecoveryFailure::RetryableIo);
             return false;
         }
         new_index_bytes.resize(new_index_bytes.len() + filler_len, 0);
@@ -3262,19 +3422,12 @@ impl Kura {
             integrity_hash: Hash::prehashed([0; Hash::LENGTH]),
         }
         .seal();
-        Self::execute_bound_progress_append(
-            data_path,
-            index_path,
-            payload,
-            kind,
-            namespace,
-            &(intent),
-            data,
-            index,
+        Self::execute_bound_progress_append_with_io(
+            data_path, index_path, payload, kind, namespace, &intent, data, index, storage,
         )
     }
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    fn execute_bound_progress_append(
+    fn execute_bound_progress_append_with_io(
         data_path: &Path,
         index_path: &Path,
         payload: &[u8],
@@ -3283,6 +3436,7 @@ impl Kura {
         intent: &BoundProgressAppendIntentV1,
         mut data: Option<std::fs::File>,
         mut index: Option<std::fs::File>,
+        storage: &mut impl bound_progress_io::BoundProgressIo,
     ) -> bool {
         let intent_path = Self::bound_progress_append_intent_path(index_path);
         if let Err(reason) = intent.validate_for(namespace, data_path, index_path) {
@@ -3293,6 +3447,7 @@ impl Kura {
                 kind,
                 "refusing invalid progress append plan"
             );
+            storage.retain_classification(BoundProgressRecoveryFailure::InvalidData);
             return false;
         }
         let old_layout = match index.as_mut() {
@@ -3306,6 +3461,7 @@ impl Kura {
                             kind,
                             "refusing progress append with an unreadable old index layout"
                         );
+                        storage.retain_classification(BoundProgressRecoveryFailure::InvalidData);
                         return false;
                     }
                 }
@@ -3320,23 +3476,19 @@ impl Kura {
                 kind,
                 "refusing progress append inconsistent with the old index layout"
             );
+            storage.retain_classification(BoundProgressRecoveryFailure::InvalidData);
             return false;
         }
-        let Some(intent_file) =
-            Self::publish_bound_progress_append_intent(namespace, index_path, intent, kind)
-        else {
+        let Some(intent_file) = Self::publish_bound_progress_append_intent_with_io(
+            namespace, index_path, &intent, kind, storage,
+        ) else {
             return false;
         };
         if !Self::progress_mutation_namespace_unchanged(namespace) {
             return false;
         }
         if data.is_none() {
-            data = match Self::open_direct_sidecar_file_in_namespace(
-                data_path,
-                true,
-                false,
-                Some(namespace),
-            ) {
+            data = match storage.main_file(namespace, data_path, true) {
                 Ok(data) => Some(data),
                 Err(error) => {
                     warn!(
@@ -3345,17 +3497,13 @@ impl Kura {
                         kind,
                         "failed to create bound progress data"
                     );
+                    storage.retain_failure(Error::IO(error, (data_path).to_path_buf()));
                     return false;
                 }
             };
         }
         if index.is_none() {
-            index = match Self::open_direct_sidecar_file_in_namespace(
-                index_path,
-                true,
-                false,
-                Some(namespace),
-            ) {
+            index = match storage.main_file(namespace, index_path, true) {
                 Ok(index) => Some(index),
                 Err(error) => {
                     warn!(
@@ -3364,6 +3512,7 @@ impl Kura {
                         kind,
                         "failed to create bound progress index"
                     );
+                    storage.retain_failure(Error::IO(error, (index_path).to_path_buf()));
                     return false;
                 }
             };
@@ -3371,12 +3520,8 @@ impl Kura {
         let (Some(data), Some(index)) = (data.as_mut(), index.as_mut()) else {
             return false;
         };
-        if !data
-            .metadata()
-            .is_ok_and(|metadata| metadata.len() == intent.old_data_len)
-            || !index
-                .metadata()
-                .is_ok_and(|metadata| metadata.len() == intent.old_index_len)
+        if !storage.has_length(data, intent.old_data_len, data_path)
+            || !storage.has_length(index, intent.old_index_len, index_path)
         {
             warn!(
                 ?data_path,
@@ -3398,6 +3543,7 @@ impl Kura {
                 kind,
                 "failed to append journaled progress payload"
             );
+            storage.retain_failure(Error::IO(error, (data_path).to_path_buf()));
             return false;
         }
         if let Err(error) = index
@@ -3413,14 +3559,16 @@ impl Kura {
                 kind,
                 "failed to apply journaled progress index mutation"
             );
+            storage.retain_failure(Error::IO(error, (index_path).to_path_buf()));
             return false;
         }
-        let Some(snapshot) = Self::bound_sidecar_index_snapshot(
+        let Some(snapshot) = Self::bound_sidecar_index_snapshot_with_io(
             index,
             index_path,
             intent.new_data_len,
             kind,
             "journaled progress append result",
+            storage,
         ) else {
             return false;
         };
@@ -3448,17 +3596,19 @@ impl Kura {
             );
             return false;
         }
-        if !Self::sync_indexed_sidecar_bound_mutation(data, index, namespace, kind) {
+        if !Self::sync_indexed_sidecar_bound_mutation_with_io(data, index, namespace, kind, storage)
+        {
             return false;
         }
         drop(intent_file);
-        if let Err(error) = Self::remove_bound_progress_temp_if_present(namespace, &intent_path) {
+        if let Err(error) = storage.retire(namespace, &intent_path) {
             warn!(
                 ?error,
                 ?intent_path,
                 kind,
                 "failed to clear completed progress append intent"
             );
+            storage.retain_failure(Error::IO(error, (&intent_path).to_path_buf()));
             return false;
         }
         if let Err(error) = Self::sync_bound_progress_intent_directories(namespace) {
@@ -3468,12 +3618,14 @@ impl Kura {
                 kind,
                 "failed to sync completed append-intent cleanup"
             );
+            storage.retain_failure(Error::IO(error, (&intent_path).to_path_buf()));
             return false;
         }
         Self::progress_mutation_namespace_unchanged(namespace)
     }
     #[allow(clippy::too_many_arguments)]
     #[cfg(test)]
+    #[cfg(not(windows))]
     fn append_indexed_progress_sidecar(
         data_path: &Path,
         index_path: &Path,
@@ -3502,6 +3654,24 @@ impl Kura {
         namespace: &BoundProgressNamespace,
     ) -> std::result::Result<(), BoundProgressRecoveryFailure> {
         for directory in &namespace.directories {
+            #[cfg(windows)]
+            {
+                directory
+                    .native_owner
+                    .revalidate()
+                    .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
+                let identity = iroha_fs::FileMetadata::of(&directory.file)
+                    .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?
+                    .identity();
+                if directory
+                    .native_owner
+                    .identity()
+                    .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?
+                    != identity
+                {
+                    return Err(BoundProgressRecoveryFailure::InvalidData);
+                }
+            }
             let opened = secure_file_metadata::from_file(&directory.file)
                 .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
             let current = secure_file_metadata::from_path(&directory.expected_path)
@@ -3514,10 +3684,16 @@ impl Kura {
             {
                 return Err(BoundProgressRecoveryFailure::InvalidData);
             }
+            #[cfg(windows)]
+            directory
+                .native_owner
+                .revalidate()
+                .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
         }
         Ok(())
     }
     #[allow(clippy::too_many_arguments)]
+    #[cfg(not(windows))]
     fn append_indexed_sidecar_with_pinned_height(
         data_path: &Path,
         index_path: &Path,
@@ -4000,35 +4176,86 @@ impl Kura {
         }
         true
     }
+    fn sync_indexed_sidecar_bound_mutation_with_io(
+        data: &std::fs::File,
+        index: &std::fs::File,
+        namespace: &BoundProgressNamespace,
+        kind: &str,
+        storage: &mut impl bound_progress_io::BoundProgressIo,
+    ) -> bool {
+        match Self::sync_indexed_sidecar_bound_mutation_result(data, index, namespace, kind) {
+            Ok(()) => true,
+            Err(error) => {
+                storage.retain_failure(error);
+                false
+            }
+        }
+    }
+    fn sync_bound_progress_mutation_directories_with_io(
+        namespace: &BoundProgressNamespace,
+        kind: &str,
+        storage: &mut impl bound_progress_io::BoundProgressIo,
+    ) -> bool {
+        match Self::sync_bound_progress_mutation_directories_result(namespace, kind) {
+            Ok(()) => true,
+            Err(error) => {
+                storage.retain_failure(error);
+                false
+            }
+        }
+    }
     fn sync_indexed_sidecar_bound_mutation(
         data: &std::fs::File,
         index: &std::fs::File,
         namespace: &BoundProgressNamespace,
         kind: &str,
     ) -> bool {
+        Self::sync_indexed_sidecar_bound_mutation_result(data, index, namespace, kind).is_ok()
+    }
+    fn sync_indexed_sidecar_bound_mutation_result(
+        data: &std::fs::File,
+        index: &std::fs::File,
+        namespace: &BoundProgressNamespace,
+        kind: &str,
+    ) -> Result<()> {
         if let Err(error) = sync_indexed_sidecar_data(data) {
             iroha_logger::warn!(
                 ?error,
                 kind,
                 "failed to sync bound sidecar payload mutation"
             );
-            return false;
+            return Err(Error::IO(error, namespace.data_path.clone()));
         }
         if let Err(error) = sync_indexed_sidecar_index(index) {
             iroha_logger::warn!(?error, kind, "failed to sync bound sidecar index mutation");
-            return false;
+            return Err(Error::IO(error, namespace.index_path.clone()));
         }
-        Self::sync_bound_progress_mutation_directories(namespace, kind)
+        Self::sync_bound_progress_mutation_directories_result(namespace, kind)
     }
     fn sync_bound_progress_mutation_directories(
         namespace: &BoundProgressNamespace,
         kind: &str,
     ) -> bool {
+        Self::sync_bound_progress_mutation_directories_result(namespace, kind).is_ok()
+    }
+    fn sync_bound_progress_mutation_directories_result(
+        namespace: &BoundProgressNamespace,
+        kind: &str,
+    ) -> Result<()> {
         for (position, directory) in namespace.directories.iter().enumerate() {
+            #[cfg(not(windows))]
             let result = if position == 0 {
                 sync_indexed_sidecar_dir_handle(&directory.file)
             } else {
                 sync_progress_sidecar_ancestor_dir_handle(&directory.file)
+            };
+            // Windows directory durability uses the retained native owner's
+            // barrier. Preserve the same immediate/ancestor fault ordering.
+            #[cfg(windows)]
+            let result = if position == 0 {
+                sync_indexed_sidecar_directory(|| directory.native_owner.sync())
+            } else {
+                sync_progress_sidecar_ancestor(|| directory.native_owner.sync())
             };
             if let Err(error) = result {
                 iroha_logger::warn!(
@@ -4037,10 +4264,15 @@ impl Kura {
                     kind,
                     "failed to sync bound sidecar mutation directory"
                 );
-                return false;
+                return Err(Error::IO(error, directory.expected_path.clone()));
             }
         }
-        Self::progress_mutation_namespace_unchanged(namespace)
+        Self::progress_mutation_namespace_classified(namespace).map_err(|_| {
+            Error::IO(
+                std::io::Error::new(ErrorKind::InvalidData, "bound progress namespace changed"),
+                namespace.index_path.clone(),
+            )
+        })
     }
     /// Reissue the complete strict sidecar durability sequence in dependency order.
     ///
@@ -4201,8 +4433,25 @@ impl Kura {
         if height == 0 {
             return None;
         }
+        #[cfg(not(windows))]
         if recover && !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
             return None;
+        }
+        #[cfg(windows)]
+        if recover {
+            // Native shipping reads already recovered through their retained Kura
+            // owner. Static component reads cannot own a failed publication; the
+            // scoped test session must reconcile it before this observational read.
+            for path in [
+                data_path.with_extension("norito.tmp"),
+                index_path.with_extension("index.tmp"),
+                index_path.with_extension("index.prepend.tmp"),
+            ] {
+                match std::fs::symlink_metadata(path) {
+                    Err(error) if error.kind() == ErrorKind::NotFound => {}
+                    Ok(_) | Err(_) => return None,
+                }
+            }
         }
         let mut index = open_read_only_regular_file(index_path, "indexed sidecar index").ok()?;
         let mut data = open_read_only_regular_file(data_path, "indexed sidecar data").ok()?;

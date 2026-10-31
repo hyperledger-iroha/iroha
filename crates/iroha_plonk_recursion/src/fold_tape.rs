@@ -20,7 +20,7 @@ pub struct FoldTape<C: PastaCurve> {
 }
 impl<C: PastaCurve> Drop for FoldTape<C> {
     fn drop(&mut self) {
-        for coin in self.coins.iter_mut() {
+        for coin in &mut self.coins {
             clear_field(coin);
         }
     }
@@ -51,7 +51,7 @@ impl<C: PastaCurve> FoldTape<C> {
         let mut tape = Self {
             coins: Box::new([C::ScalarExt::ZERO; FOLD_COIN_COUNT]),
         };
-        for coin in tape.coins.iter_mut() {
+        for coin in &mut tape.coins {
             fill(coin)?;
         }
         Ok(tape)

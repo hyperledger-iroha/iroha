@@ -850,7 +850,7 @@ pub fn ram_lfe_reference_normalize_v1(
         schedule.push(point.register);
     }
     let mut folding = Folding::new(shape)?;
-    let mut pending = schedule.0.chunks_exact(2).peekable();
+    let mut pending = schedule.0.as_chunks::<2>().0.iter().peekable();
     for (index, instruction) in program.instructions().enumerate() {
         while let Some(point) = pending.next_if(|point| usize::from(point[0]) == index) {
             folding.refresh(point[1]);

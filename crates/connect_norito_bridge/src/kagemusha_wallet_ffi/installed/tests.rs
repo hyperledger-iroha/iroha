@@ -142,7 +142,6 @@ fn install_refuses_invalid_originals_before_any_platform_upcall() {
     assert_eq!(refused.err(), Some(Failure::code(INVALID)));
 }
 
-
 #[cfg(unix)]
 mod failed_provider_open {
     use super::*;

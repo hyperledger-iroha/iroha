@@ -376,6 +376,9 @@ mod nominal_text;
 #[path = "exact_field_streaming_allocations/prepared_scope.rs"]
 mod prepared_scope;
 
+#[path = "exact_field_streaming_allocations/canonical_controls.rs"]
+mod canonical_controls;
+
 #[path = "exact_field_streaming_allocations/field_destination.rs"]
 mod field_destination;
 

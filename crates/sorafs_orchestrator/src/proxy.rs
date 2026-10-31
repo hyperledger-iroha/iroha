@@ -4,10 +4,17 @@
 //! (certificate, manifest) to browser extensions so they can connect to SoraNet-enabled Torii
 //! gateways without handling certificates or guard cache keys directly.
 #![allow(unexpected_cfgs)]
+#[cfg(all(feature = "local-quic-proxy", windows))]
+#[path = "proxy/bridge_files_windows.rs"]
+mod bridge_files_windows;
 use crate::soranet::{GuardCacheKey, GuardCacheKeyError};
 #[cfg(feature = "local-quic-proxy")]
 use crate::{
     OutboundNetworkPolicy, is_public_ip, resolve_and_validate_host, validate_public_dns_name,
+};
+#[cfg(all(feature = "local-quic-proxy", windows))]
+use bridge_files_windows::{
+    OpenBridgeFile, canonical_bridge_root, open_bridge_file, verify_bridge_file_unchanged,
 };
 use hex::ToHex;
 #[cfg(feature = "local-quic-proxy")]
@@ -39,9 +46,10 @@ use std::{
     task::{Context, Poll},
 };
 use thiserror::Error;
+#[cfg(all(feature = "local-quic-proxy", unix))]
+use tokio::fs;
 #[cfg(feature = "local-quic-proxy")]
 use tokio::{
-    fs,
     io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf},
     net::TcpStream,
     sync::{Mutex, Semaphore, watch},
@@ -706,27 +714,17 @@ fn sanitize_extension(ext: &str) -> Result<String, String> {
     }
     Ok(trimmed.to_ascii_lowercase())
 }
-#[cfg(feature = "local-quic-proxy")]
+#[cfg(all(feature = "local-quic-proxy", unix))]
 fn canonical_bridge_root(path: &Path) -> Result<PathBuf, String> {
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        return Err(
-            "filesystem bridge roots require Unix owner and mode custody enforcement".into(),
-        );
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("bridge root is unavailable: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("bridge root must be a non-symlink directory".into());
     }
-    #[cfg(unix)]
-    {
-        let metadata = std::fs::symlink_metadata(path)
-            .map_err(|error| format!("bridge root is unavailable: {error}"))?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err("bridge root must be a non-symlink directory".into());
-        }
-        let canonical = std::fs::canonicalize(path)
-            .map_err(|error| format!("failed to canonicalize bridge root: {error}"))?;
-        validate_bridge_ancestor_chain_sync(&canonical)?;
-        Ok(canonical)
-    }
+    let canonical = std::fs::canonicalize(path)
+        .map_err(|error| format!("failed to canonicalize bridge root: {error}"))?;
+    validate_bridge_ancestor_chain_sync(&canonical)?;
+    Ok(canonical)
 }
 #[cfg(all(feature = "local-quic-proxy", unix))]
 #[allow(unsafe_code, reason = "geteuid has no safe standard-library wrapper")]
@@ -2349,54 +2347,27 @@ impl BridgeFileIdentity {
         }
     }
 }
-#[cfg(all(feature = "local-quic-proxy", not(unix)))]
-#[derive(Clone)]
-struct BridgeFileIdentity {
-    length: u64,
-    modified: Option<std::time::SystemTime>,
-}
-#[cfg(all(feature = "local-quic-proxy", not(unix)))]
-impl BridgeFileIdentity {
-    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
-        Self {
-            length: metadata.len(),
-            modified: metadata.modified().ok(),
-        }
-    }
-}
-#[cfg(feature = "local-quic-proxy")]
+#[cfg(all(feature = "local-quic-proxy", unix))]
 impl PartialEq for BridgeFileIdentity {
     fn eq(&self, other: &Self) -> bool {
-        #[cfg(unix)]
-        {
-            self.device == other.device
-                && self.inode == other.inode
-                && self.length == other.length
-                && self.modified_secs == other.modified_secs
-                && self.modified_nanos == other.modified_nanos
-                && self.changed_secs == other.changed_secs
-                && self.changed_nanos == other.changed_nanos
-        }
-        #[cfg(not(unix))]
-        {
-            self.length == other.length && self.modified == other.modified
-        }
+        self.device == other.device
+            && self.inode == other.inode
+            && self.length == other.length
+            && self.modified_secs == other.modified_secs
+            && self.modified_nanos == other.modified_nanos
+            && self.changed_secs == other.changed_secs
+            && self.changed_nanos == other.changed_nanos
     }
 }
-#[cfg(feature = "local-quic-proxy")]
+#[cfg(all(feature = "local-quic-proxy", unix))]
 struct OpenBridgeFile {
     file: fs::File,
     path: PathBuf,
     length: u64,
     identity: BridgeFileIdentity,
 }
-#[cfg(feature = "local-quic-proxy")]
+#[cfg(all(feature = "local-quic-proxy", unix))]
 async fn ensure_no_symlink_components(root: &Path, path: &Path) -> Result<(), BridgeFileError> {
-    #[cfg(not(unix))]
-    {
-        let _ = (root, path);
-        return Err(BridgeFileError::Unsafe);
-    }
     #[cfg(unix)]
     validate_bridge_ancestor_chain_sync(root).map_err(|_| BridgeFileError::Unsafe)?;
     let relative = path
@@ -2437,14 +2408,10 @@ async fn ensure_no_symlink_components(root: &Path, path: &Path) -> Result<(), Br
         {
             return Err(BridgeFileError::Unsafe);
         }
-        #[cfg(not(unix))]
-        if index + 1 < components.len() && !metadata.is_dir() {
-            return Err(BridgeFileError::Unsafe);
-        }
     }
     Ok(())
 }
-#[cfg(feature = "local-quic-proxy")]
+#[cfg(all(feature = "local-quic-proxy", unix))]
 async fn open_bridge_file(
     root: &Path,
     path: PathBuf,
@@ -2489,8 +2456,6 @@ async fn open_bridge_file(
             || metadata.mode() & 0o022 != 0
             || metadata.nlink() != 1
     });
-    #[cfg(not(unix))]
-    let custody_changed = true;
     if !opened.is_file()
         || before.file_type().is_symlink()
         || after.file_type().is_symlink()
@@ -2518,22 +2483,42 @@ async fn stream_bridge_file_exact(
     opened: &mut OpenBridgeFile,
     send_stream: &mut quinn::SendStream,
 ) -> Result<u64, BridgeFileError> {
-    let mut limited = (&mut opened.file).take(opened.length);
-    let bytes = timeout(
-        PROXY_TRANSFER_TIMEOUT,
-        tokio::io::copy(&mut limited, send_stream),
-    )
-    .await
-    .map_err(|_| BridgeFileError::Timeout)?
-    .map_err(|_| BridgeFileError::Io)?;
-    if bytes != opened.length {
-        return Err(BridgeFileError::Truncated);
+    #[cfg(windows)]
+    {
+        let transfer = async {
+            let bytes = timeout(
+                PROXY_TRANSFER_TIMEOUT,
+                bridge_files_windows::copy_bridge_file(opened, send_stream),
+            )
+            .await
+            .map_err(|_| BridgeFileError::Timeout)??;
+            send_stream.flush().await.map_err(|_| BridgeFileError::Io)?;
+            Ok(bytes)
+        }
+        .await;
+        // Observe custody on every ordinary completion, preserving the first transfer error.
+        let custody = verify_bridge_file_unchanged(opened).await;
+        transfer.and_then(|bytes| custody.map(|()| bytes))
     }
-    send_stream.flush().await.map_err(|_| BridgeFileError::Io)?;
-    verify_bridge_file_unchanged(opened).await?;
-    Ok(bytes)
+    #[cfg(unix)]
+    {
+        let mut limited = (&mut opened.file).take(opened.length);
+        let bytes = timeout(
+            PROXY_TRANSFER_TIMEOUT,
+            tokio::io::copy(&mut limited, send_stream),
+        )
+        .await
+        .map_err(|_| BridgeFileError::Timeout)?
+        .map_err(|_| BridgeFileError::Io)?;
+        if bytes != opened.length {
+            return Err(BridgeFileError::Truncated);
+        }
+        send_stream.flush().await.map_err(|_| BridgeFileError::Io)?;
+        verify_bridge_file_unchanged(opened).await?;
+        Ok(bytes)
+    }
 }
-#[cfg(feature = "local-quic-proxy")]
+#[cfg(all(feature = "local-quic-proxy", unix))]
 async fn verify_bridge_file_unchanged(opened: &OpenBridgeFile) -> Result<(), BridgeFileError> {
     let opened_after = opened
         .file
@@ -3242,13 +3227,28 @@ mod tests {
         let opened = open_bridge_file(&root, path.clone(), 64)
             .await
             .expect("open regular payload");
-        tokio::fs::write(&path, b"short")
-            .await
-            .expect("truncate payload");
-        assert!(matches!(
-            verify_bridge_file_unchanged(&opened).await,
-            Err(BridgeFileError::Changed)
-        ));
+        #[cfg(windows)]
+        {
+            assert!(tokio::fs::write(&path, b"short").await.is_err());
+            verify_bridge_file_unchanged(&opened)
+                .await
+                .expect("retained original");
+            assert_eq!(tokio::fs::read(&path).await.unwrap(), b"payload");
+            drop(opened);
+            tokio::fs::write(&path, b"short")
+                .await
+                .expect("writer after release");
+        }
+        #[cfg(unix)]
+        {
+            tokio::fs::write(&path, b"short")
+                .await
+                .expect("truncate payload");
+            assert!(matches!(
+                verify_bridge_file_unchanged(&opened).await,
+                Err(BridgeFileError::Changed)
+            ));
+        }
     }
     #[tokio::test]
     async fn bridge_file_open_detects_replacement() {
@@ -3265,13 +3265,28 @@ mod tests {
         tokio::fs::write(&replacement, b"replaced")
             .await
             .expect("write replacement");
-        tokio::fs::rename(&replacement, &path)
-            .await
-            .expect("replace payload");
-        assert!(matches!(
-            verify_bridge_file_unchanged(&opened).await,
-            Err(BridgeFileError::Changed)
-        ));
+        #[cfg(windows)]
+        {
+            assert!(tokio::fs::rename(&replacement, &path).await.is_err());
+            verify_bridge_file_unchanged(&opened)
+                .await
+                .expect("retained original");
+            assert_eq!(tokio::fs::read(&path).await.unwrap(), b"original");
+            drop(opened);
+            tokio::fs::rename(&replacement, &path)
+                .await
+                .expect("replacement after release");
+        }
+        #[cfg(unix)]
+        {
+            tokio::fs::rename(&replacement, &path)
+                .await
+                .expect("replace payload");
+            assert!(matches!(
+                verify_bridge_file_unchanged(&opened).await,
+                Err(BridgeFileError::Changed)
+            ));
+        }
     }
     #[cfg(unix)]
     #[tokio::test]

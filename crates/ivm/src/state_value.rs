@@ -188,8 +188,10 @@ fn table_words(vm: &IVM, address: u64, count: usize) -> Result<Vec<u64>, VMError
         u64::try_from(byte_len).map_err(|_| VMError::NoritoInvalid)?,
     )?;
     Ok(bytes
-        .chunks_exact(8)
-        .map(|chunk| u64::from_le_bytes(chunk.try_into().expect("eight-byte chunk")))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|chunk| u64::from_le_bytes(*chunk))
         .collect())
 }
 fn skip_state_node(nodes: &[StateValueNodeV1], node_index: &mut usize) -> Result<(), VMError> {

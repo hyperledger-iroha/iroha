@@ -45,7 +45,7 @@ fn sample_consensus_config_caps() -> ConsensusConfigCaps {
         execution_policy_hash: [0xB4; 32],
         nexus_policy_digest: [0xA5; 32],
         native_config_fingerprint: [0xC3; 32],
-        ivm_gas_schedule_hash: [0xE7; 32],
+        host_profiles: iroha_p2p::HostProfileSet::new([[0xE7; 32]]).expect("one profile"),
     }
 }
 #[test]
@@ -62,7 +62,7 @@ fn consensus_config_caps_wire_roundtrip_preserves_admission_digests() {
     assert_eq!(decoded.execution_policy_hash, [0xB4; 32]);
     assert_eq!(decoded.nexus_policy_digest, [0xA5; 32]);
     assert_eq!(decoded.native_config_fingerprint, [0xC3; 32]);
-    assert_eq!(decoded.ivm_gas_schedule_hash, [0xE7; 32]);
+    assert_eq!(decoded.host_profiles.as_slice(), &[[0xE7; 32]]);
 }
 fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
     // Keep admission inexpensive so these tests continue to measure consensus
@@ -186,6 +186,7 @@ async fn consensus_caps_match_connects() {
         proto_version: 2,
         consensus_fingerprint: [1u8; 32],
         config: config_caps.clone(),
+        required_host_profiles: None,
     };
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
         super::p2p_identity_keys(kp1.clone()),
@@ -235,12 +236,14 @@ async fn consensus_caps_mismatch_rejected() {
         proto_version: 2,
         consensus_fingerprint: [2u8; 32],
         config: config_caps.clone(),
+        required_host_profiles: None,
     };
     let caps_bad = ConsensusHandshakeCaps {
         mode: ConsensusMode::Npos, // mismatch
         proto_version: 2,
         consensus_fingerprint: [2u8; 32],
         config: config_caps,
+        required_host_profiles: None,
     };
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
         super::p2p_identity_keys(kp1.clone()),
@@ -292,12 +295,14 @@ async fn consensus_config_caps_mismatch_rejected() {
         proto_version: 2,
         consensus_fingerprint: [3u8; 32],
         config: config_caps,
+        required_host_profiles: None,
     };
     let caps_bad = ConsensusHandshakeCaps {
         mode: ConsensusMode::Permissioned,
         proto_version: 2,
         consensus_fingerprint: [3u8; 32],
         config: mismatched,
+        required_host_profiles: None,
     };
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
         super::p2p_identity_keys(kp1.clone()),

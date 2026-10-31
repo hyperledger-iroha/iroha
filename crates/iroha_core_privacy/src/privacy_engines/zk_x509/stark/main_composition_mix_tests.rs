@@ -13,6 +13,15 @@ fn scalar_mix(residues: &[F], alphas: &[E]) -> E {
         })
 }
 
+fn streamed_mix(residues: &[F], alphas: &[E]) -> E {
+    assert_eq!(residues.len(), alphas.len());
+    let mut mix = MainResidueMixV1::new_v1();
+    for (residue, alpha) in residues.iter().zip(alphas) {
+        mix.push_v1(*residue, alpha);
+    }
+    mix.finish_v1()
+}
+
 fn fixture(length: usize, seed: u8) -> (Vec<F>, Vec<E>) {
     let mut rng = ChaCha12Rng::from_seed([seed; 32]);
     let mut field = || F::reduce(u128::from(rng.try_next_u64().unwrap()));
@@ -37,7 +46,7 @@ fn widened_composition_matches_scalar_reduction_at_carry_and_block_boundaries() 
             ] {
                 let alphas = vec![alpha; length];
                 assert_eq!(
-                    mix_residues_v1(&residues, &alphas),
+                    streamed_mix(&residues, &alphas),
                     scalar_mix(&residues, &alphas)
                 );
             }
@@ -45,7 +54,7 @@ fn widened_composition_matches_scalar_reduction_at_carry_and_block_boundaries() 
         for seed in [0, 17, 255] {
             let (residues, alphas) = fixture(length, seed);
             assert_eq!(
-                mix_residues_v1(&residues, &alphas),
+                streamed_mix(&residues, &alphas),
                 scalar_mix(&residues, &alphas)
             );
         }
@@ -100,10 +109,56 @@ fn every_registration_mix_is_identical_across_worker_schedules() {
         let actual = pool.install(|| {
             fixtures
                 .par_iter()
-                .map(|(r, a)| mix_residues_v1(r, a))
+                .map(|(r, a)| streamed_mix(r, a))
                 .collect::<Vec<_>>()
         });
         assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn streamed_mixture_clears_products_carries_and_completed_blocks_on_every_exit() {
+    use crate::privacy_engines::zk_x509::private_table::inspection;
+
+    let value = F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1 - 1);
+    let alpha = E::from_coefficients([value; 4]).unwrap();
+    for count in [2, TERMS_PER_BLOCK_V1, TERMS_PER_BLOCK_V1 + 1] {
+        for outcome in 0..3 {
+            let (result, erased) = inspection::observe_v1(|| {
+                std::panic::catch_unwind(|| {
+                    let mut mix = MainResidueMixV1::new_v1();
+                    for _ in 0..count {
+                        mix.push_v1(value, &alpha);
+                    }
+                    match outcome {
+                        0 => assert_eq!(
+                            mix.finish_v1(),
+                            E::from_coefficients([F(count as u64); 4]).unwrap()
+                        ),
+                        1 => drop(mix),
+                        _ => panic!("synthetic widened mixture unwind"),
+                    }
+                })
+            });
+            assert_eq!(result.is_err(), outcome == 2);
+            // These maximal products populate both the four sums and the four
+            // carry counters, including a complete block before a partial tail.
+            assert!(
+                erased
+                    .iter()
+                    .filter(|entry| entry.cells == 4 && entry.nonzero_before == 4)
+                    .count()
+                    >= 2
+            );
+            if outcome == 0 || count >= TERMS_PER_BLOCK_V1 {
+                assert!(
+                    erased
+                        .iter()
+                        .any(|entry| entry.cells == 1 && entry.nonzero_before == 1)
+                );
+            }
+            assert!(erased.iter().all(|entry| entry.nonzero_after == 0));
+        }
     }
 }
 
@@ -127,7 +182,7 @@ fn composition_mix_cost_diagnostic() {
                     let mixed = if mode == 0 {
                         scalar_mix(r, a)
                     } else {
-                        mix_residues_v1(r, a)
+                        streamed_mix(r, a)
                     };
                     checksums[mode] = checksums[mode].add(std::hint::black_box(mixed));
                 }

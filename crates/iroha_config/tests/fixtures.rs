@@ -375,7 +375,7 @@ fn torii_ram_lfe_parses() {
     assert!(!debug.contains("4e525430"));
     assert_eq!(
         program.receipt_ttl,
-        Some(Duration::from_millis(30_000)),
+        Some(Duration::from_secs(30)),
         "receipt ttl should parse as milliseconds"
     );
 }
@@ -403,6 +403,10 @@ fn torii_max_content_len_defaults_to_sixty_four_megabytes() {
     assert_eq!(
         config.torii.query_fanout_max_working_set_bytes.get(),
         expected_working_set
+    );
+    assert_eq!(
+        config.torii.finality_max_working_set_bytes.get(),
+        384_000_000
     );
     // Keep the expected phase tied to current protocol geometry instead of a
     // byte count that becomes stale when the fixed overhead changes.
@@ -655,59 +659,106 @@ fn nexus_axt_fields_load_from_fixture() {
     assert_eq!(config.nexus.axt.replay_retention_slots.get(), 256);
 }
 #[test]
-fn nexus_atomic_private_settlement_fields_load_from_fixture() {
+fn nexus_atomic_private_settlement_local_custody_loads_from_fixture() {
     let config = load_config_from_fixtures("nexus_atomic_private_settlement_full.toml")
-        .expect("private-settlement config should be valid");
+        .expect("private-settlement local custody config should be valid");
     let private = &config.nexus.atomic_private_settlement;
-    assert_eq!(private.max_participants.get(), 16);
-    assert_eq!(private.proof_profile_version.get(), 1);
     assert_eq!(private.sidecar_max_records.get(), 512);
     assert_eq!(private.sidecar_max_total_bytes.get(), 6_442_450_944);
-    assert_eq!(
-        private
-            .capsule_padding_classes_bytes
-            .iter()
-            .map(|bytes| bytes.get())
-            .collect::<Vec<_>>(),
-        vec![4_096, 16_384, 65_536, 262_144]
-    );
-    assert_eq!(
-        private
-            .permitted_policy_versions
-            .iter()
-            .copied()
-            .collect::<Vec<_>>(),
-        vec![1]
-    );
-}
-#[test]
-fn nexus_atomic_private_settlement_rejects_invalid_participant_bound() {
-    let result = load_config_from_fixtures("bad.nexus_atomic_private_settlement_participants.toml");
-    assert!(result.is_err(), "one-leg private bundles must be rejected");
 }
 
 #[test]
-fn nexus_atomic_private_settlement_rejects_sidecar_capacity_above_v1_caps() {
-    use iroha_config::parameters::{
-        defaults,
-        user::{Nexus, NexusAtomicPrivateSettlement},
+fn nexus_atomic_private_settlement_rejects_local_validity_rules() {
+    use iroha_config::parameters::user::NexusAtomicPrivateSettlement;
+    for (field, value) in [
+        ("proof_profile_version", "1"),
+        ("max_participants", "16"),
+        ("max_expiry_blocks", "7200"),
+        ("audit_timeout_blocks", "1200"),
+        ("prepare_timeout_blocks", "1200"),
+        ("commit_timeout_blocks", "1200"),
+        (
+            "capsule_padding_classes_bytes",
+            "[4096, 16384, 65536, 262144]",
+        ),
+        ("max_proof_bytes", "8388608"),
+        ("max_capsule_bytes", "1048576"),
+        ("max_carrier_bytes", "4194304"),
+        ("sidecar_retention_blocks", "1000000"),
+        ("default_min_auditor_approvals", "1"),
+        ("permitted_policy_versions", "[1]"),
+    ] {
+        let table = format!("[nexus.atomic_private_settlement]\n{field} = {value}\n")
+            .parse()
+            .expect("well-formed retired configuration");
+        let error = ConfigReader::new()
+            .read_toml_with_extends(fixtures_dir().join("base.toml"))
+            .expect("base config should load")
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<UserConfig>()
+            .expect_err("local configuration must not select committed validity");
+        let report = strip_ansi_codes(&format!("{error:?}"));
+        assert!(
+            report.contains(&format!(
+                "unknown parameter: `nexus.atomic_private_settlement.{field}`"
+            )),
+            "{report}"
+        );
+        let json = format!(
+            r#"{{"sidecar_max_records":256,"sidecar_max_total_bytes":3221225472,"{field}":{value}}}"#
+        );
+        assert!(
+            norito::json::from_str::<NexusAtomicPrivateSettlement>(&json).is_err(),
+            "JSON configuration must also reject retired validity field {field}"
+        );
+    }
+}
+
+#[test]
+fn nexus_atomic_private_settlement_local_custody_bounds_are_exact() {
+    use defaults::nexus::atomic_private_settlement::{
+        SIDECAR_MAX_RECORDS_LIMIT, SIDECAR_MAX_TOTAL_BYTES_LIMIT,
     };
+    use iroha_config::parameters::user::{Nexus, NexusAtomicPrivateSettlement};
     use iroha_config_base::util::Emitter;
 
-    let mut emitter = Emitter::<ParseError>::new();
-    let private = NexusAtomicPrivateSettlement {
-        sidecar_max_records: defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS_LIMIT
-            + 1,
-        sidecar_max_total_bytes:
-            defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES_LIMIT + 1,
-        ..NexusAtomicPrivateSettlement::default()
-    };
-    let nexus = Nexus {
-        atomic_private_settlement: private,
-        ..Nexus::default()
-    };
-    assert!(nexus.parse(&mut emitter).is_none());
-    assert!(emitter.into_result().is_err());
+    for (records, bytes, valid) in [
+        (1, 1, true),
+        (
+            SIDECAR_MAX_RECORDS_LIMIT,
+            SIDECAR_MAX_TOTAL_BYTES_LIMIT,
+            true,
+        ),
+        (0, 1, false),
+        (1, 0, false),
+        (SIDECAR_MAX_RECORDS_LIMIT + 1, 1, false),
+        (1, SIDECAR_MAX_TOTAL_BYTES_LIMIT + 1, false),
+    ] {
+        let mut emitter = Emitter::<ParseError>::new();
+        let nexus = Nexus {
+            atomic_private_settlement: NexusAtomicPrivateSettlement {
+                sidecar_max_records: records,
+                sidecar_max_total_bytes: bytes,
+            },
+            ..Nexus::default()
+        };
+        let parsed = nexus.parse(&mut emitter);
+        assert_eq!(parsed.is_some(), valid, "records={records}, bytes={bytes}");
+        assert_eq!(emitter.into_result().is_ok(), valid);
+        if let Some(actual) = parsed {
+            assert_eq!(
+                actual.atomic_private_settlement.sidecar_max_records.get(),
+                records
+            );
+            assert_eq!(
+                actual
+                    .atomic_private_settlement
+                    .sidecar_max_total_bytes
+                    .get(),
+                bytes
+            );
+        }
+    }
 }
 
 #[test]
@@ -724,78 +775,6 @@ fn nexus_atomic_private_settlement_rejects_retired_activation_fields() {
     }
 }
 
-#[test]
-fn nexus_atomic_private_settlement_requires_canonical_bounds() {
-    use iroha_config::parameters::user::{Nexus, NexusAtomicPrivateSettlement};
-    use iroha_config_base::util::Emitter;
-
-    let mut emitter = Emitter::<ParseError>::new();
-    let private = NexusAtomicPrivateSettlement {
-        capsule_padding_classes_bytes: vec![16_384, 4_096],
-        permitted_policy_versions: vec![1, 1],
-        ..NexusAtomicPrivateSettlement::default()
-    };
-    let nexus = Nexus {
-        atomic_private_settlement: private,
-        ..Nexus::default()
-    };
-    assert!(nexus.parse(&mut emitter).is_none());
-    assert!(emitter.into_result().is_err());
-}
-
-#[test]
-fn nexus_atomic_private_settlement_capsule_bound_covers_complete_default_auditor_roster() {
-    use iroha_config::parameters::user::{Nexus, NexusAtomicPrivateSettlement};
-    use iroha_config_base::util::Emitter;
-    use iroha_data_model::nexus::private_settlement_capsule_canonical_upper_bound_v1;
-
-    for auditors in [1_u16, 32] {
-        let exact_bound =
-            private_settlement_capsule_canonical_upper_bound_v1(4_096, u64::from(auditors));
-        let mut valid_emitter = Emitter::<ParseError>::new();
-        let valid = Nexus {
-            atomic_private_settlement: NexusAtomicPrivateSettlement {
-                capsule_padding_classes_bytes: vec![4_096],
-                max_capsule_bytes: exact_bound,
-                default_min_auditor_approvals: auditors,
-                ..NexusAtomicPrivateSettlement::default()
-            },
-            ..Nexus::default()
-        };
-        assert!(valid.parse(&mut valid_emitter).is_some());
-        assert!(valid_emitter.into_result().is_ok());
-
-        let mut short_emitter = Emitter::<ParseError>::new();
-        let one_byte_short = Nexus {
-            atomic_private_settlement: NexusAtomicPrivateSettlement {
-                capsule_padding_classes_bytes: vec![4_096],
-                max_capsule_bytes: exact_bound - 1,
-                default_min_auditor_approvals: auditors,
-                ..NexusAtomicPrivateSettlement::default()
-            },
-            ..Nexus::default()
-        };
-        assert!(one_byte_short.parse(&mut short_emitter).is_none());
-        assert!(short_emitter.into_result().is_err());
-    }
-}
-
-#[test]
-fn nexus_atomic_private_settlement_rejects_default_auditor_threshold_above_v1_roster() {
-    use iroha_config::parameters::user::{Nexus, NexusAtomicPrivateSettlement};
-    use iroha_config_base::util::Emitter;
-
-    let mut emitter = Emitter::<ParseError>::new();
-    let nexus = Nexus {
-        atomic_private_settlement: NexusAtomicPrivateSettlement {
-            default_min_auditor_approvals: 33,
-            ..NexusAtomicPrivateSettlement::default()
-        },
-        ..Nexus::default()
-    };
-    assert!(nexus.parse(&mut emitter).is_none());
-    assert!(emitter.into_result().is_err());
-}
 #[test]
 fn sumeragi_rejects_each_retired_table_independently() {
     for (fixture, expected_parameter) in [
@@ -1709,6 +1688,22 @@ fn parse_does_not_apply_chain_discriminant_runtime_setting() {
         defaults::governance::slash_receiver_account_id()
     );
     assert_eq!(
+        config.gov.viral_incentives.incentive_pool_account,
+        defaults::governance::slash_receiver_account_id()
+    );
+    assert_eq!(
+        config.gov.viral_incentives.escrow_account,
+        defaults::governance::slash_receiver_account_id()
+    );
+    assert_eq!(
+        config.gov.sorafs_pin_fee_treasury_account,
+        defaults::governance::sorafs_pin_fee::treasury_account_id()
+    );
+    assert_eq!(
+        config.network.soranet_vpn.operator_account_id,
+        defaults::governance::bond_escrow_account_id()
+    );
+    assert_eq!(
         iroha_data_model::account::address::chain_discriminant(),
         0x02F1
     );
@@ -2322,6 +2317,28 @@ fn crypto_section_defaults_applied() {
         crypto.sm2_distid_default,
         defaults::crypto::SM2_DISTID_DEFAULT
     );
+}
+#[test]
+fn crypto_section_rejects_retired_admission_overrides() {
+    for (field, value, unknown) in [
+        ("allowed_signing", "['ed25519']", "allowed_signing"),
+        ("curves.allowed_curve_ids", "[1]", "curves"),
+    ] {
+        let table = format!("[crypto]\n{field} = {value}\n")
+            .parse()
+            .expect("well-formed retired configuration");
+        let error = ConfigReader::new()
+            .read_toml_with_extends(fixtures_dir().join("base.toml"))
+            .expect("base config should load")
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<UserConfig>()
+            .expect_err("node configuration must not select crypto admission policy");
+        let report = strip_ansi_codes(&format!("{error:?}"));
+        assert!(
+            report.contains(&format!("unknown parameter: `crypto.{unknown}`")),
+            "{report}"
+        );
+    }
 }
 #[test]
 fn crypto_section_respects_env_overrides() {

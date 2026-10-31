@@ -42,6 +42,10 @@ public sealed class KaigiV1Tests
     [InlineData("LeaveKaigi")]
     [InlineData("EndKaigi")]
     [InlineData("RecordKaigiUsage")]
+    [InlineData("SetKaigiRelayManifest")]
+    [InlineData("RegisterKaigiRelay")]
+    [InlineData("UnregisterKaigiRelay")]
+    [InlineData("ReportKaigiRelayHealth")]
     public void EveryTransparentInstructionMatchesRustVerifiedInstructionBox(string name)
     {
         TransactionInstruction instruction = name switch
@@ -51,12 +55,39 @@ public sealed class KaigiV1Tests
             "LeaveKaigi" => TransactionInstruction.LeaveKaigi(CallId, Accounts[0]),
             "EndKaigi" => TransactionInstruction.EndKaigi(CallId),
             "RecordKaigiUsage" => TransactionInstruction.RecordKaigiUsage(CallId, 1, 2),
+            "SetKaigiRelayManifest" => TransactionInstruction.SetKaigiRelayManifest(CallId, null),
+            "RegisterKaigiRelay" => TransactionInstruction.RegisterKaigiRelay(Accounts[0], "key"u8, 1),
+            "UnregisterKaigiRelay" => TransactionInstruction.UnregisterKaigiRelay(Accounts[0]),
+            "ReportKaigiRelayHealth" => TransactionInstruction.ReportKaigiRelayHealth(CallId, Accounts[0], KaigiRelayHealthStatus.Healthy, 3),
             _ => throw new InvalidOperationException(),
         };
         var vector = Fixture()["vectors"]!.AsArray().Single(item => item!["name"]!.GetValue<string>() == name)!;
         Assert.Equal(vector["wire_id"]!.GetValue<string>(), instruction.WireId);
         Assert.Equal(vector["inner_type_name"]!.GetValue<string>(), instruction.TypeName);
         Assert.Equal(Convert.FromBase64String(vector["instruction_box_base64"]!.GetValue<string>()), instruction.EncodeInstructionBox(Accounts[0]));
+    }
+
+    [Theory]
+    [InlineData(KaigiRelayHpkeSuite.MlKem768AuthPsk, 1184)]
+    [InlineData(KaigiRelayHpkeSuite.MlKem1024AuthPsk, 1568)]
+    public void RelayHpkeDescriptorPrefixesTheExactSuite(KaigiRelayHpkeSuite suite, int length)
+    {
+        var key = Enumerable.Repeat((byte)0x5A, length).ToArray();
+        var descriptor = KaigiRelayHpkeKey.Descriptor(suite, key);
+        Assert.Equal((ushort)suite, BinaryPrimitives.ReadUInt16LittleEndian(descriptor));
+        Assert.Equal(key, descriptor[2..]);
+        Assert.Throws<ArgumentException>(() => KaigiRelayHpkeKey.Descriptor(suite, key[1..]));
+    }
+
+    [Fact]
+    public void RelayInstructionsRejectWhatCoreWouldRefuse()
+    {
+        Assert.Throws<ArgumentException>(() => TransactionInstruction.RegisterKaigiRelay(Accounts[0], ReadOnlySpan<byte>.Empty, 1));
+        Assert.Throws<ArgumentException>(() => TransactionInstruction.RegisterKaigiRelay(Accounts[0], new byte[4097], 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => TransactionInstruction.RegisterKaigiRelay(Accounts[0], "key"u8, 0));
+        Assert.Throws<ArgumentException>(() => TransactionInstruction.ReportKaigiRelayHealth(CallId, Accounts[0], (KaigiRelayHealthStatus)3, 3));
+        Assert.Throws<ArgumentException>(() => TransactionInstruction.ReportKaigiRelayHealth(CallId, Accounts[0], KaigiRelayHealthStatus.Degraded, 3, new string('x', 513)));
+        Assert.NotNull(TransactionInstruction.ReportKaigiRelayHealth(CallId, Accounts[0], KaigiRelayHealthStatus.Degraded, 3, new string('x', 512)));
     }
 
     [Fact]

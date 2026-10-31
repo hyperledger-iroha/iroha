@@ -147,7 +147,7 @@ where
 
 #[test]
 fn settled_billing_checkpoint_schema_survives_actual_recovery() {
-    let root = tempfile::tempdir().expect("state root");
+    let root = private_state_tempdir().expect("state root");
     let (service, feed_policy, reference, _verifier, _publisher, _ack_authority) =
         ready_service(root.path());
     settle_first_period(&service, &reference);

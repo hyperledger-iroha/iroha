@@ -20,15 +20,17 @@ iroha_core_privacy = { workspace = true, default-features = false }
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model", "http", "transparent_api"] }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_fs = { workspace = true }
+iroha_config_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 eyre = { workspace = true }
 hex = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 url = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+iroha_core_privacy = { workspace = true, default-features = false, features = ["test-utils"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures", "transparent_api"] }
 iroha_sumeragi = { workspace = true }
 iroha_test_samples = { workspace = true }

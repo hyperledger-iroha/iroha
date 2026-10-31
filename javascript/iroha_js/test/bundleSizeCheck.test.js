@@ -617,7 +617,7 @@ test("bundle targets retain canonical module ownership and accurate byte invento
     ["toriiClient.js", { modules: 154 }],
     ["transactionCodec.js (browser)", { modules: 72 }],
     ["nexusApp.js (browser)", { modules: 81 }],
-    ["canonicalRequest.js (browser)", { modules: 44 }],
+    ["canonicalRequest.js (browser)", { modules: 45 }],
   ]);
   const { build } = await import("esbuild");
   for (const target of BUNDLE_TARGETS.filter(({ label }) => expected.has(label))) {

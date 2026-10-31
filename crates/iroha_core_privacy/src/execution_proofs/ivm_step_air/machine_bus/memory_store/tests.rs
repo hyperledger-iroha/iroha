@@ -133,7 +133,7 @@ impl Fixture {
                 F(length as u64),
                 F::ONE,
             ]);
-            for (i, pair) in payload.chunks_exact(2).enumerate() {
+            for (i, pair) in payload.as_chunks::<2>().0.iter().enumerate() {
                 log[4 + i] = F(u64::from(u16::from_le_bytes([pair[0], pair[1]])));
             }
         }

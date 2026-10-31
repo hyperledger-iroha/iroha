@@ -936,17 +936,18 @@ pub fn evaluate_p256_arithmetic_stark_residues_over_field_v1<A: PolynomialAirFie
     let mut multiplication_relation = carry.sub(A::from_base(F(RADIX as u64)).mul(next_carry));
     for coefficient in 0..P256_ARITHMETIC_ROWS_PER_OPERATION_V1 {
         let selector = fixed[STARK_COEFFICIENT_START + coefficient];
-        let mut coefficient_relation = A::ZERO;
-        for left in 0..LIMBS {
-            let Some(right) = coefficient.checked_sub(left) else {
-                continue;
-            };
-            if right < LIMBS {
-                coefficient_relation = coefficient_relation
-                    .add(current[A_START + left].mul(current[B_START + right]))
-                    .sub(current[Q_START + left].mul(fixed[STARK_MODULUS_LIMBS_START + right]));
-            }
-        }
+        let first = coefficient.saturating_sub(LIMBS - 1);
+        let end = (coefficient + 1).min(LIMBS);
+        let mut coefficient_relation = A::sum_product_differences_v1(end - first, |offset| {
+            let left = first + offset;
+            let right = coefficient - left;
+            (
+                current[A_START + left],
+                current[B_START + right],
+                current[Q_START + left],
+                fixed[STARK_MODULUS_LIMBS_START + right],
+            )
+        });
         if coefficient < LIMBS {
             coefficient_relation = coefficient_relation.sub(current[C_START + coefficient]);
         }
@@ -1919,3 +1920,191 @@ mod tests {
 
 #[path = "p256_compact_arithmetic.rs"]
 pub(super) mod compact_arithmetic;
+
+/// Independent pre-optimization complete arithmetic relation for parity and cost.
+#[cfg(test)]
+pub(super) fn arithmetic_residues_original_for_test_v1<A: PolynomialAirFieldV1>(
+    current: &[A; P256_ARITHMETIC_BASE_WIDTH_V1],
+    next: &[A; P256_ARITHMETIC_BASE_WIDTH_V1],
+    current_aux: &[A; P256_ARITHMETIC_STARK_AUX_WIDTH_V1],
+    next_aux: &[A; P256_ARITHMETIC_STARK_AUX_WIDTH_V1],
+    fixed: &[A; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1],
+) -> Result<Vec<A>, ZkX509P256AirErrorV1> {
+    if current
+        .iter()
+        .chain(next)
+        .chain(current_aux)
+        .chain(next_aux)
+        .chain(fixed)
+        .any(|value| !value.is_canonical())
+    {
+        return Err(ZkX509P256AirErrorV1::Constraint);
+    }
+    let mut residues = Vec::with_capacity(P256_ARITHMETIC_STARK_CONSTRAINT_COUNT_V1);
+    for (limb_start, bits_start) in [
+        (A_START, A_BITS),
+        (B_START, B_BITS),
+        (C_START, C_BITS),
+        (Q_START, Q_BITS),
+    ] {
+        let selected = stark_selected_limb_v1(current, limb_start, fixed, STARK_RANGE_SLOT_START);
+        push_stark_range_residues_v1(
+            &mut residues,
+            selected,
+            &current[bits_start..bits_start + LIMB_BITS],
+        )?;
+    }
+    let canonicality = fixed[STARK_CANONICALITY_ROW];
+    let noncanonicality = A::ONE.sub(canonicality);
+    let range_slot_first = fixed[STARK_SLOT_FIRST];
+    let range_slot_last = fixed[STARK_SLOT_LAST];
+    let modulus_limb = (0..LIMBS).fold(A::ZERO, |sum, limb| {
+        sum.add(fixed[STARK_RANGE_SLOT_START + limb].mul(fixed[STARK_MODULUS_LIMBS_START + limb]))
+    });
+    for (
+        limb_start,
+        difference,
+        difference_bits,
+        borrow_before,
+        borrow_after,
+        next_borrow_before,
+    ) in [
+        (
+            A_START,
+            A_DIFFERENCE,
+            A_DIFFERENCE_BITS,
+            A_BORROW_BEFORE,
+            A_BORROW_AFTER,
+            A_BORROW_BEFORE,
+        ),
+        (
+            B_START,
+            B_DIFFERENCE,
+            B_DIFFERENCE_BITS,
+            B_BORROW_BEFORE,
+            B_BORROW_AFTER,
+            B_BORROW_BEFORE,
+        ),
+        (
+            C_START,
+            C_DIFFERENCE,
+            C_DIFFERENCE_BITS,
+            C_BORROW_BEFORE,
+            C_BORROW_AFTER,
+            C_BORROW_BEFORE,
+        ),
+    ] {
+        push_stark_range_residues_v1(
+            &mut residues,
+            current[difference],
+            &current[difference_bits..difference_bits + LIMB_BITS],
+        )?;
+        residues.push(boolean_residue_v1(current[borrow_before]));
+        residues.push(boolean_residue_v1(current[borrow_after]));
+        let value = stark_selected_limb_v1(current, limb_start, fixed, STARK_RANGE_SLOT_START);
+        residues.push(
+            canonicality.mul(
+                value
+                    .sub(modulus_limb)
+                    .sub(current[borrow_before])
+                    .sub(current[difference])
+                    .add(A::from_base(F(RADIX as u64)).mul(current[borrow_after])),
+            ),
+        );
+        residues.push(
+            canonicality
+                .mul(range_slot_first)
+                .mul(current[borrow_before]),
+        );
+        residues.push(
+            canonicality
+                .mul(range_slot_last)
+                .mul(current[borrow_after].sub(A::ONE)),
+        );
+        residues.push(
+            canonicality
+                .mul(A::ONE.sub(range_slot_last))
+                .mul(next[next_borrow_before].sub(current[borrow_after])),
+        );
+    }
+    for value in &current[A_DIFFERENCE..=C_BORROW_AFTER] {
+        residues.push(noncanonicality.mul(*value));
+    }
+    push_stark_range_residues_v1(
+        &mut residues,
+        current[CARRY],
+        &current[CARRY_BIT_START..CARRY_BIT_START + CARRY_BITS],
+    )?;
+    let carry = current[CARRY].sub(A::from_base(F(CARRY_BIAS as u64)));
+    residues.push(fixed[STARK_OPERATION_FIRST].mul(carry));
+    let multiply = fixed[STARK_KIND_MULTIPLY];
+    let add = fixed[STARK_KIND_ADD];
+    let subtract = fixed[STARK_KIND_SUBTRACT];
+    let active = multiply.add(add).add(subtract);
+    let operation_not_last = A::ONE.sub(fixed[STARK_OPERATION_LAST]);
+    let active_not_last = active.mul(operation_not_last);
+    for column in A_START..Q_START + LIMBS {
+        residues.push(active_not_last.mul(next[column].sub(current[column])));
+    }
+    let add_or_subtract = add.add(subtract);
+    residues.push(add_or_subtract.mul(current[Q_START].mul(current[Q_START].sub(A::ONE))));
+    for quotient_limb in &current[Q_START + 1..Q_START + LIMBS] {
+        residues.push(add_or_subtract.mul(*quotient_limb));
+    }
+    let next_carry = operation_not_last.mul(next[CARRY].sub(A::from_base(F(CARRY_BIAS as u64))));
+    let mut multiplication_relation = carry.sub(A::from_base(F(RADIX as u64)).mul(next_carry));
+    for coefficient in 0..P256_ARITHMETIC_ROWS_PER_OPERATION_V1 {
+        let selector = fixed[STARK_COEFFICIENT_START + coefficient];
+        let mut coefficient_relation = A::ZERO;
+        for left in 0..LIMBS {
+            let Some(right) = coefficient.checked_sub(left) else {
+                continue;
+            };
+            if right < LIMBS {
+                coefficient_relation = coefficient_relation
+                    .add(current[A_START + left].mul(current[B_START + right]))
+                    .sub(current[Q_START + left].mul(fixed[STARK_MODULUS_LIMBS_START + right]));
+            }
+        }
+        if coefficient < LIMBS {
+            coefficient_relation = coefficient_relation.sub(current[C_START + coefficient]);
+        }
+        multiplication_relation = multiplication_relation.add(selector.mul(coefficient_relation));
+    }
+    let low_a = stark_selected_limb_v1(current, A_START, fixed, STARK_LOW_SLOT_START);
+    let low_b = stark_selected_limb_v1(current, B_START, fixed, STARK_LOW_SLOT_START);
+    let low_c = stark_selected_limb_v1(current, C_START, fixed, STARK_LOW_SLOT_START);
+    let quotient_modulus = current[Q_START].mul(fixed[STARK_LOW_MODULUS_LIMB]);
+    let addition_relation = carry
+        .add(low_a)
+        .add(low_b)
+        .sub(low_c)
+        .sub(quotient_modulus)
+        .sub(A::from_base(F(RADIX as u64)).mul(next_carry));
+    let subtraction_relation = carry
+        .add(low_a)
+        .sub(low_b)
+        .sub(low_c)
+        .add(quotient_modulus)
+        .sub(A::from_base(F(RADIX as u64)).mul(next_carry));
+    residues.push(
+        multiply
+            .mul(multiplication_relation)
+            .add(add.mul(addition_relation))
+            .add(subtract.mul(subtraction_relation)),
+    );
+    let padding = fixed[STARK_PADDING];
+    for value in &current[A_START..Q_START + LIMBS] {
+        residues.push(padding.mul(*value));
+    }
+    residues.push(padding.mul(current[CARRY]));
+    residues.push(current_aux[0]);
+    if residues.len() != P256_ARITHMETIC_STARK_CONSTRAINT_COUNT_V1 {
+        return Err(ZkX509P256AirErrorV1::Topology);
+    }
+    Ok(residues)
+}
+
+#[cfg(test)]
+#[path = "p256_arithmetic_convolution_tests.rs"]
+mod convolution_tests;

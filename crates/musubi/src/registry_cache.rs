@@ -353,8 +353,7 @@ impl ResolverIndexCacheCatalogV1 {
             self.snapshots
                 .push(CommittedResolverSnapshotV1::new(snapshot)?);
         }
-        self.snapshots
-            .sort_by(|left, right| snapshot_key(&left.value).cmp(&snapshot_key(&right.value)));
+        self.snapshots.sort_by_key(|left| snapshot_key(&left.value));
         // Validate the complete candidate history before retention. Otherwise a
         // conflicting or rolled-back oldest snapshot could be truncated first
         // and silently evade the cross-snapshot checks below.
@@ -367,8 +366,7 @@ impl ResolverIndexCacheCatalogV1 {
             });
             self.snapshots.truncate(MAX_CACHED_SNAPSHOTS_V1);
         }
-        self.snapshots
-            .sort_by(|left, right| snapshot_key(&left.value).cmp(&snapshot_key(&right.value)));
+        self.snapshots.sort_by_key(|left| snapshot_key(&left.value));
         self.validate()
     }
 }

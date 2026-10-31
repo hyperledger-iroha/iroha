@@ -22,26 +22,8 @@ fn sample_unregister_instruction() -> InstructionBox {
     ))
 }
 const RUNTIME_UPGRADE_ALLOWED_ID: &str = "upgrade-q1";
-fn sample_runtime_upgrade_manifest_bytes() -> Vec<u8> {
-    RuntimeUpgradeManifest {
-        name: "upgrade.v1.test".to_string(),
-        description: "test upgrade for runtime hook enforcement (v1)".to_string(),
-        abi_version: 1,
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-        added_syscalls: vec![],
-        added_pointer_types: vec![],
-        start_height: 42,
-        end_height: 84,
-        sbom_digests: Vec::new(),
-        slsa_attestation: Vec::new(),
-        provenance: Vec::new(),
-    }
-    .canonical_bytes()
-}
 fn runtime_upgrade_instruction() -> InstructionBox {
-    InstructionBox::from(ProposeRuntimeUpgrade {
-        manifest_bytes: sample_runtime_upgrade_manifest_bytes(),
-    })
+    InstructionBox::from(crate::runtime::change_set::test_support::attest_instruction())
 }
 fn accepted_tx_by(
     account_id: AccountId,

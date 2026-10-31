@@ -178,7 +178,7 @@ mod tests {
         .expect("56 bytes");
         let mut generator = ChaCha20Prng::new(&seed);
         let mut words = Zeroizing::new([0_u8; 128 * 8]);
-        for chunk in words.chunks_exact_mut(8) {
+        for chunk in words.as_chunks_mut::<8>().0 {
             chunk.copy_from_slice(&generator.next_u64().to_le_bytes());
         }
         assert_eq!(

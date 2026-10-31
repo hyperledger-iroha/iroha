@@ -22,6 +22,7 @@ mod kaigi_usage_v1;
 pub use kaigi_authorization_v1::{JsKaigiAuthorizationProofV1, build_kaigi_authorization_proof_v1};
 pub use kaigi_usage_v1::{JsKaigiUsageProofV1, build_kaigi_usage_proof_v1};
 mod private_settlement_response;
+mod private_settlement_session;
 mod secure_private_fs;
 mod settlement_lifecycle;
 pub use settlement_lifecycle::{
@@ -2066,7 +2067,7 @@ fn sign_js_transaction(
 ) -> napi::Result<SignedTransaction> {
     builder
         .try_sign(private_key)
-        .map_err(|err| norito_to_napi(format!("failed to sign {context} transaction: {err}",)))
+        .map_err(|err| norito_to_napi(format!("failed to sign {context} transaction: {err}")))
 }
 fn alias_policy_from_js(policy: Option<&JsAliasPolicy>) -> napi::Result<AliasCachePolicy> {
     let mut positive = SORAFS_ALIAS_POSITIVE_TTL_SECS;

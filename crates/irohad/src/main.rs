@@ -12,6 +12,12 @@ pub mod authenticated_genesis;
 pub mod beacon_bootstrap;
 /// Read-only `--check-config --json` and `--check-storage` compatibility probes.
 mod compatibility_probe;
+/// The supervising parent owns the stdin pipe until graceful shutdown.
+#[path = "main/input_close.rs"]
+mod input_close;
+use input_close::spawn_input_close_shutdown;
+/// Field-level explanation of a signed genesis policy mismatch for `--check-config`.
+mod genesis_policy_diagnostics;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
 /// Deployment-injected factory for the supervised private Musubi publication service.
@@ -26,6 +32,8 @@ mod panic_recovery;
 /// Synchronizes peer-gossip voter authority with the committed validator roster.
 #[path = "main/peers_gossiper_topology_sync.rs"]
 mod peers_gossiper_topology_sync;
+/// `--check-replay`: replay a copy of the stopped node's store with this build.
+mod replay_check;
 /// Platform-fixed local runtime-provider broker used by the stock launcher.
 mod runtime_provider_broker;
 /// Deployment-owned runtime-provider registry boundary for the standard launcher.
@@ -175,7 +183,7 @@ use startup_artifact::{
     read_genesis_unlocked_with_bytes,
 };
 #[cfg(target_os = "windows")]
-use std::os::windows::{ffi::OsStrExt, fs::MetadataExt as _};
+use std::os::windows::fs::MetadataExt as _;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -875,7 +883,8 @@ pub struct StartupArgs {
     ///
     /// The runtime-only secrets under `<data_dir>/secrets/` (runtime signer and beacon
     /// credential) are never opened; the key files the configuration names are read by
-    /// the parser after their custody checks.
+    /// the parser after their custody checks. As on a real start, a missing node-local
+    /// `SoraNet` transport or streaming identity is created first.
     #[arg(long)]
     pub check_config: bool,
     /// With `--check-config`, print this build's and configuration's compatibility values as one
@@ -890,6 +899,16 @@ pub struct StartupArgs {
     /// `--check-config`).
     #[arg(long, conflicts_with = "check_config")]
     pub check_storage: bool,
+    /// Replay a copy of the stopped node's store with this build, print the result as one Norito
+    /// JSON object and exit nonzero when a block does not reproduce its certified result or the
+    /// store lacks a block body the replay needs.
+    ///
+    /// Opens the store read-only and takes its store-root lock as `--check-storage` does, copies
+    /// its blocks into a temporary directory, restores the newest snapshot there (or re-executes
+    /// signed genesis) and re-executes every later block. It never writes the store, the
+    /// snapshot directory or the tiered-state directory, and never opens runtime-only secrets.
+    #[arg(long, conflicts_with_all = ["check_config", "check_storage", "managed_listeners"])]
+    pub check_replay: bool,
     /// Require this registered account to retain `SoraCloud` deployment authority
     /// after executing the exact signed genesis during offline validation.
     #[arg(long, value_name = "ACCOUNT_ID", requires = "check_config")]
@@ -1016,6 +1035,8 @@ pub enum MainError {
     IrohaRun,
     /// `--check-storage` could not read the store or its snapshot restore dry run failed.
     CheckStorage,
+    /// `--check-replay` could not replay the store, or a replayed block diverged or lacked its body.
+    CheckReplay,
 }
 /// Read-only Torii adapter that refuses committed reputation reads whenever
 /// the supervised daemon is not ready.
@@ -1126,6 +1147,9 @@ impl std::fmt::Display for MainError {
             MainError::IrohaStart => "error.start",
             MainError::IrohaRun => "error.run",
             MainError::CheckStorage => "error.check_storage",
+            MainError::CheckReplay => {
+                return f.write_str("The node store failed the replay check with this build");
+            }
         };
         write!(f, "{}", i18n::t(key))
     }
@@ -2853,11 +2877,19 @@ impl Iroha {
             .map_err(|error| Report::new(StartError::InitKura).attach(error))?
             .into(),
         };
+        // The handshake requires what the committed selection activates; the listener below
+        // replaces the requirement whenever a change set activates.
+        let required_host_profiles = iroha_p2p::RequiredHostProfiles::leak(
+            committed_host_profiles(&state).map_err(|error| {
+                Report::new(StartError::StartP2p).attach(error.to_string())
+            })?,
+        );
         let consensus_caps = iroha_p2p::ConsensusHandshakeCaps {
             mode: signed_consensus_mode,
             proto_version: u32::from(iroha_core::sumeragi::node::PROTOCOL_VERSION),
             consensus_fingerprint: consensus_fingerprint.0,
             config: config_caps,
+            required_host_profiles: Some(required_host_profiles),
         };
         // The handshake identifies the release, not the chain's committed ZK
         // policy: a policy an authorized `SetParameter` commits is State, and
@@ -3167,6 +3199,11 @@ impl Iroha {
             start_telemetry(&logger, &config, &telemetry, &mut supervisor).await;
             log_startup_trace("irohad.telemetry.ready", startup_trace_started_at);
         }
+        supervisor.monitor(tokio::spawn(run_required_host_profiles_listener(
+            Arc::clone(&state),
+            required_host_profiles,
+            events_sender.subscribe(),
+        )));
         let peers_gossiper_topology_events = events_sender.subscribe();
         let (peers_gossiper, child) = PeersGossiper::start(
             config.common.peer.id.clone(),
@@ -4534,6 +4571,7 @@ impl Iroha {
         let runtime_deps = (|| {
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(build_identity, torii_telemetry)
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
+            .with_runtime_attestation_signer(config.common.key_pair.clone())
             .with_vpn_relay_trust(vpn_relay_trust);
         let runtime_deps = runtime_deps
             .with_private_settlement_availability_signer(private_settlement_availability_signer)
@@ -5753,18 +5791,32 @@ fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Conc
         );
     }
 }
-/// Check the custody of the `<data_dir>/secrets/` key files the configuration parser may read
-/// ([`node_secrets::verify_config_key_custody`]).
+/// Create the missing node-local identities, then check the custody of the `<data_dir>/secrets/`
+/// key files the configuration parser may read ([`node_secrets::create_local_identities`],
+/// [`node_secrets::verify_config_key_custody`]). Each created identity is reported on stderr: the
+/// logger starts only after the configuration is read, and stdout carries check results.
 #[cfg(feature = "daemon")]
-fn verify_config_key_custody(data_dir: &Path) -> Result<(), String> {
-    node_secrets::verify_config_key_custody(&iroha_config::parameters::actual::DataDir::new(
-        data_dir.to_path_buf(),
-    ))
-    .map_err(|error| error.to_string())
+fn prepare_config_key_files(
+    data_dir: &Path,
+    local_identities: &[iroha_config::parameters::actual::NodeSecretFile],
+) -> Result<(), String> {
+    let data_dir = iroha_config::parameters::actual::DataDir::new(data_dir.to_path_buf());
+    let created = node_secrets::create_local_identities(&data_dir, local_identities)
+        .map_err(|error| error.to_string())?;
+    for (file, public_key) in created {
+        eprintln!(
+            "iroha3d: created node-local identity {} ({public_key})",
+            data_dir.secret(file).display()
+        );
+    }
+    node_secrets::verify_config_key_custody(&data_dir).map_err(|error| error.to_string())
 }
 /// Non-daemon builds have no fixed-secret runtime provider.
 #[cfg(not(feature = "daemon"))]
-fn verify_config_key_custody(_data_dir: &Path) -> Result<(), String> {
+fn prepare_config_key_files(
+    _data_dir: &Path,
+    _local_identities: &[iroha_config::parameters::actual::NodeSecretFile],
+) -> Result<(), String> {
     Ok(())
 }
 /// Sora Nexus features that a flat configuration may enable only together with `--sora`.
@@ -5863,10 +5915,15 @@ fn read_config_and_genesis_with_filesystem_space(
         let node = open_node_config(file, NodeConfigOptions { sora: args.sora })
             .change_context(ConfigError::ReadConfig)?;
         let data_dir = node.data_dir().map(Path::to_path_buf);
+        let local_identities = node.local_identities().to_vec();
         let (reader, binding) = node.into_parts();
         // The parser reads the key files the configuration names under `<data_dir>/secrets/`;
-        // they pass the runtime-secret custody checks first.
-        if let Some(Err(error)) = data_dir.as_deref().map(verify_config_key_custody) {
+        // a missing node-local identity is created and every file passes the runtime-secret
+        // custody checks first.
+        if let Some(Err(error)) = data_dir
+            .as_deref()
+            .map(|data_dir| prepare_config_key_files(data_dir, &local_identities))
+        {
             // Defuse the prepared reader's drop guard; the custody error replaces its report.
             let _ = reader.into_result();
             return Err(Report::new(ConfigError::ReadConfig).attach(error));
@@ -6188,6 +6245,11 @@ fn derive_runtime_nexus_storage_budget(
             .and_then(|value| value.checked_add(bps_total.saturating_sub(1)))
             .map(|value| value / bps_total)
             .and_then(|value| u64::try_from(value).ok())
+            .map(|value| {
+                value.min(
+                    iroha_config::parameters::defaults::nexus::storage::AUTO_STORAGE_HEADROOM_MAX_BYTES,
+                )
+            })
             .ok_or_else(|| {
                 Report::new(ConfigError::ParseConfig).attach(format!(
                     "failed to derive Nexus storage headroom for filesystem `{}`",
@@ -6203,23 +6265,12 @@ fn derive_runtime_nexus_storage_budget(
                     filesystem.filesystem_id
                 ))
             })?;
+        // The derived budget must be non-zero and hold what the node already stores.
         let budget_bytes = usable_bytes
             .checked_sub(reserve_bytes)
             .and_then(NonZeroU64::new)
-            .ok_or_else(|| {
-                Report::new(ConfigError::ParseConfig).attach(format!(
-                    "filesystem `{}` has no safe non-zero Nexus storage budget after reserving {reserve_bytes} bytes of headroom; configure nexus.storage.local_budget_bytes explicitly only after freeing space",
-                    filesystem.filesystem_id
-                ))
-            })?;
-        if budget_bytes.get() < filesystem.managed_bytes {
-            return Err(Report::new(ConfigError::ParseConfig).attach(format!(
-                "filesystem `{}` derived budget {} is below the {} managed bytes after reserving {reserve_bytes} bytes of headroom; free space before startup or configure nexus.storage.local_budget_bytes deliberately",
-                filesystem.filesystem_id,
-                budget_bytes.get(),
-                filesystem.managed_bytes
-            )));
-        }
+            .filter(|budget| budget.get() >= filesystem.managed_bytes)
+            .ok_or_else(|| insufficient_storage_headroom(filesystem, reserve_bytes))?;
         filesystem_budgets.push(NexusStorageFilesystemBudget {
             budget_bytes,
             components: filesystem.components.clone(),
@@ -6230,6 +6281,61 @@ fn derive_runtime_nexus_storage_budget(
             .attach("runtime Nexus storage derivation produced no filesystem budget groups"));
     }
     Ok(filesystem_budgets)
+}
+/// The startup error of a filesystem with too little free space for the budget an unset
+/// `nexus.storage.local_budget_bytes` derives: the rule, the numbers, how much space is missing
+/// and both remedies.
+fn insufficient_storage_headroom(
+    filesystem: &StorageBudgetFilesystemProbe,
+    reserve_bytes: u64,
+) -> Report<ConfigError> {
+    let headroom_bps =
+        iroha_config::parameters::defaults::nexus::storage::AUTO_STORAGE_HEADROOM_BPS;
+    // budget = managed + available - reserve must be non-zero and at least the managed bytes.
+    let required_available = reserve_bytes.saturating_add(u64::from(filesystem.managed_bytes == 0));
+    let shortfall = required_available.saturating_sub(filesystem.available_bytes);
+    Report::new(ConfigError::ParseConfig).attach(format!(
+        "not enough free disk space for Nexus storage at `{path}` ({components}): \
+         `nexus.storage.local_budget_bytes` is unset, so the node keeps {percent} of the \
+         filesystem free ({reserve} of {total}) and budgets the rest of the free space plus the \
+         {managed} it already stores, but only {available} is free. Free at least {missing} on \
+         that filesystem, or set `nexus.storage.local_budget_bytes` to the bytes this node may \
+         store",
+        path = filesystem.path.display(),
+        components = nexus_storage_component_labels(&filesystem.components).join(", "),
+        percent = basis_points_percent(headroom_bps),
+        reserve = byte_quantity(reserve_bytes),
+        total = byte_quantity(filesystem.total_bytes),
+        managed = byte_quantity(filesystem.managed_bytes),
+        available = byte_quantity(filesystem.available_bytes),
+        missing = byte_quantity(shortfall),
+    ))
+}
+/// Basis points as a percentage, for operator messages.
+fn basis_points_percent(bps: u16) -> String {
+    if bps % 100 == 0 {
+        format!("{}%", bps / 100)
+    } else {
+        format!("{}.{:02}%", bps / 100, bps % 100)
+    }
+}
+/// A byte count with its binary-prefixed size (one decimal, rounded down), for operator messages.
+fn byte_quantity(bytes: u64) -> String {
+    const UNITS: [(&str, u32); 4] = [("TiB", 40), ("GiB", 30), ("MiB", 20), ("KiB", 10)];
+    UNITS
+        .iter()
+        .find(|(_, shift)| bytes >> shift > 0)
+        .map_or_else(
+            || format!("{bytes} bytes"),
+            |(unit, shift)| {
+                let scale = 1_u64 << shift;
+                format!(
+                    "{bytes} bytes ({}.{} {unit})",
+                    bytes / scale,
+                    bytes % scale * 10 / scale
+                )
+            },
+        )
 }
 fn warn_if_nexus_storage_budget_exceeds_available(
     config: &Config,
@@ -6539,9 +6645,7 @@ fn filesystem_identity(path: &Path) -> Option<String> {
 }
 #[cfg(target_os = "windows")]
 fn filesystem_identity(path: &Path) -> Option<String> {
-    let volume_mount_point = windows_volume_mount_point(path)?;
-    let volume_name = windows_volume_name_for_mount_point(&volume_mount_point)?;
-    Some(normalize_windows_volume_identity(&volume_name))
+    iroha_fs::windows::observe_volume_identity(path).ok()
 }
 #[cfg(unix)]
 fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
@@ -6559,18 +6663,7 @@ fn statvfs_fragment_size(fragment_size: u64, block_size: u64) -> Option<u64> {
 }
 #[cfg(target_os = "windows")]
 fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
-    let wide_path = windows_wide_path(path);
-    let mut free_bytes_available = 0_u64;
-    let mut total_bytes = 0_u64;
-    let ok = unsafe {
-        GetDiskFreeSpaceExW(
-            wide_path.as_ptr(),
-            &mut free_bytes_available,
-            &mut total_bytes,
-            std::ptr::null_mut(),
-        )
-    };
-    (ok != 0).then_some((free_bytes_available, total_bytes))
+    iroha_fs::windows::observe_volume_space(path).ok()
 }
 #[cfg(not(any(unix, target_os = "windows")))]
 fn filesystem_space(_path: &Path) -> Option<(u64, u64)> {
@@ -6579,83 +6672,6 @@ fn filesystem_space(_path: &Path) -> Option<(u64, u64)> {
 #[cfg(not(any(unix, target_os = "windows")))]
 fn filesystem_identity(_path: &Path) -> Option<String> {
     None
-}
-#[cfg(any(target_os = "windows", test))]
-fn normalize_windows_volume_mount_point(volume_mount_point: &str) -> String {
-    let mut normalized = volume_mount_point.replace('/', "\\");
-    if !normalized.ends_with('\\') {
-        normalized.push('\\');
-    }
-    normalized
-}
-#[cfg(any(target_os = "windows", test))]
-fn normalize_windows_volume_identity(volume_name: &str) -> String {
-    let mut normalized = normalize_windows_volume_mount_point(volume_name);
-    normalized.make_ascii_lowercase();
-    format!("volume:{normalized}")
-}
-#[cfg(any(target_os = "windows", test))]
-fn windows_string_from_wide_buffer(buffer: &[u16]) -> Option<String> {
-    let end = buffer.iter().position(|&unit| unit == 0)?;
-    Some(String::from_utf16_lossy(&buffer[..end]))
-}
-#[cfg(target_os = "windows")]
-const WINDOWS_FILESYSTEM_PROBE_BUFFER_LEN: usize = 32_768;
-#[cfg(target_os = "windows")]
-#[allow(non_snake_case)]
-unsafe extern "system" {
-    fn GetDiskFreeSpaceExW(
-        lp_directory_name: *const u16,
-        lp_free_bytes_available_to_caller: *mut u64,
-        lp_total_number_of_bytes: *mut u64,
-        lp_total_number_of_free_bytes: *mut u64,
-    ) -> i32;
-    fn GetVolumeNameForVolumeMountPointW(
-        lpsz_volume_mount_point: *const u16,
-        lpsz_volume_name: *mut u16,
-        cch_buffer_length: u32,
-    ) -> i32;
-    fn GetVolumePathNameW(
-        lpsz_file_name: *const u16,
-        lpsz_volume_path_name: *mut u16,
-        cch_buffer_length: u32,
-    ) -> i32;
-}
-#[cfg(target_os = "windows")]
-fn windows_wide_path(path: &Path) -> Vec<u16> {
-    path.as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
-}
-#[cfg(target_os = "windows")]
-fn windows_wide_string(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-#[cfg(target_os = "windows")]
-fn windows_query_volume_string<F>(mut query: F) -> Option<String>
-where
-    F: FnMut(*mut u16, u32) -> i32,
-{
-    let mut buffer = vec![0_u16; WINDOWS_FILESYSTEM_PROBE_BUFFER_LEN];
-    (query(buffer.as_mut_ptr(), buffer.len() as u32) != 0)
-        .then(|| windows_string_from_wide_buffer(&buffer))
-        .flatten()
-}
-#[cfg(target_os = "windows")]
-fn windows_volume_mount_point(path: &Path) -> Option<String> {
-    let wide_path = windows_wide_path(path);
-    windows_query_volume_string(|buffer, len| unsafe {
-        GetVolumePathNameW(wide_path.as_ptr(), buffer, len)
-    })
-    .map(|mount_point| normalize_windows_volume_mount_point(&mount_point))
-}
-#[cfg(target_os = "windows")]
-fn windows_volume_name_for_mount_point(volume_mount_point: &str) -> Option<String> {
-    let wide_mount_point = windows_wide_string(volume_mount_point);
-    windows_query_volume_string(|buffer, len| unsafe {
-        GetVolumeNameForVolumeMountPointW(wide_mount_point.as_ptr(), buffer, len)
-    })
 }
 pub(crate) fn apply_ivm_acceleration_config(
     accel: &iroha_config::parameters::actual::Acceleration,
@@ -7953,7 +7969,13 @@ fn parse_fastpq_poseidon_mode(value: &str) -> Result<FastpqPoseidonMode, String>
     }
 }
 fn args_command(build: CompiledBuildMetadata) -> clap::Command {
-    Args::command().version(build.version())
+    // Two binaries with one package version can still come from different sources.
+    let version = format!(
+        "{} (source {})",
+        build.version(),
+        build.source_commit_label()
+    );
+    Args::command().version(&*Box::leak(version.into_boxed_str()))
 }
 fn parse_args(build: CompiledBuildMetadata) -> Args {
     parse_args_from(build, env::args_os())
@@ -8215,7 +8237,7 @@ fn run_main_with_config_guard(
             .change_context(MainError::Config)
             .attach_with(|| {
             args.config.as_ref().map_or_else(
-                || "`--config` arg was not set, therefore development environment inputs and built-in defaults are in use".to_owned(),
+                || "`--config` arg was not set, therefore development environment inputs and built-in defaults are in use. To run a local network without writing configuration, use `kagami localnet up`; `kagami localnet generate --out-dir DIR` writes a bundle of peer configs".to_owned(),
                 |path| format!("config path is specified by `--config` arg: {}", path.display()),
             )
         })?;
@@ -8229,6 +8251,9 @@ fn run_main_with_config_guard(
     }
     if args.startup.check_storage {
         return compatibility_probe::run_check_storage(&config);
+    }
+    if args.startup.check_replay {
+        return replay_check::run_check_replay(&config);
     }
     if args.startup.check_config {
         let validated_genesis = validate_config_and_genesis_for_check(
@@ -8803,9 +8828,14 @@ fn validate_genesis_execution_offline(
         None,
     )
     .map_err(|error| {
-        Report::new(error)
+        let explanation = genesis_policy_diagnostics::explain_genesis_startup_error(config, &error);
+        let report = Report::new(error)
             .change_context(MainError::Config)
-            .attach("native genesis execution failed")
+            .attach("native genesis execution failed");
+        match explanation {
+            Some(explanation) => report.attach(explanation),
+            None => report,
+        }
     })?;
     let executed = state.world_view();
     let initial_configs = executed
@@ -8902,8 +8932,63 @@ fn build_consensus_config_caps(
         native_config_fingerprint: [0; 32],
         execution_policy_hash: [0; 32],
         nexus_policy_digest,
-        ivm_gas_schedule_hash: ivm::gas::schedule_hash().into(),
+        host_profiles: release_host_profiles()?,
     })
+}
+/// The host profiles this release implements, advertised in the handshake.
+fn release_host_profiles() -> ReportResult<iroha_p2p::HostProfileSet, StartError> {
+    let catalog = iroha_core::runtime::release_catalog().map_err(|error| {
+        Report::new(StartError::StartP2p).attach(format!("release catalog: {error}"))
+    })?;
+    iroha_p2p::HostProfileSet::new(
+        iroha_core::runtime::attestation::release_host_profiles(catalog)
+            .into_iter()
+            .map(|id| id.0),
+    )
+    .map_err(|error| Report::new(StartError::StartP2p).attach(error.to_string()))
+}
+/// The host profiles the committed selection of `state` activates.
+fn committed_host_profiles(
+    state: &State,
+) -> Result<iroha_p2p::HostProfileSet, iroha_p2p::HostProfileSetOverflow> {
+    iroha_p2p::HostProfileSet::new(
+        iroha_core::runtime::attestation::committed_host_profiles(&state.world_view())
+            .into_iter()
+            .map(|id| id.0),
+    )
+}
+/// Keep the handshake's required host profiles equal to those the committed selection activates
+/// (`specs/live_runtime_upgrades.md` §6, "Handshake"): they change only when a change set
+/// activates, so the listener recomputes them on each activation and after a lag.
+async fn run_required_host_profiles_listener(
+    state: Arc<State>,
+    required: &'static iroha_p2p::RequiredHostProfiles,
+    mut events: tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox>,
+) {
+    use iroha_data_model::events::{
+        EventBox,
+        data::{DataEvent, runtime_upgrade::RuntimeUpgradeEvent},
+    };
+    loop {
+        let refresh = match events.recv().await {
+            Ok(EventBox::Data(event)) => matches!(
+                event.as_ref(),
+                DataEvent::RuntimeUpgrade(RuntimeUpgradeEvent::Activated(_))
+            ),
+            Ok(_) => false,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        };
+        if refresh {
+            match committed_host_profiles(&state) {
+                Ok(profiles) => required.set(profiles),
+                Err(error) => iroha_logger::error!(
+                    %error,
+                    "the committed selection activates more host profiles than a handshake carries"
+                ),
+            }
+        }
+    }
 }
 /// Bind handshake monetary identity to the authenticated original signed genesis.
 ///
@@ -9018,6 +9103,7 @@ fn consensus_caps_from_genesis(
             proto_version: iroha_core::sumeragi::consensus::PROTO_VERSION,
             consensus_fingerprint: computed_fingerprint,
             config: config_caps,
+            required_host_profiles: None,
         },
         consensus_params.block_cadence_ms.get(),
         maximum_validator_roster_len,
@@ -9458,36 +9544,6 @@ async fn run_node(
         };
     }
     supervisor_fut.await.change_context(MainError::IrohaRun)
-}
-/// Shut the daemon down once `input` reaches end-of-file (`lifecycle.exit_on_stdin_close`).
-///
-/// A supervising parent holds the write end of the child's stdin pipe. When the parent exits for
-/// any reason, including SIGKILL, the pipe closes and the node shuts down cleanly through the same
-/// signal a panic uses. Bytes written to the pipe are discarded; a read error also shuts down.
-fn spawn_input_close_shutdown(
-    input: impl std::io::Read + Send + 'static,
-    signal: ShutdownSignal,
-) -> std::io::Result<()> {
-    std::thread::Builder::new()
-        .name("stdin-close-shutdown".to_owned())
-        .spawn(move || {
-            drain_until_eof(input);
-            iroha_logger::info!("standard input closed, shutting down...");
-            signal.send();
-        })
-        .map(drop)
-}
-/// Read and discard `input` until end-of-file or a read error.
-fn drain_until_eof(mut input: impl std::io::Read) {
-    let mut buffer = [0_u8; 256];
-    loop {
-        match input.read(&mut buffer) {
-            Ok(0) => return,
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => return,
-        }
-    }
 }
 #[cfg(all(test, feature = "daemon", unix))]
 #[path = "main/node_file_tests.rs"]
@@ -11319,11 +11375,11 @@ mod tests {
                 )
                 .expect("sign genesis fixture with configured DA and confidential policies")
         }
-        fn staged_context_hashes_for_test(
+        fn staged_context_for_test(
             raw: &RawGenesisTransaction,
             signer: &KeyPair,
             config: &Config,
-        ) -> (Hash, Hash) {
+        ) -> (iroha_data_model::nexus::NexusAmxContextPreimageV1, Hash) {
             // Derive only an unpublished signing draft's policy commitments.
             // The final signed block must pass the unchanged native validator.
             let provisional = sign_configured_genesis_for_test(raw.clone(), signer, config);
@@ -11385,16 +11441,18 @@ mod tests {
             .unpack(|_| {})
             {
                 Ok((_, staged)) => (
-                    iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged),
+                    iroha_data_model::nexus::NexusAmxContextPreimageV1::new(
+                        iroha_core::sumeragi::staged_genesis_nexus_amx_context_preimage(&staged),
+                    ),
                     iroha_core::sumeragi::staged_genesis_execution_policy_hash(&staged)
                         .expect("executed genesis policy"),
                 ),
                 Err((_, error)) => match *error {
                     iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
-                        actual_nexus,
+                        actual_nexus_preimage,
                         actual_execution,
                         ..
-                    } => (actual_nexus, actual_execution),
+                    } => (actual_nexus_preimage, actual_execution),
                     error => panic!("genesis signing draft failed native validation: {error}"),
                 },
             }
@@ -11445,6 +11503,8 @@ mod tests {
             mode: iroha_data_model::block::consensus::ConsensusMode,
             parameters: iroha_data_model::block::consensus::SumeragiGenesisContextParameters,
             cadence_ms: u64,
+            /// The Nexus/AMX context preimage the genesis commits, as Kagami publishes it.
+            signed_nexus_context: iroha_data_model::nexus::NexusAmxContextPreimageV1,
         }
         fn offline_semantic_genesis_fixture(
             extra_instructions: impl IntoIterator<Item = InstructionBox>,
@@ -11488,10 +11548,10 @@ mod tests {
             );
             require_crypto_verification_implementations(base_raw.crypto_admission_policy())
                 .expect("compiled verifiers support the explicitly authored genesis policy");
-            let (context_hash, execution_policy_hash) =
-                staged_context_hashes_for_test(&base_raw, &genesis_authority, &config);
+            let (signed_nexus_context, execution_policy_hash) =
+                staged_context_for_test(&base_raw, &genesis_authority, &config);
             let mut parameters = base_raw.sumeragi_context_parameters();
-            parameters.nexus_amx_context_hash = context_hash.into();
+            parameters.nexus_amx_context_hash = signed_nexus_context.hash().into();
             parameters.execution_policy_hash = execution_policy_hash.into();
             let mut builder = base_raw
                 .into_builder()
@@ -11520,6 +11580,7 @@ mod tests {
                 mode,
                 parameters,
                 cadence_ms,
+                signed_nexus_context,
             }
         }
         #[test]
@@ -11538,6 +11599,75 @@ mod tests {
             )
             .expect("valid genesis should execute in the disposable overlay");
             assert_eq!(bootstrap.initial_committee_size, 4);
+        }
+        /// A node file that restates a consensus-bound value differently fails `--check-config`
+        /// with the differing field and both values once the network's published Nexus/AMX
+        /// context sits beside the signed genesis file, and with directions while it is absent.
+        #[test]
+        fn check_config_names_the_nexus_field_a_node_file_restates_differently() {
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let mut fixture = offline_semantic_genesis_fixture([]);
+            let directory = tempfile::tempdir().expect("temporary genesis directory");
+            fixture.config.genesis.file = Some(WithOrigin::inline(
+                directory.path().join("genesis.signed.nrt"),
+            ));
+            let signed_exit_teu = fixture.config.nexus.fusion.exit_teu;
+            let node_exit_teu = signed_exit_teu.checked_add(1).expect("fixture exit TEU");
+            fixture.config.nexus.fusion.exit_teu = node_exit_teu;
+            let check = |fixture: &LocalSemanticGenesisFixture| {
+                let report = validate_genesis_execution_offline(
+                    &fixture.config,
+                    &fixture.genesis,
+                    &fixture.authority,
+                    fixture.mode,
+                    fixture.parameters,
+                    fixture.cadence_ms,
+                    None,
+                )
+                .expect_err("a restated consensus-bound value must refuse the signed genesis");
+                format!("{report:?}")
+            };
+            let without = check(&fixture);
+            assert!(
+                without.contains("Signed genesis policy mismatch"),
+                "{without}"
+            );
+            assert!(
+                without.contains(&format!(
+                    "copy the network's `nexus-amx-context.v1.bin` (written by `kagami network create`, \
+                     `kagami localnet` and `kagami genesis sign --nexus-context-output`) to {}",
+                    directory.path().join("nexus-amx-context.v1.bin").display()
+                )),
+                "{without}"
+            );
+            std::fs::write(
+                directory.path().join("nexus-amx-context.v1.bin"),
+                fixture.signed_nexus_context.as_bytes(),
+            )
+            .expect("publish the signed Nexus/AMX context");
+            let with = check(&fixture);
+            // The report renders each line of the explanation under its own tree prefix.
+            for line in [
+                "this node's Nexus/AMX context differs from the signed one".to_owned(),
+                "in 1 field:".to_owned(),
+                format!(
+                    "nexus.fusion.exit_teu: signed genesis {signed_exit_teu}, this node {node_exit_teu}"
+                ),
+            ] {
+                assert!(with.contains(&line), "missing {line:?} in {with}");
+            }
+            fixture.config.nexus.fusion.exit_teu = signed_exit_teu;
+            validate_genesis_execution_offline(
+                &fixture.config,
+                &fixture.genesis,
+                &fixture.authority,
+                fixture.mode,
+                fixture.parameters,
+                fixture.cadence_ms,
+                None,
+            )
+            .expect("copying the signed value accepts the signed genesis");
         }
         /// `--check-config --json` with a local signed genesis reports `ready` and exactly the
         /// genesis-bound values the running network attests: the signed context hashes, the
@@ -11640,7 +11770,7 @@ mod tests {
                 ready.nexus_policy_digest,
                 hex::encode(ready_caps.nexus_policy_digest)
             );
-            assert_eq!(ready.gas_schedule_hash, pending.gas_schedule_hash);
+            assert_eq!(ready.host_profiles, pending.host_profiles);
         }
 
         #[test]
@@ -12123,8 +12253,12 @@ mod tests {
             assert_eq!(caps.native_config_fingerprint, [0; 32]);
             assert_eq!(caps.nexus_policy_digest, expected_nexus_policy_digest);
             assert_eq!(
-                caps.ivm_gas_schedule_hash,
-                <[u8; 32]>::from(ivm::gas::schedule_hash())
+                caps.host_profiles,
+                release_host_profiles().expect("release host profiles"),
+            );
+            assert!(
+                !caps.host_profiles.as_slice().is_empty(),
+                "the release implements the baseline host profile"
             );
         }
         #[test]
@@ -12400,6 +12534,7 @@ mod tests {
                     check_config: false,
                     json: false,
                     check_storage: false,
+                    check_replay: false,
                     require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,
@@ -12469,6 +12604,7 @@ mod tests {
                     check_config: false,
                     json: false,
                     check_storage: false,
+                    check_replay: false,
                     require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,
@@ -12753,6 +12889,18 @@ mod tests {
             assert_eq!(budgets[0].budget_bytes.get(), 100);
         }
         #[test]
+        fn runtime_budget_caps_headroom_on_large_filesystems() {
+            const GIB: u64 = 1024 * 1024 * 1024;
+            // A 7.3 TiB volume with 617 GiB free: 20% would reserve about 1.46 TiB and leave
+            // no budget, so the reservation stops at the fixed cap.
+            let probe = storage_budget_probe(7_475 * GIB, 617 * GIB, 0);
+            let budgets = derive_runtime_nexus_storage_budget(&[probe])
+                .expect("a large volume with ample free space has a budget");
+            assert_eq!(budgets[0].budget_bytes.get(), 617 * GIB - 64 * GIB);
+            let full = storage_budget_probe(7_475 * GIB, 60 * GIB, 0);
+            assert!(derive_runtime_nexus_storage_budget(&[full]).is_err());
+        }
+        #[test]
         fn runtime_budget_is_stable_across_restart_usage_splits() {
             let before_restart = storage_budget_probe(1_000, 700, 100);
             let after_restart = storage_budget_probe(1_000, 300, 500);
@@ -12769,10 +12917,42 @@ mod tests {
             let error = derive_runtime_nexus_storage_budget(&[probe])
                 .expect_err("auto derivation must not activate a cap below managed usage");
             let diagnostic = format!("{error:?}");
+            for expected in [
+                "not enough free disk space for Nexus storage at `/tmp/nexus-storage` (kura)",
+                "`nexus.storage.local_budget_bytes` is unset",
+                "keeps 20% of the filesystem free (200 bytes of 1000 bytes)",
+                "plus the 150 bytes it already stores, but only 100 bytes is free",
+                // The budget must hold the managed bytes: 150 + available - 200 >= 150.
+                "Free at least 100 bytes on that filesystem",
+                "or set `nexus.storage.local_budget_bytes`",
+            ] {
+                assert!(diagnostic.contains(expected), "{expected}: {diagnostic}");
+            }
+        }
+        #[test]
+        fn runtime_budget_error_names_the_missing_space_in_binary_units() {
+            const GIB: u64 = 1 << 30;
+            // A 100 GiB disk with 12.5 GiB free and nothing stored yet: 20 GiB stays free.
+            let probe = storage_budget_probe(100 * GIB, 12 * GIB + GIB / 2, 0);
+            let diagnostic = format!(
+                "{:?}",
+                derive_runtime_nexus_storage_budget(&[probe]).expect_err("below the headroom")
+            );
             assert!(
-                diagnostic.contains("below the 150 managed bytes"),
+                diagnostic
+                    .contains("(21474836480 bytes (20.0 GiB) of 107374182400 bytes (100.0 GiB))"),
                 "{diagnostic}"
             );
+            assert!(
+                diagnostic.contains("Free at least 8053063681 bytes (7.5 GiB)"),
+                "{diagnostic}"
+            );
+            assert_eq!(byte_quantity(0), "0 bytes");
+            assert_eq!(byte_quantity(1_023), "1023 bytes");
+            assert_eq!(byte_quantity(1_536), "1536 bytes (1.5 KiB)");
+            assert_eq!(byte_quantity(1 << 40), "1099511627776 bytes (1.0 TiB)");
+            assert_eq!(basis_points_percent(2_000), "20%");
+            assert_eq!(basis_points_percent(2_050), "20.50%");
         }
         #[cfg(unix)]
         include!("main/runtime_budget_and_config_tests.rs");

@@ -13,8 +13,8 @@ fn parity<C: PastaCurve>(k: u32) {
         selected == derived,
         "every generator and domain must be identical"
     );
-    assert!(selected.params().to_bytes() == original);
-    assert!(derived.params().to_bytes() == original);
+    assert_eq!(selected.params().to_bytes(), original);
+    assert_eq!(derived.params().to_bytes(), original);
     assert_eq!(
         Some(selected.digest()),
         crate::cs::descriptor::pinned_params_digest(selected.curve(), k)

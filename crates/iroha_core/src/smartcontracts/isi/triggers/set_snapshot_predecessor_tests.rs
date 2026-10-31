@@ -44,13 +44,14 @@ fn set_json_restores_all_active_indexes_for_latest_block_replacement() {
             tx.inspect_by_id_mut(id, |action| action.set_repeats(dm::Repeats::Exactly(0)))
                 .unwrap();
         }
-        let action = SpecializedAction::new(
+        let mut action = SpecializedAction::new(
             dm::Executable::Instructions(ConstVec::from(Vec::<dm::InstructionBox>::new())),
             dm::Repeats::Exactly(1),
             checked_account_id(),
             dm::ExecuteTriggerEventFilter::new(),
         )
         .unwrap();
+        capture_fixture_runtime_consent(&mut action);
         tx.add_by_call_trigger(SpecializedTrigger::new(new_id.clone(), action))
             .unwrap();
         tx.apply();

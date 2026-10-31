@@ -228,7 +228,7 @@
   "pinned_history": {
     "manifest": "fixtures/core/first_release_history/manifest.json",
     "format": "iroha.first_release_history.pinned.v1",
-    "history_sha256": "89ac4e0b149cc5a188ee0603ea45300f99e4294b607bb24dc247aad0811862a5",
+    "history_sha256": "61150ac3a98554758bc796d305430952d2c3ec66258251330790b3bb8cd2fdf5",
     "generator": {
       "path": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
       "test": "capture_pinned_first_release_history"
@@ -887,8 +887,8 @@
       "cutover": "fresh_genesis",
       "anchors": [
         {
-          "path": "crates/irohad/src/compatibility_probe.rs",
-          "contains": "pub gas_schedule_hash: String"
+          "path": "crates/ivm/src/gas.rs",
+          "contains": "pub fn schedule_hash"
         },
         {
           "path": "crates/iroha_core/src/sumeragi/node.rs",

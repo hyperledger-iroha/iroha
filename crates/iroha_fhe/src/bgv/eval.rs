@@ -443,9 +443,7 @@ mod tests {
         if stage == at {
             SCALAR_FAULT.set((usize::MAX, false));
             SCALAR_CLEARED_AT.set(super::super::poly::tests::cleared_words());
-            if unwind {
-                panic!("public scalar output unwind control");
-            }
+            assert!(!unwind, "public scalar output unwind control");
             return Err(BgvError::Allocation);
         }
         Ok(())
@@ -968,10 +966,12 @@ mod tests {
                     }
                     assert_eq!(SCALAR_STARTED.get(), 0);
                     for scalar in [0, 1, t / 2, t / 2 + 1, t - 1] {
+                        let signed_scalar = i64::try_from(scalar).expect("small scalar fixture");
+                        let signed_modulus = i64::try_from(t).expect("small plaintext modulus");
                         let centered = if scalar > t / 2 {
-                            scalar as i64 - t as i64
+                            signed_scalar - signed_modulus
                         } else {
-                            scalar as i64
+                            signed_scalar
                         };
                         let mut values = vec![0; profile.degree()];
                         values[0] = scalar;
@@ -1003,7 +1003,10 @@ mod tests {
                         );
                         let expected: Vec<_> = message
                             .iter()
-                            .map(|&m| ((u128::from(m) * u128::from(scalar)) % u128::from(t)) as u64)
+                            .map(|&m| {
+                                u64::try_from((u128::from(m) * u128::from(scalar)) % u128::from(t))
+                                    .expect("residue below u64 modulus")
+                            })
                             .collect();
                         assert_eq!(
                             secret

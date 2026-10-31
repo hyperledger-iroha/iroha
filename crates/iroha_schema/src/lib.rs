@@ -552,12 +552,12 @@ impl<T: IntoSchema, E: IntoSchema> IntoSchema for Result<T, E> {
 }
 impl<K: TypeId, V: TypeId> TypeId for btree_map::BTreeMap<K, V> {
     fn id() -> String {
-        format!("SortedMap<{}, {}>", K::id(), V::id(),)
+        format!("SortedMap<{}, {}>", K::id(), V::id())
     }
 }
 impl<K: IntoSchema, V: IntoSchema> IntoSchema for btree_map::BTreeMap<K, V> {
     fn type_name() -> String {
-        format!("SortedMap<{}, {}>", K::type_name(), V::type_name(),)
+        format!("SortedMap<{}, {}>", K::type_name(), V::type_name())
     }
     fn update_schema_map(map: &mut MetaMap) {
         if !map.contains_key::<Self>() {

@@ -158,7 +158,7 @@ impl WalkStart {
 /// walk or the State's own execution tip established it. It is a node-local
 /// resumption point for a later walk, never imported, decoded or persisted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct AuthenticatedExecutionIdentity {
+pub struct AuthenticatedExecutionIdentity {
     height: u64,
     iroha: HashOf<BlockHeader>,
     core: iroha_sumeragi::types::Hash32,
@@ -218,6 +218,12 @@ impl AuthenticatedExecutionIdentity {
 
     pub(crate) const fn result(&self) -> iroha_sumeragi::types::Hash32 {
         self.result
+    }
+
+    /// The same height and hashes with another execution result.
+    #[cfg(test)]
+    pub(crate) const fn with_result_for_test(self, result: iroha_sumeragi::types::Hash32) -> Self {
+        Self { result, ..self }
     }
 }
 

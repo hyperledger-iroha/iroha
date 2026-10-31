@@ -37,7 +37,7 @@ fn original_proof_destination_charges_each_actual_compact_key_before_clone_and_r
             })
             .sum::<usize>();
     let pool = AllocationBudget::new(demand);
-    let deadline = Instant::now() + std::time::Duration::from_secs(900);
+    let deadline = Instant::now() + std::time::Duration::from_mins(15);
     let retained = OwnedProof::new(certified.block(), members, &pool, deadline).unwrap();
     assert_eq!(
         pool.reserved_bytes(),
@@ -247,4 +247,60 @@ fn retained_proof_preparation_binds_original_source_and_refunds_partial_key_unwi
         drop(registration);
         assert_eq!(pool.reserved_bytes(), 0);
     }
+}
+
+#[test]
+fn native_frame_destination_moves_exact_original_backing_and_refunds_foreign_refusal() {
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 10_000)).unwrap();
+    chain.commit(Vec::new());
+    let view = chain.state().view();
+    let reader = CertifiedChain::new(&view).unwrap();
+    let certified = reader.certified(2).unwrap();
+    let members = &certified.commitment().schedule.current.committee;
+    let pool = AllocationBudget::new(1024 * 1024);
+    let deadline = Instant::now() + std::time::Duration::from_mins(15);
+    let original = || {
+        let mut source = chain
+            .kura()
+            .native_frame_read(2, certified.block_hash())
+            .unwrap()
+            .unwrap();
+        source
+            .read_original(source.wire_len(), &pool)
+            .unwrap()
+            .unwrap()
+    };
+    let frame = original();
+    let pointer = frame.as_slice().as_ptr();
+    let proof =
+        OwnedProof::from_native_frame(frame, certified.block().header(), members, &pool, deadline)
+            .unwrap();
+    assert_eq!(
+        proof.proof.block_wire.as_ptr(),
+        pointer,
+        "the original native frame moves without re-encoding or copying"
+    );
+    assert_eq!(
+        proof.proof.block_wire,
+        certified.block().encode_wire().unwrap()
+    );
+    proof
+        .proof
+        .decode_checked(chain.root_scope().into())
+        .unwrap();
+    drop(proof);
+    assert_eq!(pool.reserved_bytes(), 0);
+    let foreign = AllocationBudget::new(pool.limit_bytes());
+    assert!(matches!(
+        OwnedProof::from_native_frame(
+            original(),
+            certified.block().header(),
+            members,
+            &foreign,
+            deadline
+        ),
+        Err(ProofDestinationError::Source)
+    ));
+    assert_eq!(pool.reserved_bytes(), 0);
+    assert_eq!(foreign.reserved_bytes(), 0);
 }

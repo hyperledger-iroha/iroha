@@ -68,13 +68,12 @@ pub fn assert_events(name: &str, events: &[EventBox]) {
                         "fixture updated: {}. Re-run tests without UPDATE_FIXTURES to verify.",
                         path.display()
                     );
-                } else {
-                    panic!(
-                        "event snapshot mismatch for {}. Run with UPDATE_FIXTURES=1 to update.\nPath: {}",
-                        name,
-                        path.display()
-                    );
                 }
+                panic!(
+                    "event snapshot mismatch for {}. Run with UPDATE_FIXTURES=1 to update.\nPath: {}",
+                    name,
+                    path.display()
+                );
             }
         }
         Err(_) => {
@@ -83,13 +82,12 @@ pub fn assert_events(name: &str, events: &[EventBox]) {
                     "fixture created: {}. Re-run tests without UPDATE_FIXTURES to verify.",
                     path.display()
                 );
-            } else {
-                panic!(
-                    "missing fixture for {}. Run with UPDATE_FIXTURES=1 to create.\nPath: {}",
-                    name,
-                    path.display()
-                );
             }
+            panic!(
+                "missing fixture for {}. Run with UPDATE_FIXTURES=1 to create.\nPath: {}",
+                name,
+                path.display()
+            );
         }
     }
 }

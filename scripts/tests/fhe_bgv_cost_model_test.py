@@ -131,8 +131,8 @@ class PinnedRunTest(unittest.TestCase):
              patch.object(Path, "read_text", side_effect=AssertionError("evidence reopened")), \
              patch.object(Path, "read_bytes", side_effect=AssertionError("evidence reopened")), \
              patch.object(Path, "glob", side_effect=AssertionError("unsealed directory scan")):
-            block, host = MODEL.read_run(Path("run-original"), self.PIN)
-        reader.assert_called_once_with(Path("run-original"), self.PIN)
+            block, host = MODEL.read_run(Path("run-original"), self.PIN, expected_observation_contract='ordinary_native_v1')
+        reader.assert_called_once_with(Path("run-original"), self.PIN, expected_observation_contract='ordinary_native_v1', expected_delivery=None)
         self.assertIs(host, verified["report"]["host"])
         self.assertEqual(block["run"]["manifest_sha256"], self.PIN)
         self.assertEqual(block["workload"], "bgv.synthetic")
@@ -142,7 +142,7 @@ class PinnedRunTest(unittest.TestCase):
         original = MODEL.HARNESS.HarnessRefusal("pinned run refused: manifest_digest_differs")
         with patch.object(MODEL.HARNESS, "read_pinned_run", side_effect=original) as reader:
             with self.assertRaises(MODEL.HARNESS.HarnessRefusal) as refused:
-                MODEL.read_run(Path("run-original"), self.PIN)
+                MODEL.read_run(Path("run-original"), self.PIN, expected_observation_contract='ordinary_native_v1')
         self.assertIs(refused.exception, original)
         reader.assert_called_once()
 
@@ -152,22 +152,22 @@ class PinnedRunTest(unittest.TestCase):
             verified["report"]["records"] *= count
             with self.subTest(count=count), patch.object(MODEL.HARNESS, "read_pinned_run", return_value=verified):
                 with self.assertRaisesRegex(SystemExit, "exactly one workload record"):
-                    MODEL.read_run(Path("run-original"), self.PIN)
+                    MODEL.read_run(Path("run-original"), self.PIN, expected_observation_contract='ordinary_native_v1')
         verified = self.verified()
         verified["documents"]["child/bgv-synthetic.json"]["outcome"] = "failed"
         with patch.object(MODEL.HARNESS, "read_pinned_run", return_value=verified):
             with self.assertRaisesRegex(SystemExit, "workload did not succeed"):
-                MODEL.read_run(Path("run-original"), self.PIN)
+                MODEL.read_run(Path("run-original"), self.PIN, expected_observation_contract='ordinary_native_v1')
 
     def test_missing_invalid_and_duplicate_pins_refuse_before_reading(self) -> None:
         with patch.object(MODEL, "read_run") as reader:
             with self.assertRaises(TypeError):
-                MODEL.build_summary([Path("run")])
+                MODEL.build_summary([Path("run")], expected_observation_contract='ordinary_native_v1')
             for paths, pins in (([], []), ([Path("run")], []),
                                 ([Path("run")], ["invalid"]),
                                 ([Path("a"), Path("b")], [self.PIN, self.PIN])):
                 with self.subTest(pins=pins), self.assertRaises(ValueError):
-                    MODEL.build_summary(paths, manifest_sha256=pins)
+                    MODEL.build_summary(paths, manifest_sha256=pins, expected_observation_contract='ordinary_native_v1')
         reader.assert_not_called()
 
     def test_builder_uses_returned_host_and_pin_without_reopening_report(self) -> None:
@@ -180,7 +180,9 @@ class PinnedRunTest(unittest.TestCase):
         pins = [by_name[path.name]["run"]["manifest_sha256"] for path in paths]
         original_read = Path.read_text
 
-        def read(path, pin):
+        def read(path, pin, *, expected_observation_contract, expected_delivery):
+            self.assertEqual(expected_observation_contract,'ordinary_native_v1')
+            self.assertIsNone(expected_delivery)
             block = copy.deepcopy(by_name[path.name])
             self.assertEqual(pin, block["run"]["manifest_sha256"])
             return block, host
@@ -192,7 +194,7 @@ class PinnedRunTest(unittest.TestCase):
         with patch.object(MODEL, "read_run", side_effect=read) as reader, \
              patch.object(Path, "read_text", read_text), \
              patch.object(MODEL, "sha256_of", side_effect=AssertionError("post-hoc pin")):
-            rebuilt = MODEL.build_summary(paths, manifest_sha256=pins)
+            rebuilt = MODEL.build_summary(paths, manifest_sha256=pins, expected_observation_contract='ordinary_native_v1')
         self.assertEqual(rebuilt, expected)
         self.assertEqual(reader.call_count, len(paths))
 
@@ -203,7 +205,8 @@ class PinnedRunTest(unittest.TestCase):
             self.assertEqual(refusal.exception.code, 2)
         with patch.object(MODEL, "build_summary", side_effect=MODEL.HARNESS.HarnessRefusal("bad pin")), \
              patch.object(MODEL, "write_outputs") as write, redirect_stderr(StringIO()) as stderr:
-            self.assertEqual(MODEL.main(["--build", "run", "--manifest-sha256", self.PIN, "--write"]), 1)
+            self.assertEqual(MODEL.main(["--build", "run", "--manifest-sha256", self.PIN, "--write",
+                                         "--require-observation-contract", "ordinary_native_v1"]), 1)
         write.assert_not_called()
         self.assertIn("bad pin", stderr.getvalue())
 

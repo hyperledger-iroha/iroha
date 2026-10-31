@@ -534,7 +534,7 @@ impl PrivacyCapabilitySnapshotV1 {
             protocols: self
                 .protocols
                 .iter()
-                .map(|row| PrivacyExact12CapabilityRowV1::from_committed_snapshot_row(row))
+                .map(PrivacyExact12CapabilityRowV1::from_committed_snapshot_row)
                 .collect(),
             manifest_digest: PrivacyExact12CapabilityManifestDigestV1::new([0; 32]),
         };

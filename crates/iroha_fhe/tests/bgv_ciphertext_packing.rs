@@ -29,8 +29,15 @@ fn reference_bytes(
     words: &[u64],
 ) -> Vec<u8> {
     let mut bytes = profile.identity().to_vec();
-    bytes.extend_from_slice(&(level as u16).to_le_bytes());
-    bytes.extend_from_slice(&[components as u8, precision as u8]);
+    bytes.extend_from_slice(
+        &u16::try_from(level)
+            .expect("fixture level fits wire field")
+            .to_le_bytes(),
+    );
+    bytes.extend_from_slice(&[
+        u8::try_from(components).expect("two or three fixture components"),
+        u8::try_from(precision).expect("fixture effective precision one or two"),
+    ]);
     for index in 0..profile.noise_bound_words() {
         bytes.extend_from_slice(&u64::from(index == 0).to_le_bytes());
     }

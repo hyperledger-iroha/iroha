@@ -46,7 +46,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::{chain::ChainId, metadata::Metadata, peer::PeerId};
 use iroha_test_network::{
-    DisposableGenesisConfigSeat, NativeGenesisProvisioningBundle,
+    DisposableGenesisConfigSeat, NativeGenesisProvisioningBundle, resolve_development_binary,
     run_disposable_genesis_dkg_from_configs,
 };
 use iroha_version::codec::DecodeVersioned as _;
@@ -1102,13 +1102,14 @@ async fn run(args: Args) -> Result<()> {
             block_hash: args.binding.network_id.into_genesis_hash(),
             chain_discriminant: args.binding.chain_discriminant,
         };
+        let native_binary = resolve_development_binary(&args.binding.daemon)?;
         let dkg = run_disposable_genesis_dkg_from_configs(
             bundle,
             args.binding.network_id,
             &args.binding.chain_id,
             &seats,
             iroha_test_network::GenesisDkgRunConfig {
-                native_binary: &args.binding.daemon,
+                native_binary: &native_binary,
                 limits: limits(),
                 certificate_height: 5,
             },

@@ -19,7 +19,9 @@ fn unhex(value: &Value) -> Vec<u8> {
     let text = value.as_str().expect("hexadecimal fixture");
     assert_eq!(text.len() % 2, 0);
     text.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let pair = std::str::from_utf8(pair).expect("ASCII hexadecimal");
             u8::from_str_radix(pair, 16).expect("hexadecimal byte")

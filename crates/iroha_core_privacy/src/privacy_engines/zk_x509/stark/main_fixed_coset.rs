@@ -137,7 +137,7 @@ impl<'a> MainFixedCosetV1<'a> {
             || prefix
                 .iter()
                 .zip(&self.columns.0)
-                .any(|(original, column)| &**original != column.as_slice())
+                .any(|(original, column)| **original != column.as_slice())
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }

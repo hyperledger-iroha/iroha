@@ -1,4 +1,7 @@
 //! Executor authorization, execution and custody regression tests.
+#[path = "executor_custody_tests.rs"]
+mod custody_upgrade;
+
 use super::*;
 use crate::{
     kura::Kura,
@@ -887,7 +890,10 @@ fn borrowed_instruction_validator_payload_has_exact_canonical_owned_wire() {
         context: context(),
         target: norito::core::PayloadRef(&instruction),
     };
-    assert!(std::ptr::eq(&*borrowed.target, &instruction));
+    assert!(std::ptr::eq(
+        &raw const *borrowed.target,
+        &raw const instruction
+    ));
     let owned = ValidatePayload {
         context: context(),
         target: instruction.clone(),
@@ -2572,7 +2578,7 @@ fn initial_executor_admits_the_complete_kaigi_surface() {
         RegisterKaigiRelay {
             relay: KaigiRelayRegistration {
                 relay_id: relay.clone(),
-                hpke_public_key: vec![1],
+                hpke_public_key: crate::smartcontracts::isi::kaigi::test_relay_hpke_key(1),
                 bandwidth_class: 1,
             },
         }
@@ -3834,9 +3840,10 @@ fn initial_executor_routes_native_privacy_corridor_to_core() {
     use iroha_data_model::{
         isi::privacy::SubmitPrivacyProofV1,
         privacy::{
-            IrohaJindoPolynomialCommitmentStatementV1, PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyProofBytesV1,
-            PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1,
-            PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+            IrohaJindoPolynomialCommitmentStatementV1, PrivacyJindoFieldElementV1,
+            PrivacyJindoLatticeCommitmentV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+            PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1, PrivacyStatementV1,
+            PrivacyTransactionIntentDigestV1,
         },
     };
 
@@ -4293,7 +4300,7 @@ fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorizati
     use iroha_data_model::governance::types::{AbiVersion, ContractAbiHash, ContractCodeHash};
     use iroha_data_model::isi::governance as gov;
     use iroha_executor_data_model::permission::governance::{
-        CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRestituteGovernanceLock,
+        CanProposeContractDeployment, CanProposeRuntimeChangeSet, CanRestituteGovernanceLock,
         CanSlashGovernanceLock, CanSubmitGovernanceBallot,
     };
     let authority = checked_account_id();
@@ -4308,19 +4315,10 @@ fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorizati
         ContractAddress::derive(&network_id, &authority, 2, DataSpaceId::UNIVERSAL)
             .expect("second canonical contract address");
     let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-    let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
-        name: "initial-executor-exact-scope".to_owned(),
-        description: "governance admission regression".to_owned(),
-        abi_version: 1,
-        abi_hash,
-        added_syscalls: Vec::new(),
-        added_pointer_types: Vec::new(),
-        start_height: 10,
-        end_height: 10,
-        sbom_digests: Vec::new(),
-        slsa_attestation: Vec::new(),
-        provenance: Vec::new(),
-    };
+    // A change set of another network passes authorization and fails Core admission.
+    let foreign_network = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(Hash::prehashed([0xEE; 32])),
+    );
     let referendum_id = "exact-governance-scope".to_owned();
     let probes: Vec<(InstructionBox, &str, &str)> = vec![
         (
@@ -4336,9 +4334,13 @@ fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorizati
             "abi_version must be exactly 1",
         ),
         (
-            gov::ProposeRuntimeUpgradeProposal { manifest }.into(),
-            "CanProposeRuntimeUpgrade",
-            "runtime upgrade window",
+            gov::ProposeRuntimeUpgradeProposal {
+                action: crate::runtime::change_set::test_support::schedule(foreign_network, 100),
+                provenance: Vec::new(),
+            }
+            .into(),
+            "CanProposeRuntimeChangeSet",
+            "the change set belongs to another network",
         ),
         (
             gov::CastZkBallot {
@@ -4387,10 +4389,6 @@ fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorizati
             Permission::from(CanProposeContractDeployment {
                 contract_address: other_contract_address,
             }),
-            Permission::from(CanProposeRuntimeUpgrade {
-                abi_version: 1,
-                abi_hash: [0xFF; 32],
-            }),
             Permission::from(CanSubmitGovernanceBallot {
                 referendum_id: "other-governance-scope".to_owned(),
             }),
@@ -4417,14 +4415,18 @@ fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorizati
         0,
     ));
     let mut state_transaction = block.transaction();
+    crate::runtime::change_set::test_support::commit_policy(
+        &mut state_transaction,
+        &crate::runtime::change_set::test_support::short_policy(1),
+    );
     for (instruction, permission_name, _) in &probes {
         let error = super::Executor::Initial
             .execute_instruction(&mut state_transaction, &authority, instruction.clone())
             .expect_err("an adjacent governance scope must fail closed");
         assert!(
             format!("{error:?}").contains(&format!("exact {permission_name} target"))
-                || (*permission_name == "CanProposeRuntimeUpgrade"
-                    && format!("{error:?}").contains("exact CanProposeRuntimeUpgrade ABI target")),
+                || (*permission_name == "CanProposeRuntimeChangeSet"
+                    && format!("{error:?}").contains("CanProposeRuntimeChangeSet required")),
             "unexpected wrong-scope {permission_name} rejection: {error:?}"
         );
     }
@@ -4466,10 +4468,7 @@ fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorizati
         authority.clone(),
         BTreeSet::from([
             Permission::from(CanProposeContractDeployment { contract_address }),
-            Permission::from(CanProposeRuntimeUpgrade {
-                abi_version: 1,
-                abi_hash,
-            }),
+            Permission::from(CanProposeRuntimeChangeSet),
             Permission::from(CanSubmitGovernanceBallot {
                 referendum_id: referendum_id.clone(),
             }),
@@ -4781,11 +4780,7 @@ fn initial_executor_enforces_capability_roots_for_every_scoped_permission() {
         }
         .into();
     let runtime_proposal_permission: Permission =
-        executor_permission::governance::CanProposeRuntimeUpgrade {
-            abi_version: 1,
-            abi_hash: [0xA5; 32],
-        }
-        .into();
+        executor_permission::governance::CanProposeRuntimeChangeSet.into();
     let ballot_permission: Permission =
         executor_permission::governance::CanSubmitGovernanceBallot {
             referendum_id: "grant-policy-referendum".to_owned(),
@@ -5214,7 +5209,7 @@ fn initial_executor_enforces_capability_roots_for_every_scoped_permission() {
             false,
         ),
         (
-            "CanProposeRuntimeUpgrade",
+            "CanProposeRuntimeChangeSet",
             runtime_proposal_permission,
             false,
         ),
@@ -5234,7 +5229,6 @@ fn initial_executor_enforces_capability_roots_for_every_scoped_permission() {
     );
     for name in [
         "CanProposeContractDeployment",
-        "CanProposeRuntimeUpgrade",
         "CanSubmitGovernanceBallot",
         "CanSlashGovernanceLock",
         "CanRestituteGovernanceLock",
@@ -5454,13 +5448,13 @@ fn initial_executor_rejects_noncanonical_governance_permission_selectors_before_
 #[test]
 fn initial_executor_requires_canonical_operational_governance_unit_permissions() {
     use iroha_executor_data_model::permission::governance::{
-        CanManageConfidentialParams, CanManageConsensusKeys, CanManageRuntimeUpgrades,
+        CanManageConfidentialParams, CanManageConsensusKeys, CanProposeRuntimeChangeSet,
     };
 
     let authority = checked_account_id();
     let destination = checked_account_id();
     let canonical_permissions = vec![
-        Permission::from(CanManageRuntimeUpgrades),
+        Permission::from(CanProposeRuntimeChangeSet),
         Permission::from(CanManageConsensusKeys),
         Permission::from(CanManageConfidentialParams),
     ];
@@ -15338,7 +15332,7 @@ fn execution_fee_settlement_refuses_equal_value_from_a_different_predecessor() {
         0,
     );
     let settlement = {
-        let mut block = state.block(header.clone());
+        let mut block = state.block(header);
         let mut execution =
             block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
         execution.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);

@@ -680,10 +680,7 @@ impl GovernanceRules {
             if validators.is_empty() {
                 return Err("validator quorum requires an explicit validator set".into());
             }
-            if usize::try_from(q)
-                .ok()
-                .is_some_and(|q_usize| q_usize > validators.len())
-            {
+            if usize::try_from(q).is_ok_and(|q_usize| q_usize > validators.len()) {
                 return Err(format!(
                     "validator quorum {q} exceeds validator set size {} for lane `{alias}`",
                     validators.len()

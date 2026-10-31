@@ -1,163 +1,424 @@
-# Runtime Upgrades (IVM + Host) — No-Downtime, No-Hardfork
+# Runtime change sets — as built
 
-This document specifies a deterministic, governance-controlled mechanism to roll out runtime upgrades without stopping the network or hard-forking nodes. Nodes roll out binaries in advance; activation is coordinated on-chain within a bounded height window. Old contracts continue to run unchanged; the host ABI surface stays fixed at v1.
+Status: as built, 2026-10-31. [`live_runtime_upgrades.md`](live_runtime_upgrades.md) is the
+design; this document records the implemented surface of its change-set lifecycle (§6) for the
+universal root. The ABI-v1 manifest records, their `ProposeRuntimeUpgrade`,
+`ActivateRuntimeUpgrade` and `CancelRuntimeUpgrade` instructions, the
+`CanProposeRuntimeUpgrade` and `CanManageRuntimeUpgrades` permissions, the
+`world.runtime_upgrades` table, and the `governance.runtime_upgrade_provenance` node configuration
+and its admission check are deleted.
 
-Note (first release): ABI v1 is fixed and no ABI version bumps are planned. Runtime upgrade manifests must set `abi_version = 1`, and `added_syscalls`/`added_pointer_types` must be empty.
+## Model
 
-Goals
-- Deterministic activation at a scheduled height window with idempotent application.
-- Preserve ABI v1 stability; runtime upgrades do not change the host ABI surface.
-- Admission and execution guardrails so pre‑activation payloads cannot enable new behavior.
-- Operator‑friendly rollout with capability visibility and clear failure modes.
+- A World is founded on the release's baseline selection (`iroha_core::runtime::catalog`,
+  pinned in [`runtime_baseline_catalog.json`](runtime_baseline_catalog.json)).
+  `world.runtime_definitions` holds the published definitions and `world.runtime_selection` the
+  one `RootSelectionV1` the universal root executes. Every instruction resolves against that
+  selection; an unbound wire ID or a restricted definition fails with a stable
+  `RuntimeRejectionV1`.
+- A `ChangeSetV1` (`iroha_data_model::runtime::lifecycle`) moves the root from its `predecessor`
+  selection to its declared, closed `successor` at `effective_height`, publishing new definitions
+  and applying ordered `SelectionTransitionV1`s. Its identity is the domain-separated hash of its
+  canonical bytes.
+- `world.runtime_change_sets` keeps one `ChangeSetRecordV1` per change set: the change set, its
+  status (`Scheduled`, `Activated(h)`, `Lapsed(h)`, `Cancelled(h)`), the notice frozen at proposal,
+  proposal and approval times, and the latest `SignedSupportAttestationV1` of each validator.
 
-Non‑Goals
-- Changing `abi_version` away from `1` or expanding syscall/pointer-type surfaces is out of scope for this release.
-- Changing existing syscall numbers or pointer-type IDs (forbidden).
-- Live patching nodes without deploying updated binaries.
+## Lifecycle
 
-Definitions
-- ABI Version: Small integer declared in `ProgramMetadata.abi_version`. In the first release, this is fixed to `1` and always selects the canonical v1 syscall/pointer surface.
-- ABI Hash: Deterministic digest of the complete ABI surface for a given version: syscall list (numbers+shapes), pointer-type IDs/allowlist, policy flags, numeric domains/rules/JSON/fault ordering, and typed durable-state wire identities/caps; computed by `ivm::syscalls::compute_abi_hash`. Descriptor-format hardening during the first release changes the canonical V1 hash without introducing ABI v2; stale hashes are rejected.
-- Syscall Policy: The fixed first-release host allowlist for ABI v1.
-- Activation Window: Half‑open block‑height interval `[start, end)` in which activation is valid exactly once at `start`.
+1. **Propose.** `ProposeRuntimeUpgradeProposal { action: RuntimeUpgradeActionV1, provenance }`
+   submits `Schedule(change_set)` or `Cancel(id)` to SORA Parliament. It needs the unit permission
+   `CanProposeRuntimeChangeSet`. Admission reads the committed policy
+   `runtime_upgrade_policy_v1` (`RuntimeUpgradePolicyV1`); a root without it admits no change set.
+   `provenance` holds the release signers' endorsements the committed provenance policy requires
+   (below).
+   A change set must name this network and the universal root (data-space roots are a TODO of
+   §11), give the policy's block notice (the disable notice if it restricts, deactivates, unbinds
+   or retires anything) and apply to the selection that scheduled change sets will leave at its
+   height. The notice in force is frozen into the proposal with its committed time.
+2. **Approve.** When Parliament enacts the proposal, the change set is admitted again against the
+   current selection and recorded `Scheduled` (event `RuntimeUpgradeEvent::Scheduled`), or the
+   scheduled record is `Cancelled` (`Canceled`).
+3. **Attest.** `AttestRuntimeSupportV1 { attestation }` records one validator's signed support:
+   the change set, its predecessor and successor, network, root, the digest of the current
+   committee as a set of keys, the tested checkpoint, a validity interval and the release digest.
+   The signer must be a current committee member; a newer attestation replaces the validator's
+   earlier one (`Attested`). The node decides support, not its operator
+   (`iroha_core::runtime::attestation`): it resolves the successor the change set produces from
+   committed State, refuses unless its release implements every definition that selection relies
+   on and its key is a committee member, and signs with its own validator key, which never leaves
+   it. The attestation counts exactly at the effective height and binds the release digest,
+   `H(RELEASE_DOMAIN ‖ build status ‖ every definition the release implements)`. Until checkpoints
+   exist, its tested checkpoint is the committed height whose State the node resolved the
+   successor against.
+4. **Activate or lapse.** At the start of the effective height, before ordinary execution, a
+   scheduled change set activates only if every committee member attested for this committee, the
+   attestations count at that height, the committed block time satisfies the frozen notice and it
+   still applies to the current selection. Otherwise it lapses and never applies (`Activated`,
+   `Lapsed`). Change sets due at one height apply in identity order.
+5. **Stop the unsupported.** If the resulting selection names a definition this release does not
+   implement, block start fails with `StateStorageAdmissionError::UnsupportedRuntime`, which
+   consensus classifies as recovery-required: the node halts with
+   `PublicationRecoveryRequired(height)` before judging the block (served by
+   `/v1/sumeragi/status` and `sumeragi_halted{reason="publication_recovery_required"}`; the halt
+   reason names the selection and the first definition the release lacks) and resumes once a
+   release that executes the selection replaces it. `GET /v1/runtime/release` reports the same
+   before the boundary: for the committed selection and the successor of each scheduled change
+   set, whether this release executes it and, if not, the definition it lacks.
 
-State Objects (Data Model)
-<!-- BEGIN RUNTIME UPGRADE TYPES -->
-- `RuntimeUpgradeId`: Blake2b-256 of the canonical Norito bytes for a manifest.
-- `RuntimeUpgradeManifest` fields:
-  - `name: String` — human-readable label.
-  - `description: String` — short description for operators.
-  - `abi_version: u16` — target ABI version to activate (must be 1 in the first release).
-  - `abi_hash: [u8; 32]` — canonical ABI hash for the target policy.
-  - `added_syscalls: Vec<u16>` — reserved delta list; must be empty in the first release.
-  - `added_pointer_types: Vec<u16>` — reserved delta list; must be empty in the first release.
-  - `start_height: u64` — first block height where activation is permitted.
-  - `end_height: u64` — exclusive upper bound on the activation window.
-  - `sbom_digests: Vec<RuntimeUpgradeSbomDigest>` — SBOM digests for upgrade artefacts.
-  - `slsa_attestation: Vec<u8>` — raw SLSA attestation bytes (base64 in JSON).
-  - `provenance: Vec<ManifestProvenance>` — signatures over the canonical payload.
-- `RuntimeUpgradeRecord` fields:
-  - `manifest: RuntimeUpgradeManifest` — canonical proposal payload.
-  - `status: RuntimeUpgradeStatus` — proposal lifecycle state.
-  - `proposer: AccountId` — authority that submitted the proposal.
-  - `created_height: u64` — block height where the proposal entered the ledger.
-- `RuntimeUpgradeSbomDigest` fields:
-  - `algorithm: String` — digest algorithm identifier.
-  - `digest: Vec<u8>` — raw digest bytes (base64 in JSON).
-<!-- END RUNTIME UPGRADE TYPES -->
-  - Invariants: `end_height > start_height`; `abi_version` must be `1`; `abi_hash` must equal `ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)`; `added_*` must be empty; existing numbers/IDs MUST NOT be removed or renumbered.
+IVM admission accepts a contract only when its ABI hash is one of the host profiles the committed
+selection activates.
 
-Storage Layout
-- `world.runtime_upgrades`: MVCC map keyed by `RuntimeUpgradeId.0` (raw 32-byte hash) with values encoded as canonical Norito `RuntimeUpgradeRecord` payloads. Entries persist across blocks; commits are idempotent and replay-safe.
+## Release additions
 
-Instructions (ISI)
-- ProposeRuntimeUpgrade { manifest: RuntimeUpgradeManifest }
-  - Effects: Insert `RuntimeUpgradeRecord { status: Proposed }` keyed by `RuntimeUpgradeId` if not present.
-  - Reject if window overlaps any other Proposed/Activated record or if invariants fail.
-  - Idempotent: re-submitting the same canonical manifest bytes is a no-op.
-  - Canonical encoding: manifest bytes must match `RuntimeUpgradeManifest::canonical_bytes()`; non-canonical encodings are rejected.
-- ActivateRuntimeUpgrade { id: RuntimeUpgradeId }
-  - Preconditions: A matching Proposed record exists; `current_height` must equal `manifest.start_height`; `current_height < manifest.end_height`.
-  - Effects: Flip record to `ActivatedAt(current_height)`; active ABI set remains `{1}` in the first release.
-  - Idempotent: Replays at the same height are no‑ops; other heights are rejected deterministically.
-- CancelRuntimeUpgrade { id: RuntimeUpgradeId }
-  - Preconditions: Status is Proposed and `current_height < manifest.start_height`.
-  - Effects: Flip to `Canceled`.
+Once a network installs the baseline it executes it unchanged, so a release adds instructions and
+World fields after it (design §4, "Add an instruction", "Add storage"):
 
-Events (Data Events)
-- RuntimeUpgradeEvent::{Proposed { id, manifest }, Activated { id, abi_version, at_height }, Canceled { id }}
+- **Declaration.** `iroha_core::runtime::catalog::additions::ADDITIONS` lists each addition: a
+  native module, the wire IDs it adds, the earlier wire IDs it rebinds and the World tables and
+  cells it adds (a cell with the canonical bytes of its initial value and the installer that writes
+  them). The baseline is everything compiled that no addition claims. The pinned inventory
+  (`runtime_baseline_catalog.json`) lists only the baseline, so a new instruction or field fails it
+  until it is declared.
+- **Definitions.** Each addition publishes one native implementation, one interface per wire ID it
+  adds and one storage definition per field; a cell's definition carries its initial bytes. Like
+  the baseline bundle it declares a conservative superset of dependencies, every storage definition
+  and interface of the baseline and of the additions before it, so additions activate in
+  declaration order. The catalog publishes them without installing or activating anything.
+- **Activation.** `ReleaseCatalog::activation(module, current, published, network, height,
+  qualification)` drafts the change set that moves a root to an addition: it publishes the
+  definitions the root lacks, installs the addition's storage, activates its interfaces and
+  implementation and binds its wire IDs and rebinds to it. Until it activates, every release
+  rejects an added wire ID as `definition_inactive`, and a release without the addition stops
+  before the effective height.
+- **Dispatch.** Execution runs the implementation the selection binds: `runtime::resolve`
+  returns it, an addition that rebinds a wire ID answers it with its own handler
+  (`ADDITION_HANDLERS` in `smartcontracts/isi/mod.rs`, required for every rebind), and every
+  other implementation runs the instruction type's native handler.
+- **Storage installation.** Installing a table starts it empty. Installing a cell writes the
+  initial bytes its published definition declares through the installer of the release that adds
+  it; a node whose release lacks the storage stops at block start like any unsupported node. The
+  World root commits installed storage from its installation height.
 
-Admission Rules
-- Contract Admission: Only `ProgramMetadata.abi_version = 1` is accepted in the first release; other values are rejected with `IvmAdmissionError::UnsupportedAbiVersion`.
-  - For ABI v1 payloads, recompute `abi_hash(1)` and require equality with payload/manifest when provided; mismatches reject with `IvmAdmissionError::ManifestAbiHashMismatch`.
-- Transaction Admission: The governance wrapper
-  `ProposeRuntimeUpgradeProposal` requires the exact typed
-  `CanProposeRuntimeUpgrade { abi_version, abi_hash }` capability matching its
-  manifest. The low-level `ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, and
-  `CancelRuntimeUpgrade` instructions require the exact canonical typed unit
-  capability `CanManageRuntimeUpgrades`; a same-name token with any other JSON
-  payload is rejected. Runtime-upgrade instructions must also satisfy the
-  manifest's `start_height`/`end_height` activation window and overlap
-  constraints; `ProposeRuntimeUpgradeProposal` has no caller-selected
-  referendum window or voting mode.
+TODO(§5.5): snapshot writers omit, and readers default, fields their selection does not install.
+The first release that adds a World field needs this so that a previous release can still read
+its snapshots before activation; this release adds none, so its strict reader is unchanged.
 
-Provenance Enforcement
-- Runtime-upgrade manifests may carry SBOM digests (`sbom_digests`), SLSA attestation bytes (`slsa_attestation`), and signer metadata (`provenance` signatures). Signatures cover the canonical `RuntimeUpgradeManifestSignaturePayload` (all manifest fields except the `provenance` signatures list).
-- Governance configuration controls enforcement under `governance.runtime_upgrade_provenance`:
-  - `mode`: `optional` (accept missing provenance, verify if present) or `required` (reject if provenance is absent).
-  - `require_sbom`: when `true`, at least one SBOM digest is required.
-  - `require_slsa`: when `true`, a non-empty SLSA attestation is required.
-  - `trusted_signers`: list of approved signer public keys.
-  - `signature_threshold`: minimum number of trusted signatures required.
-- Provenance rejections surface stable error codes in instruction failures (prefix `runtime_upgrade_provenance:`):
-  - `missing_provenance`, `missing_sbom`, `invalid_sbom_digest`, `missing_slsa_attestation`
-  - `missing_signatures`, `invalid_signature`, `untrusted_signer`, `signature_threshold_not_met`
-- Telemetry: `runtime_upgrade_provenance_rejections_total{reason}` counts provenance rejection reasons.
+## Envelopes
 
-Execution Rules
-- VM Host Policy: During program execution, only `ProgramMetadata.abi_version = 1` is valid, and the host enforces the canonical ABI v1 syscall surface. Unknown syscalls map to `VMError::UnknownSyscall`.
-- Pointer‑ABI: The host enforces the canonical ABI v1 pointer-type allowlist; non-v1 ABI annotations fail closed during pointer decode/validation.
-- Host Switching: Each block recomputes the active ABI set; in the first release this remains `{1}`, but activation is still recorded and is idempotent (validated by `runtime_upgrade_admission::activation_allows_v1_in_same_block`).
-  - Syscall policy binding: `CoreHost` enforces `ivm::syscalls::is_syscall_allowed`/`is_type_allowed_for_policy` against the fixed v1 `SyscallPolicy`. The host reuses the transaction-scoped VM instance, so mid-block activations are safe—later transactions observe the updated active-upgrade record while earlier ones continue with the same v1 policy.
+Every release decodes the same bytes alike and stops at the same envelope (design §5.2):
 
-Determinism & Safety Invariants
-- Activation occurs only at `start_height` and is idempotent; reorgs below `start_height` deterministically re‑apply once the block re‑lands.
-- Active ABI set is fixed to `{1}` in the first release.
-- No dynamic negotiation influences consensus or execution order; capability gossip is informational only.
+- **Opaque envelopes.** Every `InstructionBox` decoder goes through
+  `isi::decode_instruction_envelope`. A wire ID the release registers decodes into its typed
+  instruction; any other well-formed wire ID (`isi::is_well_formed_wire_id`: the interface wire-ID
+  rule, at most 192 bytes of ASCII letters, digits and `. _ : - @ /`) decodes into an
+  `OpaqueInstructionV1` that keeps the exact frame and re-encodes as the same pair, so hashes and
+  signatures do not depend on the release. A wire ID breaking the rule, and malformed pair framing,
+  stay decode errors. `isi::decode_instruction_from_pair` remains the strict typed decoder for
+  clients. Signed attachment actions name wire IDs under the same rule, never by registration.
+- **Tolerant registration.** An addition's instructions register with
+  `built_in_wire_id!(T => "id", tolerant)`: a frame that is not the canonical frame of a payload
+  the decoder accepts (invalid bytes or the decoder's own protocol limits) yields the opaque
+  envelope an earlier release keeps, never a decode error; a local refusal (allocator failure or
+  the caller's enclosing decode budget) stays an error. Baseline instructions register strictly.
+- **Validation.** Before any instruction-dependent step (admission, fees, policies, scope),
+  transaction validation refuses the transaction at its first top-level envelope (instructions and
+  batch instruction items, in order) that execution can never apply: an unbound wire ID
+  (`definition_inactive`), or a bound envelope the release kept opaque (`malformed_payload`, after
+  its restrictions), committed exactly as execution commits it (`runtime::envelope`). A decoded
+  envelope's restrictions stay with execution and its obligation context. Queue admission refuses
+  such a transaction against the committed selection (`queue::Error::RuntimeRejected`, Torii code
+  `definition_inactive` or `malformed_payload`). Envelopes emitted during execution (contracts,
+  triggers, approved proposals) get the same refusals when they execute, before any executor's
+  own admission.
 
-Operator Rollout (No Downtime)
-1) Deploy a node binary that includes the new runtime artifact while keeping ABI v1.
-2) Observe fleet readiness via telemetry.
-3) Submit `ProposeRuntimeUpgrade` with a window sufficiently ahead (e.g., `H+N`).
-4) At `start_height`, `ActivateRuntimeUpgrade` executes as part of the included block and records activation; ABI remains v1.
+## Emergency containment
 
-Torii & CLI
-- Torii
-  - `GET /v1/runtime/abi/active` → `{ abi_version: u16 }` (implemented)
-  - `GET /v1/runtime/abi/hash` → `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implemented)
-  - `GET /v1/runtime/upgrades` → list of records (implemented).
-  - `POST /v1/runtime/upgrades/propose` → wraps `ProposeRuntimeUpgrade` (returns instruction skeleton; implemented).
-  - `POST /v1/runtime/upgrades/activate/:id` → wraps `ActivateRuntimeUpgrade` (returns instruction skeleton; implemented).
-  - `POST /v1/runtime/upgrades/cancel/:id` → wraps `CancelRuntimeUpgrade` (returns instruction skeleton; implemented).
-- CLI
-  - `iroha runtime abi active` (implemented)
-  - `iroha runtime abi hash` (implemented)
-  - `iroha runtime upgrade list` (implemented)
-  - `iroha runtime upgrade propose --file <manifest.json>` (implemented)
-  - `iroha runtime upgrade activate --id <id>` (implemented)
-  - `iroha runtime upgrade cancel --id <id>` (implemented)
+`ContainRuntimeV1 { containment, endorsements }` lets the runtime emergency panel restrict
+definitions without waiting for Parliament (design §7.1). The committed parameter
+`runtime_emergency_panel_v1` (`RuntimeEmergencyPanelV1`) holds the sorted, disjoint primary and
+backup members, the threshold (at least two thirds of each panel), the term end and the lease
+bounds; a root without it admits no containment. Any account may submit; Core requires the
+threshold of distinct members of one panel to have endorsed the `ContainmentV1` identity within
+30 minutes before the block's committed time, the term to be running, the lease to lie within the
+bounds and the containment to name this network and the universal root.
 
-Core Query API
-- Norito singular query (signed):
-  - `FindAbiVersion` returns a Norito-encoded struct `{ abi_version: u16 }`.
-  - See sample: `specs/samples/find_active_abi_versions.md` (type/fields and JSON example).
+- **Effect.** Every target is an active interface or implementation that answers no governance
+  (`iroha.instruction.v1::governance::*`), parameter (`iroha.set_parameter`) or lifecycle
+  (`iroha.runtime.*`) wire ID. From the next height it is `AdmissionClosed` (or `CompletionOnly`),
+  unless already restricted at least as much. The `ContainmentRecordV1` in
+  `world.runtime_containments` records each restriction it replaced (`Contained`).
+- **Ratification case.** Each containment opens a case that ordinary governance closes with change
+  sets. When Parliament admits or approves a change set that addresses a contained definition (it
+  activates, deactivates, restricts or lifts it, or binds or unbinds a wire ID behind it), the
+  record's `review` notes that change set and height (`ContainmentReviewed`). When the change sets
+  activating at a height take over every restriction the containment held, it becomes `Resolved`
+  (`ContainmentResolved`). A change set approved before the incident names the selection that
+  containment replaced, so it no longer applies and cannot undo it.
+- **Renewal.** A containment of the same incident, targets and kind, with fresh endorsements, takes
+  the lease over once half of it has passed, and only with review progress recorded since the
+  containment it renews; the old record becomes `Renewed` and the new one carries the progress
+  over.
+- **Expiry.** At block start, after the height's change sets, a containment whose lease ended
+  restores every restriction it still holds and becomes `Expired` (`ContainmentExpired`). A
+  restriction governance changed in the meantime is no longer held, so ratification, repair or a
+  lift through an ordinary change set is never undone.
 
-Implementation Notes (v1-only)
-- iroha_data_model
-  - Add `RuntimeUpgradeManifest`, `RuntimeUpgradeRecord`, instruction enums, events, and JSON/Norito codecs with roundtrip tests.
-- iroha_core
-  - WSV: add `runtime_upgrades` registry with overlap checks and getters.
-  - Executors: implement ISI handlers; emit events; enforce admission rules.
-  - Admission: gate program manifests by `abi_version` activity and `abi_hash` equality.
-  - Syscall policy mapping: thread active ABI set to the VM host constructor; ensure determinism by using block height at execution start.
-  - Tests: activation window idempotency, overlap rejections, pre/post admission behavior.
-- ivm
-  - ABI surface is fixed to v1; syscall lists and ABI hashes are pinned by golden tests.
-- iroha_cli / iroha_torii
-  - Add endpoints and commands listed above; Norito JSON helpers for manifests; basic integration tests.
-- Kotodama compiler
-  - Emit `abi_version = 1` and embed the canonical v1 `abi_hash` in `.to` manifests.
+CLI: `iroha runtime contain list` reads the records; `iroha runtime contain endorse --file
+<containment.json> --member-key-file <path>
+[--at-ms <ms>]` prints one member's `EndorsementV1`; `iroha runtime contain submit --file
+<containment.json> --endorsement <file>...` submits them.
 
-Telemetry
-- Add `runtime.abi_version` gauge and `runtime.upgrade_events_total{kind}` counter.
+## Obligations
 
-Security Considerations
-- Only root/sudo may propose/activate/cancel; manifests must be signed appropriately.
-- Activation windows prevent front‑running and ensure deterministic application.
-- `abi_hash` pins the interface surface to prevent silent drift across binaries.
+Two kinds of committed State are obligations (design §7.2, `iroha_core::runtime::obligations`);
+each committed record is its registration:
 
-Acceptance Criteria (Conformance)
-- Nodes deterministically reject code with `abi_version != 1` at all times.
-- Runtime upgrades do not change ABI policy; existing programs continue to run unchanged with v1.
-- Golden tests for ABI hashes and syscall lists pass across x86-64/ARM64.
-- Activation is idempotent and safe under reorgs.
+- a live asset escrow or lock (status `Open`, `Accepted`, `PaymentSent`, `Disputed` or `Locked`)
+  in `world.asset_escrows`;
+- a live AMX participation (`sumeragi.md` §11): on the global chain, a transaction of
+  `world.sumeragi_amx` whose `Begin` is recorded and that is not decided; on a participant root,
+  an escrow in `world.sumeragi_amx_participant` of a `Yes` vote that no decision has settled. A
+  `No` vote escrows nothing and is not live.
+
+A restriction never removes their settlement authority:
+
+- **Dispatch.** While a definition behind an instruction has admission closed, the instructions
+  that continue or complete a live obligation still run; while it is completion-only, only the
+  completions run. Starting new work runs under neither, and disabling stops every instruction.
+  Accepting an escrow's offer continues it; marking payment sent, releasing, cancelling, opening
+  or resolving a dispute, attesting a condition, drawing down and expiring (with the
+  controlled-lock forms) complete it; opening custody is new work. On the global chain, relaying a
+  `Prepared` proof or expiring completes an undecided transaction, and relaying a participant's
+  handoff completes the undecided transactions it takes part in. On a participant, settling
+  completes its unsettled escrow of the decided transaction, and relaying a global handoff, which
+  a decision certified in a later global epoch needs, completes its unsettled escrows. Registering,
+  beginning and preparing are new work: a participant cannot tie a `Prepare` to an admitted
+  transaction before verifying its proof, and refusing one strands nothing, because the global
+  chain aborts by the deadline and the `Yes` voters settle that abort. The deadline step is a
+  block hook, not an instruction.
+- **Activation.** A change set whose successor changes an original binding of a live obligation's
+  completions or of their transitive declared calls (rebinding, unbinding or newly binding it), or
+  stops executing a required definition the predecessor executes (its storage, the kernel, the
+  commitment or services profile, and for escrows the host profiles, since controlled locks invoke
+  contracts), lapses at its effective height. AMX completions are native and retain no host
+  profile. A binding the predecessor already leaves out, or a definition it already disables, is
+  no part of the executable closure: keeping it so blocks no change set, and lifting such a
+  restriction restores the same code. The baseline bundle conservatively declares all its native
+  callees. Keeping a replacement active does not transfer the original obligation to it. Until
+  captured completion capabilities exist, rebinding those dependencies requires draining the
+  obligations first: closing admission to new escrows, `Begin` and `Prepare`, then completing
+  what is live.
+- **Closure.** A selection's completion closure may name the kernel and the commitment and
+  services profiles besides active and installed definitions, but no disabled one
+  (`SelectionError::ObligationStranded`). A restriction targets only an active or installed
+  definition; the kernel and profiles are replaced, never restricted.
+- **Executor replacement.** `Executor::migrate` refuses while any obligation remains live (an
+  escrow or lock, an undecided AMX transaction or an unsettled AMX escrow), before loading code or
+  running migration effects. This includes identical-code migrations, which can still change
+  permissions or State. Replacing the authorization component requires drained obligations until
+  captured completion authority or a certified transfer is implemented.
+- **Every execution path.** Resolution, with restrictions and the obligation an instruction acts
+  on, runs before any check that depends on what the instruction is, on every path that executes
+  one: the native dispatch table and the controlled-lock, linked-FI and multisig paths that bypass
+  it. A containment therefore holds whichever path runs an instruction.
+
+## Deferred consent
+
+`iroha_core::runtime::expectation` captures the resolved bindings and their transitive immutable
+definitions, including the kernel, commitment, services and host profiles. Cyclic calls are visited
+once. A domain-separated canonical digest of this closure and the exact installed executor code
+is committed with each deferred action; loaded runtime caches do not enter it:
+
+- A multisig proposal occurrence owns its digest under `multisig/proposal-expectation/`. Approval
+  checks it before recording a vote or executing. Changed semantics require a fresh proposal nonce
+  and new approvals; the old occurrence can still be cancelled or expire. Pruning removes both
+  records. Raw contract storage cannot access the native `multisig/` namespace.
+- Trigger registration commits the digest in reserved `__runtime_expectation_v1` metadata. A
+  caller cannot supply, replace or remove it. Data callbacks with changed or restricted semantics
+  skip the matched event without rejecting its originating transaction or consuming a repetition.
+  By-call execution rejects before effects; Time and Pipeline execution keep their existing
+  persistent retry, exhaustion and quarantine policies. Restoring semantics never replays an event
+  skipped during suspension.
+- Restrictions are checked independently of the digest. Local codec/resource refusals retain the
+  execution deferral; they are not a reason to skip a callback or commit a rejection.
+
+The baseline native implementation declares a conservative superset of callees, so one native
+capture can include the entire baseline. Opaque IVM, contract-call and custom-instruction captures
+cover the complete callable binding set; expanding that surface requires renewed consent too.
+Explicitly following current bindings and narrower authenticated dynamic-call manifests remain
+unimplemented.
+
+Migration cursors and contract-created obligations still need kernel registration. Escrows and AMX
+participations do not yet retain a captured completion capability that dispatch honors after a
+rebinding. These protections do not close the whole obligation lifecycle of design §7.2.
+
+Persisted pending proposals and triggers require their original capture. There is no restore-time
+fallback that manufactures consent from the current selection. A predecessor snapshot containing
+uncaptured deferred work cannot be imported unchanged: adoption must explicitly certify its
+preserved context or first drain/cancel that work. This is a populated-State acceptance change even
+though no World table was added, and is not an encoding-neutral live deployment.
+
+## Unsupported transition effects
+
+The shared successor resolver rejects storage retirement, activation of migration definitions and
+manual retention/release of completion capabilities: the cursor, write-barrier, cutover and kernel
+capability engines are not implemented. Proposal/enactment and node support attestation use this
+resolver; block start also checks it and lapses an already scheduled unsupported transition
+without changing the selection. The rule depends only on the change set, so every node rejects the
+same transitions. Installing tables and cells is supported (release additions, above); an
+executing release still has to implement the resulting selection. Recognizing every definition in
+a successor is not evidence that a release can perform a storage transition.
+
+## Notice policy
+
+`runtime_upgrade_policy_v1` is a custom parameter holding canonical JSON of
+`RuntimeUpgradePolicyV1 { activation, disable }`, each a `RuntimeNoticeV1 { blocks, ms,
+approval_cushion_ms }`. `SetParameter` rejects a malformed value or a disable notice shorter than
+the activation notice. A change set becomes eligible only when both the block floor and
+`time ≥ max(proposed_ms + ms, approved_ms + approval_cushion_ms)` hold, in committed block time.
+The type's defaults are the production values of the design (3,600 blocks; 14 days to activate,
+30 days to disable; a 24-hour cushion); a network commits its own values explicitly.
+
+## Provenance policy
+
+`runtime_provenance_policy_v1` is a custom parameter holding canonical JSON of
+`RuntimeProvenancePolicyV1 { signers, threshold }`: the trusted release signers, sorted and unique,
+and how many of them must vouch for the build, SBOM and SLSA evidence of what a change set
+publishes. `SetParameter` rejects an empty, unsorted or repeated signer list, a threshold of zero or
+above the number of signers, and a payload over 16 KiB or not canonical. A signer endorses a change
+set with `ChangeSetEndorsementV1 { change_set, signer, signature }`, a signature over
+`iroha:runtime:change-set-endorsement:v1\0` followed by the change-set identity. While the policy is
+committed, a proposal that schedules a change set needs valid endorsements of that identity from
+`threshold` distinct trusted signers, and carries at most one endorsement per trusted signer;
+endorsements of another change set, from other keys or with bad signatures do not count. A
+cancellation, or a proposal under a root without the policy, carries no endorsements. Admission
+checks them when the proposal executes; they are not stored with the proposal, whose transaction
+keeps them in the block history.
+
+## Torii
+
+| Route | Result |
+| --- | --- |
+| `GET /v1/runtime/abi/active` | `{ abi_version }` |
+| `GET /v1/runtime/abi/hash` | `{ policy: "V1", abi_hash_hex }` |
+| `GET /v1/runtime/metrics` | ABI version and change sets by status (`scheduled`, `activated`, `lapsed`, `canceled`) |
+| `GET /v1/runtime/upgrades` | Committed selection and its identity, committee keys and digest, every change-set record |
+| `POST /v1/runtime/upgrades/propose` | Body: `{ change_set, provenance }`, the `ChangeSetV1` and its `ChangeSetEndorsementV1`s (empty without a provenance policy). Drafts the `Schedule` proposal for local signing |
+| `POST /v1/runtime/upgrades/cancel/{id}` | Drafts the `Cancel` proposal for local signing |
+| `POST /v1/runtime/upgrades/attest/{id}` | The node signs its support with its validator key and drafts the `AttestRuntimeSupportV1` instruction; refused unless its release executes the successor and its key is a committee member |
+| `GET /v1/runtime/release` | Build, release digest, and whether the release executes the committed selection and each scheduled successor, naming the first definition it lacks |
+| `GET /v1/runtime/containments` | Every containment record by authorization height |
+
+The list, propose and cancel routes back the `iroha.runtime.upgrades.*` MCP tools, beside the
+`iroha.runtime.abi.*` and `iroha.runtime.metrics` tools.
+
+## CLI
+
+- `iroha runtime abi active|active-query|hash`, `iroha runtime status`, `iroha runtime capabilities`
+- `iroha runtime upgrade list`
+- `iroha runtime upgrade endorse --file <change_set.json> --signer-key-file <path>` prints a
+  release signer's `ChangeSetEndorsementV1`; the key is read at run time and never printed.
+- `iroha runtime upgrade propose --file <change_set.json> [--endorsement <file>...]` submits the
+  `Schedule` proposal with the endorsements.
+- `iroha runtime upgrade cancel --id <hex>` submits the `Cancel` proposal.
+- `iroha runtime upgrade attest --id <hex>` has the node sign its support and submits the
+  drafted `AttestRuntimeSupportV1`; the operator never handles the validator key.
+- `iroha runtime release` shows the node's release support.
+
+## Handshake
+
+Each peer's handshake advertises the host profiles its release implements
+(`ConsensusConfigCaps::host_profiles`, an `iroha_p2p::HostProfileSet` of at most eight sorted
+identities). A node refuses a peer whose set is not canonical or lacks a host profile the committed
+selection activates (`ConsensusHandshakeCaps::required_host_profiles`); extra, dormant profiles never
+block a connection. `irohad` seeds the requirement from the committed selection at startup and
+refreshes it after every `RuntimeUpgradeEvent::Activated`. The compatibility probe reports
+`host_profiles` instead of the former compiled gas-schedule hash.
+
+## Telemetry
+
+`runtime_abi_version` and `runtime_upgrade_events_total{kind=scheduled|canceled|attested|contained}`.
+
+## Operations
+
+`iroha3d --check-replay` replays a stopped validator's store, or an immutable copy of it, with a
+candidate release before it is installed ([`live_runtime_upgrades.md`](live_runtime_upgrades.md)
+§9.2; `crates/irohad/src/replay_check.rs`, `iroha_core::sumeragi::node::replay_check`).
+
+- The store is opened read-only under its store-root lock, as `--check-storage` opens it, and is
+  never written; nor are the snapshot and tiered-state directories. Signed genesis is
+  authenticated against the configured trust anchor first.
+- The whole store (blocks, native execution context records, lane stores and geometry journals;
+  every file but the store-root lock) is copied into a temporary directory, and the original is
+  released. The State is built on the copy as a Strict startup builds it: restored from the
+  newest authenticated snapshot, or empty to re-execute signed genesis. Blocks at or below
+  `snapshot.upgrade_checkpoint` are never re-executed.
+- Every later block's certificate is verified and the block re-executed through the startup
+  executor. The first block whose execution result differs from its certificate ends the check
+  with `outcome: "diverged"`, naming the first differing commitment component in report order
+  (`validity`, `height`, `parent_world_state_root`, `transaction_inputs`,
+  `transaction_results`, `transaction_outputs`, `events`, the witnessed roots,
+  `world_state_root`, `native_lanes`, `schedule`, `beacon`, `finality_header`) with both values.
+  A body the store no longer holds is `outcome: "missing_history"`, never a divergence. After the
+  last block the replayed World is checked against a cold capture
+  (`world_state_accumulator`).
+- The JSON report is the last line of standard output and the command exits nonzero unless
+  every replayed block matched.
+
+## Adoption
+
+A running predecessor network adopts this release once, at a governed checkpoint (design §13,
+`iroha_core::state::upgrade_checkpoint`):
+
+1. **Authorize.** `iroha runtime adoption manifest --start-height A --end-height E` prints the
+   authorization in the predecessor's manifest JSON: an ABI-v1 surface the predecessor admits,
+   named `iroha:runtime:adoption:v1`, whose SBOM digest `iroha:runtime:adoption-selection:v1` is
+   this release's baseline selection. The holder of `CanManageRuntimeUpgrades` submits it with the
+   predecessor's `iroha runtime upgrade propose --file`, adding any provenance the predecessor's
+   configured policy requires.
+2. **Stop.** The predecessor admits only manifests it can activate, so it activates the
+   authorization at `A` and keeps running; validators stop together at a checkpoint `H` with
+   `A < H < E` and its signed snapshot.
+3. **Import.** With `[snapshot.upgrade_checkpoint]` locating `H`, the import rewrites the
+   predecessor's World, proves it against block `H`'s certified World root under the predecessor's
+   root rule and requires the retired `runtime_upgrades` table to hold only adoption
+   authorizations, which enter that root, exactly one of which authorizes this selection at `H`
+   (activated at its start height `A`, `A < H < E`). The checkpoint block must not have changed
+   the table. Otherwise the import refuses; configuration alone never authorizes it.
+4. **Anchor.** The import builds the `AdoptionRecordV1` (network, `H` and its block hash, both
+   roots, the committee digest, the selection and the authorization's identity) and logs it.
+
+The types that read the predecessor's records reproduce its exact encoding and are deleted with
+the import once every validator has adopted.
+
+## Still open
+
+Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `roadmap.md` N14:
+
+- **Before the first World-field addition:** snapshots that follow the selection (a writer omits
+  and a reader defaults every field the snapshot's selection does not install), so a previous
+  release reads this release's snapshots until activation; a catalog test refuses such an
+  addition until then.
+- **Operations:** the operator route that drafts an addition's activation from the node's catalog
+  (`iroha_core::runtime::draft_addition` is implemented; its Torii route, client and CLI command
+  are not), and the Taira launcher treating `--check-replay` as an offline command.
+- **Obligations:** kernel registration of contract-created obligations and migration cursors,
+  completion capabilities retained across rebinding, explicit current-binding consent and
+  narrower authenticated dynamic-call manifests.
+- **Transitions:** migrations with cursors, write barriers and atomic cutover, storage retirement,
+  storage capabilities and generic carriers.
+- **Commitment and history:** complete-State commitments, which first need the node-configured
+  policy cells (G1-D3, ZK delivery F.4) in committed State and a decision on how the pinned
+  history meets the new root; checkpoints and the startup floor.
+- **Adoption:** recording the adoption record in committed State and every validator's
+  attestation of it, which a node starting from the anchor needs (with checkpoint bootstrap); a
+  rehearsal against a copy of Taira that proves the predecessor-record encoding end to end.
+
+Parliament lifecycle parameter updates are validated, but Core still needs the frozen
+governance-clock policy and anonymous-ballot integration owned by
+[`parliament_ballot_implementation_goals.md`](parliament_ballot_implementation_goals.md) E2.
+Its current block-height/timed-OVN lifecycle is not a substitute for that integration.
+The closure resolver still uses the baseline's ordinary graph allocations; complete funded graph
+custody and trigger-fanout resource qualification remain part of the complete-State work. Component
+tests alone do not qualify live deployment.

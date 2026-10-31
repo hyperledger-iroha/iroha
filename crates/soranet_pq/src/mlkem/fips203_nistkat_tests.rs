@@ -23,7 +23,9 @@ fn input(name: &str) -> Vec<u8> {
         .find_map(|line| line.strip_prefix(name)?.strip_prefix(' '))
         .unwrap_or_else(|| panic!("known-answer input `{name}` is present"));
     line.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let text = core::str::from_utf8(pair).expect("input hex is ASCII");
             u8::from_str_radix(text, 16).expect("input hex digit")

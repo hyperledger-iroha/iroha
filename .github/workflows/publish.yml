@@ -75,8 +75,8 @@ jobs:
             --mount "type=bind,src=$bundle_root,dst=/bundle" \
             --entrypoint kagami \
             "iroha-release-candidate:${TAG}" \
-            localnet --seed Iroha --peers 4 --sora-profile nexus \
-              --consensus-mode npos --out-dir /bundle > /dev/null
+            sora-network generate --seed Iroha --peers 4 --profile nexus \
+              --out-dir /bundle > /dev/null
           test -s "$bundle_root/genesis.signed.nrt"
           test -s "$bundle_root/genesis.public_key"
           test -s "$bundle_root/genesis.expected_hash"

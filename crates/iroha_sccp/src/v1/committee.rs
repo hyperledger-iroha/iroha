@@ -357,7 +357,7 @@ pub fn eip2537_g1(x: &[u8; FP_LEN], y: &[u8; FP_LEN]) -> [u8; EIP2537_G1_LEN] {
 pub fn eip2537_g2(limbs: &[u8; EVM_SIGNATURE_LEN]) -> [u8; EIP2537_G2_LEN] {
     let (elements, _) = limbs.as_chunks::<FP_LEN>();
     let mut out = [0_u8; EIP2537_G2_LEN];
-    for (target, element) in out.chunks_exact_mut(64).zip(elements) {
+    for (target, element) in out.as_chunks_mut::<64>().0.iter_mut().zip(elements) {
         target[16..].copy_from_slice(element);
     }
     out
@@ -400,8 +400,10 @@ fn decompress_key(key: &[u8; KEY_LEN]) -> Option<G1Affine> {
 fn swap_fp2_limbs(bytes: &[u8; EVM_SIGNATURE_LEN]) -> [u8; EVM_SIGNATURE_LEN] {
     let mut out = [0_u8; EVM_SIGNATURE_LEN];
     for (target, source) in out
-        .chunks_exact_mut(2 * FP_LEN)
-        .zip(bytes.chunks_exact(2 * FP_LEN))
+        .as_chunks_mut::<{ 2 * FP_LEN }>()
+        .0
+        .iter_mut()
+        .zip(bytes.as_chunks::<{ 2 * FP_LEN }>().0)
     {
         target[..FP_LEN].copy_from_slice(&source[FP_LEN..]);
         target[FP_LEN..].copy_from_slice(&source[..FP_LEN]);
@@ -2937,9 +2939,9 @@ mod tests {
         ];
         for (error, name) in names {
             assert_eq!(error.destination_error(), name);
-            assert!(!error.to_string().is_empty());
+            assert_ne!(error.to_string(), "");
         }
-        assert!(!PointFormError::NotReduced.to_string().is_empty());
-        assert!(!PointFormError::NotOnCurve.to_string().is_empty());
+        assert_ne!(PointFormError::NotReduced.to_string(), "");
+        assert_ne!(PointFormError::NotOnCurve.to_string(), "");
     }
 }

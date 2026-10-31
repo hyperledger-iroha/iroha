@@ -2,6 +2,9 @@
 //!
 //! There is no imported State checkpoint, signer, transaction builder or work journal here.
 //! The FASTPQ worker retains this continuation and its original source while unavailable.
+//! [`check`] replays a copied store the same way for `iroha3d --check-replay`.
+
+pub mod check;
 
 use super::*;
 use crate::{
@@ -199,7 +202,10 @@ impl NativeReplaySeed {
                 genesis_account: self.genesis_account.clone(),
                 consensus_mode: self.consensus_mode,
             },
-            Some((self.source.store_root().join("lanes"), target.height())),
+            Some(IsolatedSource {
+                lanes: self.source.store_root().join("lanes"),
+                fastpq_target: Some(target.height()),
+            }),
         )?;
         check_replay_deadline(deadline)?;
         let scope = state

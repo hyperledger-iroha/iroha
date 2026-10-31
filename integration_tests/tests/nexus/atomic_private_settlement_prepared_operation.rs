@@ -4,8 +4,8 @@
 use super::*;
 use iroha::{
     client::{
-        PrivateSettlementOperation, PrivateSettlementRequest, PrivateSettlementResult,
-        PrivateSettlementRunOptions,
+        FilePrivateSettlementFinality, PrivateSettlementOperation, PrivateSettlementRequest,
+        PrivateSettlementResult, PrivateSettlementRunOptions,
     },
     workflow::{
         Digest32, FileWorkflowStorage, WorkflowId, WorkflowJournalV1, WorkflowRunnerLease,
@@ -93,6 +93,8 @@ pub(super) struct PreparedSdkFlow {
     request: PrivateSettlementRequest,
     storage: Arc<CheckpointStorage>,
     journal_path: PathBuf,
+    finality_path: PathBuf,
+    finality_key: zeroize::Zeroizing<[u8; 32]>,
     original_genesis: Vec<u8>,
     pins: SignedGenesisPinsV1,
     id: WorkflowId,
@@ -135,15 +137,24 @@ impl PreparedSdkFlow {
             stop_after: Arc::new(Mutex::new(None)),
             interrupted: Arc::new(AtomicBool::new(false)),
         });
+        let finality_path = journal_path.with_extension("finality");
+        let finality_key = zeroize::Zeroizing::new(rand::random::<[u8; 32]>());
+        let finality = Arc::new(FilePrivateSettlementFinality::open(
+            &finality_path,
+            &finality_key,
+            128 * 1024 * 1024,
+        )?);
         let verifier = Self::verifier(&original_genesis, &pins)?;
         let id = account
-            .private_settlement(request.clone(), storage.clone(), verifier)?
+            .private_settlement(request.clone(), storage.clone(), finality, verifier)?
             .id();
         Ok(Self {
             account,
             request,
             storage,
             journal_path: journal_path.to_owned(),
+            finality_path,
+            finality_key,
             original_genesis,
             pins,
             id,
@@ -165,6 +176,11 @@ impl PreparedSdkFlow {
                 stop_after: self.storage.stop_after.clone(),
                 interrupted: self.storage.interrupted.clone(),
             }),
+            Arc::new(FilePrivateSettlementFinality::open(
+                &self.finality_path,
+                &self.finality_key,
+                128 * 1024 * 1024,
+            )?),
             Self::verifier(&self.original_genesis, &self.pins)?,
         )?)
     }
@@ -294,7 +310,11 @@ impl PreparedSdkFlow {
     ) -> Result<iroha::client::VerifiedPrivateSettlementReceipt> {
         runtime
             .block_on(self.open()?.recover(&Self::options()))?
-            .receipt
+            .outcome
+            .and_then(|outcome| match outcome {
+                iroha::client::VerifiedPrivateSettlementOutcome::Settled(receipt) => Some(receipt),
+                iroha::client::VerifiedPrivateSettlementOutcome::Aborted(_) => None,
+            })
             .ok_or_else(|| eyre!("SDK readonly recovery omitted original verified receipt"))
     }
 }

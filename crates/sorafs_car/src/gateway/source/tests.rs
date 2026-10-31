@@ -23,8 +23,11 @@ fn limits() -> GatewaySourceLimitsV1 {
     }
 }
 fn fixture() -> (ManifestV1, CarBuildPlan, Vec<u8>) {
+    #[cfg(not(windows))]
     let temp = tempfile::tempdir().expect("directory");
+    #[cfg(not(windows))]
     let root = temp.path().canonicalize().expect("canonical temp");
+    #[cfg(not(windows))]
     for index in 0..5 {
         std::fs::write(
             root.join(format!("{index}.txt")),
@@ -32,7 +35,20 @@ fn fixture() -> (ManifestV1, CarBuildPlan, Vec<u8>) {
         )
         .expect("file");
     }
+    #[cfg(not(windows))]
     let (plan, payload) = CarBuildPlan::from_directory(&root).expect("native plan");
+    // HTTP verification uses a fixed logical inventory. The native directory planner has
+    // separate custody and traversal controls; this fixture does not qualify that API.
+    #[cfg(windows)]
+    let (plan, payload) = CarBuildPlan::from_files(
+        (0..5)
+            .map(|index| crate::FileEntry {
+                path: vec![format!("{index}.txt")],
+                data: format!("SORA 空 {index}\n").into_bytes(),
+            })
+            .collect(),
+    )
+    .expect("explicit native HTTP fixture plan");
     let stats = CarStreamingWriter::new(&plan)
         .write_from_reader(&mut payload.as_slice(), &mut io::sink())
         .expect("CAR");
@@ -55,6 +71,24 @@ fn fixture() -> (ManifestV1, CarBuildPlan, Vec<u8>) {
         .build()
         .expect("manifest");
     (manifest, plan, payload)
+}
+#[test]
+fn native_http_fixture_preserves_explicit_files_and_commitments() {
+    let (manifest, plan, payload) = fixture();
+    let expected = "SORA 空 0\nSORA 空 1\nSORA 空 2\nSORA 空 3\nSORA 空 4\n".as_bytes();
+    assert_eq!(payload, expected);
+    assert_eq!(plan.content_length, 55);
+    assert_eq!(plan.payload_digest, blake3::hash(expected));
+    assert_eq!(plan.files.len(), 5);
+    assert_eq!(plan.chunks.len(), 5);
+    for (index, file) in plan.files.iter().enumerate() {
+        assert_eq!(file.path, [format!("{index}.txt")]);
+        assert_eq!(file.size, 11);
+        assert_eq!(file.first_chunk, index);
+        assert_eq!(file.chunk_count, 1);
+    }
+    plan.verify_manifest_metadata(&manifest)
+        .expect("complete fixture manifest metadata");
 }
 macro_rules! object {
     ($($key:literal: $value:expr),* $(,)?) => {{

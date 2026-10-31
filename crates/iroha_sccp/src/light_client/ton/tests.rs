@@ -117,7 +117,7 @@ fn key_block_hops_are_signed_by_the_previous_epoch_in_order() {
     assert_eq!(head.latest_set_id, 300);
     assert_eq!(head.latest_finalized.source_height, 300);
     let again = advance(&mut memory, vec![second.hop], later).expect("idempotent re-proof");
-    assert!(again.new_sets.is_empty());
+    assert_eq!(again.new_sets, []);
 }
 
 #[test]

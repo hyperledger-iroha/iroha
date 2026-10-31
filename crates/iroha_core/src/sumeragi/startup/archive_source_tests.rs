@@ -124,8 +124,8 @@ fn genesis_archive_authorization_rejects_every_substituted_source_owner() {
     // a different retained owner, even when both signed genesis frames agree.
     assert_eq!(first_source.result.get(), equivalent_source.result.get());
     assert!(!std::ptr::eq(
-        &first_source.result,
-        &equivalent_source.result
+        &raw const first_source.result,
+        &raw const equivalent_source.result
     ));
     assert_eq!(
         original.original_archive_scope(&first_source.overlay, block, &equivalent_source.result),

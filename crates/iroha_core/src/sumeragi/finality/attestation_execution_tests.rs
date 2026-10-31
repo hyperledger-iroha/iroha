@@ -34,6 +34,7 @@ fn full_prefix_capture(
             genesis_block_hash: chain.genesis().hash(),
             genesis,
             tip,
+            admission: RetainedAdmission::CompleteWalk,
         },
     )
 }

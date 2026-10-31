@@ -1659,7 +1659,9 @@ fn build_endpoint_v1(
         .map_err(|_| P256ValueBusErrorV1::Resource)?;
     let mut running = [F::ONE; P256_VALUE_BUS_LANES_V1];
     for (segment_index, event_segment) in events
-        .chunks_exact(P256_VALUE_BUS_SEGMENT_ROWS_V1)
+        .as_chunks::<P256_VALUE_BUS_SEGMENT_ROWS_V1>()
+        .0
+        .iter()
         .enumerate()
     {
         let product_before = running;

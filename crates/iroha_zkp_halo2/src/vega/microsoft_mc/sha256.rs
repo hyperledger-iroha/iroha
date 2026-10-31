@@ -148,7 +148,7 @@ impl Sha256 {
         self.pending[56..].copy_from_slice(&bit_len.to_be_bytes());
         compress(&mut self.state, &self.pending);
         let mut output = [0_u8; 32];
-        for (destination, word) in output.chunks_exact_mut(4).zip(self.state) {
+        for (destination, word) in output.as_chunks_mut::<4>().0.iter_mut().zip(self.state) {
             destination.copy_from_slice(&word.to_be_bytes());
         }
         output

@@ -35,6 +35,10 @@ pub(super) mod occupied;
 mod write_canary;
 pub(super) use write_canary::CoreWriteTransport;
 
+use crate::taira_inrou_validation::{
+    require_exact_json_fields, validate_prepared_report_common_arrays,
+};
+
 use super::executor_model::{ExecutionStep, RecoveryProgress, ResetTransport};
 use super::{
     AccountOnboardingPlanRequestV1, AdmittedReset, ArtifactV1, AuthorizationEnvelopeV1,
@@ -13235,26 +13239,6 @@ fn require_candidate_probe_host(inventory: &InventoryV1) -> Result<()> {
     validate_candidate_probe_host_key(inventory, &key)
 }
 
-#[cfg(test)]
-pub(super) fn validate_inrou_checks_for_test(
-    value: &norito::json::Value,
-    scope: crate::taira::InrouProbeScope,
-) -> Result<()> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| eyre!("Inrou report is not an object"))?;
-    if object
-        .get("probe_scope")
-        .and_then(norito::json::Value::as_str)
-        != Some(scope.label())
-    {
-        return Err(eyre!(
-            "Inrou report scope does not match the required proof"
-        ));
-    }
-    validate_prepared_report_common_arrays(object, true, "real Inrou producer report")
-}
-
 /// Keep SSH inputs in this launcher: OpenSSH closes every inherited descriptor
 /// above stderr before parsing its options. Parent proc paths name the pinned
 /// inodes across that sweep without reopening provenance or copying secrets.
@@ -15767,23 +15751,6 @@ const PREPARED_INROU_REJECTED_EVIDENCE: &[&str] = &[
     "SubmittedHashMismatch",
 ];
 
-fn require_exact_json_fields(
-    object: &norito::json::Map,
-    expected: &[&str],
-    label: &str,
-) -> Result<()> {
-    let actual = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
-    let expected = expected.iter().copied().collect::<BTreeSet<_>>();
-    if actual != expected {
-        let missing = expected.difference(&actual).copied().collect::<Vec<_>>();
-        let unexpected = actual.difference(&expected).copied().collect::<Vec<_>>();
-        return Err(eyre!(
-            "{label} is outside its exact V1 field set (missing: {missing:?}; unexpected: {unexpected:?})"
-        ));
-    }
-    Ok(())
-}
-
 fn nullable_report_string<'a>(
     object: &'a norito::json::Map,
     name: &str,
@@ -15834,81 +15801,6 @@ fn validate_report_evidence_token(value: &str, allowed: &[&str], label: &str) ->
         || !allowed.contains(&value)
     {
         return Err(eyre!("{label} is not an allowed exact V1 evidence class"));
-    }
-    Ok(())
-}
-
-fn require_empty_report_array(object: &norito::json::Map, field: &str, label: &str) -> Result<()> {
-    if !object
-        .get(field)
-        .and_then(norito::json::Value::as_array)
-        .is_some_and(Vec::is_empty)
-    {
-        return Err(eyre!(
-            "{label} field `{field}` must be an explicit empty array"
-        ));
-    }
-    Ok(())
-}
-
-fn validate_prepared_report_common_arrays(
-    object: &norito::json::Map,
-    service_applied: bool,
-    label: &str,
-) -> Result<()> {
-    require_empty_report_array(object, "warnings", label)?;
-    require_empty_report_array(object, "failures", label)?;
-    if !service_applied {
-        return require_empty_report_array(object, "checks", label);
-    }
-    let checks = object
-        .get("checks")
-        .and_then(norito::json::Value::as_array)
-        .ok_or_else(|| eyre!("{label} field `checks` must be an array"))?;
-    let public_checks = [
-        (
-            "inrou_authoritative_status",
-            "active_adverts=4, hosted_replicas=4",
-        ),
-        (
-            "inrou_public_routes",
-            "observed distinct durable identities and guest boots for replica slots 1, 2, 3, and 4",
-        ),
-        (
-            "inrou_public_discovery",
-            "current and revision authority plus public path and CID-host bytes, headers, and hash are exact",
-        ),
-    ];
-    let expected = match object
-        .get("probe_scope")
-        .and_then(norito::json::Value::as_str)
-    {
-        Some("candidate") => &public_checks[..2],
-        Some("public") => public_checks.as_slice(),
-        _ => return Err(eyre!("Inrou report omits its exact probe scope")),
-    };
-    if checks.len() != expected.len() {
-        return Err(eyre!(
-            "{label} must contain exactly the successful checks for its probe scope"
-        ));
-    }
-    for (check, &(name, detail)) in checks.iter().zip(expected) {
-        let check = check
-            .as_object()
-            .ok_or_else(|| eyre!("{label} check must be an object"))?;
-        require_exact_json_fields(check, &["name", "http_status", "ok", "detail"], label)?;
-        if check.get("name").and_then(norito::json::Value::as_str) != Some(name)
-            || check
-                .get("http_status")
-                .and_then(norito::json::Value::as_u64)
-                != Some(200)
-            || check.get("ok").and_then(norito::json::Value::as_bool) != Some(true)
-            || check.get("detail").and_then(norito::json::Value::as_str) != Some(detail)
-        {
-            return Err(eyre!(
-                "{label} does not carry the exact successful Inrou check evidence"
-            ));
-        }
     }
     Ok(())
 }

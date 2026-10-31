@@ -5,6 +5,13 @@
  * module.
  */
 export {
+  createPrivateSettlementHost,
+  PrivateSettlementHost,
+  PrivateSettlementOperation,
+  PrivateSettlementTicket,
+  PrivateSettlementOutcome,
+} from "./privateSettlement.js";
+export {
   KotodamaCompilerClient,
   compileKotodamaProgram,
 } from "./kotodamaCompiler/index.js";
@@ -225,6 +232,8 @@ export {
   sm2PublicKeyMultihash,
   buildKaigiAuthorizationProofV1,
   buildKaigiUsageProofV1,
+  generateKaigiBlindingV1,
+  KAIGI_EMPTY_ROSTER_ROOT_HEX_V1,
   PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
   PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
@@ -427,6 +436,8 @@ export {
   CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1,
   KAIGI_MAX_PARTICIPANTS_V1,
   KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
+  KAIGI_RELAY_HPKE_SUITES_V1,
+  buildKaigiRelayHpkeKeyV1,
   KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
   buildMintAssetInstruction,
   buildMintTriggerRepetitionsInstruction,

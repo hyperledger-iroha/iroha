@@ -132,12 +132,10 @@ fn source_tree(
         if metadata.is_dir() {
             source_tree(root, &path, entries)?;
         } else {
-            let name = path
-                .strip_prefix(root)
-                .map_err(|_| "native source escapes workspace")?
-                .to_str()
-                .ok_or("non-UTF8 native source path")?;
-            let name = relative_name(name.as_bytes())?;
+            let name = native_relative_name(
+                path.strip_prefix(root)
+                    .map_err(|_| "native source escapes workspace")?,
+            )?;
             let kind = if metadata.file_type().is_symlink() {
                 Entry::Link
             } else if metadata.is_file() {
@@ -200,7 +198,7 @@ fn relative_reference(base: &Path, value: &str) -> Option<String> {
             _ => return None,
         }
     }
-    relative_name(parts.to_str()?.as_bytes()).ok()
+    native_relative_name(&parts).ok()
 }
 
 // Keep the old conservative token matching and token-family order, including
@@ -345,6 +343,24 @@ fn relative_name(bytes: &[u8]) -> Result<String, String> {
         return Err("noncanonical source path".to_owned());
     }
     Ok(name.to_owned())
+}
+
+// Filesystem walks and resolved references produce native PathBuf separators.
+// Serialize their validated components into the same names Git supplies; never
+// normalize untrusted Git bytes or literal backslashes inside Unix filenames.
+fn native_relative_name(path: &Path) -> Result<String, String> {
+    let mut name = String::new();
+    for component in path.components() {
+        let Component::Normal(part) = component else {
+            return Err("noncanonical source path".to_owned());
+        };
+        let part = part.to_str().ok_or("non-UTF8 native source path")?;
+        if !name.is_empty() {
+            name.push('/');
+        }
+        name.push_str(part);
+    }
+    relative_name(name.as_bytes())
 }
 
 fn tracked_input_absent(root: &Path, name: &str) -> Result<bool, String> {
@@ -550,13 +566,13 @@ pub fn snapshot(root: &Path) -> Result<Snapshot, String> {
                     let relative = resolved
                         .strip_prefix(&root)
                         .map_err(|_| "source symlink escapes workspace")?;
-                    let relative = relative.to_str().ok_or("non-UTF8 source symlink target")?;
-                    if relative == GENERATED || entries.get(relative) != Some(&Entry::File) {
+                    let relative = native_relative_name(relative)?;
+                    if relative == GENERATED || entries.get(&relative) != Some(&Entry::File) {
                         return Err(
                             "source symlink target is not an included regular input".to_owned()
                         );
                     }
-                    regular_file(&root, relative)?;
+                    regular_file(&root, &relative)?;
                 }
                 observed_links.push((path, target));
             }
@@ -609,6 +625,58 @@ pub fn supported_target(arch: &str, os: &str, width: &str, endian: &str) -> bool
 }
 
 #[cfg(test)]
+mod native_path_tests {
+    //! Host paths share canonical census spelling without weakening Git admission.
+
+    use super::{native_relative_name, relative_name, relative_reference};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn native_components_preserve_case_and_use_git_separators() {
+        let path = PathBuf::from("crates")
+            .join("proof")
+            .join("src")
+            .join("Circuit.Rs");
+        assert_eq!(
+            native_relative_name(&path).unwrap(),
+            "crates/proof/src/Circuit.Rs"
+        );
+    }
+
+    #[test]
+    fn literal_references_restore_canonical_workspace_names() {
+        assert_eq!(
+            relative_reference(Path::new("crates/proof/src"), "../../../docs/Profile.MD"),
+            Some("docs/Profile.MD".to_owned())
+        );
+        assert_eq!(
+            relative_reference(Path::new("crates"), "../../outside"),
+            None
+        );
+    }
+
+    #[test]
+    fn native_conversion_keeps_git_wire_paths_strict() {
+        for bytes in [
+            b"crates\\proof\\src\\circuit.rs".as_slice(),
+            b"crates/proof/../circuit.rs",
+            b"crates/proof/line\nbreak.rs",
+        ] {
+            assert!(relative_name(bytes).is_err());
+        }
+        for path in ["", "../outside", "crates/../outside"] {
+            assert!(native_relative_name(Path::new(path)).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_literal_backslashes_are_not_reinterpreted_as_separators() {
+        assert!(native_relative_name(Path::new("crates/proof\\substitute.rs")).is_err());
+    }
+}
+
+#[cfg(test)]
 mod reference_tests {
     use super::literal_references;
 
@@ -635,20 +703,20 @@ mod reference_tests {
     #[test]
     fn extraction_preserves_reference_order_and_conservative_false_positives() {
         let examples = [
-            r##"include_bytes!("third"); include!("first"); include_str!("second"); #[path = "last"] mod m;"##,
-            r##"// include!("comment");
+            r#"include_bytes!("third"); include!("first"); include_str!("second"); #[path = "last"] mod m;"#,
+            r#"// include!("comment");
 const TEXT: &str = "include_str!(\"quoted\");";
 #[pathology = "false-positive"] struct Any;
-"##,
-            r##"include!(concat!(env!("CARGO_MANIFEST_DIR"), "/file.rs"));
+"#,
+            r#"include!(concat!(env!("CARGO_MANIFEST_DIR"), "/file.rs"));
 include_bytes!("semicolon;inside"); #[path = "bracket]inside"]
-include_str!("unterminated""##,
+include_str!("unterminated""#,
             "include \u{2003}!\u{a0}(\"unicode\"); include\u{200b}!(\"not-whitespace\");",
-            r##"includeinclude!("overlap"); include_bytesinclude_str!("nested-name");
+            r#"includeinclude!("overlap"); include_bytesinclude_str!("nested-name");
 notinclude!("suffix"); include!!("double-bang");
-include!("include_str!(\"nested-string\");");"##,
-            r##"#[path = "one"] #[path="two"] # [path="unmatched"]
-#[path #[path="nested"] #[path = "unterminated""##,
+include!("include_str!(\"nested-string\");");"#,
+            r#"#[path = "one"] #[path="two"] # [path="unmatched"]
+#[path #[path="nested"] #[path = "unterminated""#,
         ];
         for source in examples {
             assert_eq!(

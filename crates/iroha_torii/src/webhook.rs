@@ -13,9 +13,9 @@
 //!   admission, spool records, decoded bodies, and each scan batch have hard
 //!   bounds so a large or adversarial queue cannot grow worker memory without
 //!   limit.
-//! - Durable webhook storage is supported on Apple and Linux hosts, where Torii
-//!   can pin directories and enforce owner-private files. Enabling webhooks on
-//!   other hosts fails startup instead of falling back to pathname-only storage.
+//! - Durable webhook storage uses retained native directories and owner-private files
+//!   on Apple, Linux and Windows. Unsupported hosts fail startup; existing unsafe
+//!   Windows permissions are refused without repair.
 //! - HTTPS delivery is supported when the `app_api_https` feature is enabled,
 //!   using `reqwest` + `rustls` with native roots. WebSocket delivery requires
 //!   `app_api_wss`; plain `http://` delivery is always available.
@@ -36,7 +36,7 @@ use iroha_config::parameters::defaults;
 use iroha_data_model::{events::data::prelude as df, prelude::DataEvent};
 use iroha_futures::supervisor::ShutdownSignal;
 use sha2::{Digest, Sha256};
-#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+#[cfg(any(target_vendor = "apple", target_os = "linux", windows))]
 use std::ffi::{OsStr, OsString};
 #[cfg(all(test, any(target_vendor = "apple", target_os = "linux")))]
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -71,12 +71,12 @@ const WEBHOOK_DELIVERY_MAX_BASE64_BYTES: usize = WEBHOOK_DELIVERY_MAX_BYTES.div_
 // A 1 MiB body expands to about 1.34 MiB in base64; leave bounded room for the
 // delivery metadata while rejecting unexpectedly large on-disk records.
 const WEBHOOK_QUEUE_FILE_MAX_BYTES: usize = 2 * 1024 * 1024;
-#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+#[cfg(any(target_vendor = "apple", target_os = "linux", windows))]
 const WEBHOOK_QUEUE_SCAN_BATCH_SIZE: usize = 128;
-#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+#[cfg(any(target_vendor = "apple", target_os = "linux", windows))]
 const WEBHOOK_QUEUE_SCAN_WORK_ITEMS: usize = 1024;
 const WEBHOOK_QUEUE_ADMISSION_SCAN_WORK_ITEMS: usize = WEBHOOK_QUEUE_HARD_CAPACITY * 2;
-#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+#[cfg(any(target_vendor = "apple", target_os = "linux", windows))]
 const WEBHOOK_TEMP_FILE_RETRIES: usize = 32;
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::webhook::WebhookCreate")]
@@ -161,7 +161,15 @@ struct WebhookDirectory {
     path: PathBuf,
     #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     file: fs::File,
+    #[cfg(windows)]
+    native: iroha_fs::OwnerDirectory,
+    #[cfg(windows)]
+    private: Option<iroha_fs::PrivateDirectory>,
 }
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WebhookFileIdentity(iroha_fs::FileSnapshot);
 
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,7 +178,7 @@ struct WebhookFileIdentity {
     inode: u64,
 }
 
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+#[cfg(not(any(target_vendor = "apple", target_os = "linux", windows)))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct WebhookFileIdentity;
 
@@ -354,7 +362,7 @@ fn invalid_webhook_storage(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+#[cfg(not(any(target_vendor = "apple", target_os = "linux", windows)))]
 fn unsupported_webhook_persistence() -> io::Error {
     io::Error::new(
         io::ErrorKind::Unsupported,
@@ -532,7 +540,7 @@ fn open_webhook_directory_chain(
     }))
 }
 
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+#[cfg(not(any(target_vendor = "apple", target_os = "linux", windows)))]
 fn open_webhook_directory_chain(
     _path: &Path,
     _create: bool,
@@ -549,7 +557,7 @@ fn open_webhook_queue_directory(create: bool) -> io::Result<Option<WebhookDirect
     open_webhook_directory_chain(&queue_dir(), create, true)
 }
 
-#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+#[cfg(any(target_vendor = "apple", target_os = "linux", windows))]
 fn filename_in_webhook_directory<'a>(
     directory: &WebhookDirectory,
     path: &'a Path,
@@ -723,7 +731,7 @@ fn read_private_webhook_file_bounded(
     Ok(Some(BoundedWebhookFile { bytes, identity }))
 }
 
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+#[cfg(not(any(target_vendor = "apple", target_os = "linux", windows)))]
 fn read_private_webhook_file_bounded(
     _directory: &WebhookDirectory,
     _path: &Path,
@@ -774,7 +782,7 @@ fn create_private_webhook_temp_file(
     ))
 }
 
-#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+#[cfg(any(target_vendor = "apple", target_os = "linux", windows))]
 fn publication_matches(
     publication: WebhookPublication,
     actual: Option<WebhookFileIdentity>,
@@ -883,7 +891,7 @@ fn write_private_webhook_file_atomic(
     prepared
 }
 
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+#[cfg(not(any(target_vendor = "apple", target_os = "linux", windows)))]
 fn write_private_webhook_file_atomic(
     _directory: &WebhookDirectory,
     _path: &Path,
@@ -920,7 +928,7 @@ fn unlink_private_webhook_entry(
     Ok(())
 }
 
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+#[cfg(not(any(target_vendor = "apple", target_os = "linux", windows)))]
 fn unlink_private_webhook_entry(
     _directory: &WebhookDirectory,
     _path: &Path,
@@ -930,7 +938,7 @@ fn unlink_private_webhook_entry(
     Err(unsupported_webhook_persistence())
 }
 
-#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+#[cfg(any(target_vendor = "apple", target_os = "linux", windows))]
 fn is_webhook_temporary_name(name: &OsStr) -> bool {
     let Some(name) = name.to_str() else {
         return false;
@@ -987,7 +995,7 @@ fn cleanup_webhook_temporary_files(
     Ok(removed)
 }
 
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+#[cfg(not(any(target_vendor = "apple", target_os = "linux", windows)))]
 fn cleanup_webhook_temporary_files(
     _directory: &WebhookDirectory,
     _work_limit: usize,
@@ -1057,7 +1065,7 @@ fn queue_depth_bounded_in(
     }
     Ok(count)
 }
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+#[cfg(not(any(target_vendor = "apple", target_os = "linux", windows)))]
 fn queue_depth_bounded_in(
     _directory: &WebhookDirectory,
     _maximum: usize,
@@ -3792,7 +3800,7 @@ fn discover_queue_batch(policy: WebhookPolicy) -> std::io::Result<QueueScanBatch
         sweep_complete,
     })
 }
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+#[cfg(not(any(target_vendor = "apple", target_os = "linux", windows)))]
 fn discover_queue_batch(_policy: WebhookPolicy) -> std::io::Result<QueueScanBatch> {
     Err(unsupported_webhook_persistence())
 }
@@ -3851,6 +3859,8 @@ fn prune_verified_queue_overflow_in(
     if removed != 0 {
         #[cfg(any(target_vendor = "apple", target_os = "linux"))]
         directory.file.sync_all()?;
+        #[cfg(windows)]
+        directory.native_sync()?;
     }
     Ok(removed)
 }
@@ -4168,3 +4178,12 @@ async fn process_queue_once() -> Duration {
 }
 #[cfg(test)]
 mod tests;
+
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows::{
+    cleanup_webhook_temporary_files, discover_queue_batch, open_webhook_directory_chain,
+    queue_depth_bounded_in, read_private_webhook_file_bounded, unlink_private_webhook_entry,
+    write_private_webhook_file_atomic,
+};

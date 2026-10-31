@@ -361,13 +361,13 @@ fn genuine_private_genesis_owner_is_imported_into_only_its_bound_parent_wallet()
     let _guard = crate::managed::native_test_guard();
     let fixture = Fixture::new();
     let selector = NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, "acme").unwrap();
-    let spec = crate::localnet::PrivateRootSpec {
+    let spec = crate::sora_network::PrivateRootSpec {
         parent_network_id: fixture.parent.network_id(),
         dataspace_id: DataSpaceId::from_hash(&selector.name_hash()),
         dataspace_alias: "acme".into(),
     };
     let ports = crate::managed::LocalnetPorts::reserve().unwrap();
-    let prepared = crate::localnet::prepare_private_root(
+    let prepared = crate::sora_network::prepare_private_root(
         "private",
         &fixture.directory.path().join("private"),
         &ports,

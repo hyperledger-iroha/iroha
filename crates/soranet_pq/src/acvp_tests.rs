@@ -8,33 +8,33 @@ const FIXTURE: &[u8] = include_bytes!("../tests/fixtures/acvp/vectors.json");
 static VECTORS: LazyLock<Value> =
     LazyLock::new(|| norito::json::from_slice(FIXTURE).expect("pinned ACVP JSON"));
 
-pub(crate) fn text<'a>(value: &'a Value, key: &str) -> &'a str {
+pub fn text<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).expect(key)
 }
 
-pub(crate) fn bytes(value: &Value, key: &str) -> Vec<u8> {
+pub fn bytes(value: &Value, key: &str) -> Vec<u8> {
     let encoded = text(value, key);
     let mut decoded = vec![0; encoded.len() / 2];
     hex::decode_to_slice(encoded, &mut decoded).expect("complete ACVP hex bytes");
     decoded
 }
 
-pub(crate) fn number(value: &Value, key: &str) -> u64 {
+pub fn number(value: &Value, key: &str) -> u64 {
     value.get(key).and_then(Value::as_u64).expect(key)
 }
 
-pub(crate) fn passed(value: &Value) -> bool {
+pub fn passed(value: &Value) -> bool {
     value
         .get("testPassed")
         .and_then(Value::as_bool)
         .expect("official ACVP disposition")
 }
 
-pub(crate) fn cases(group: &Value) -> &[Value] {
+pub fn cases(group: &Value) -> &[Value] {
     group.get("tests").and_then(Value::as_array).expect("cases")
 }
 
-pub(crate) fn groups(source: &str) -> &'static [Value] {
+pub fn groups(source: &str) -> &'static [Value] {
     VECTORS
         .get("vector_sets")
         .and_then(Value::as_array)

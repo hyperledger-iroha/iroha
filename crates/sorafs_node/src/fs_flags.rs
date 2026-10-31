@@ -1,7 +1,8 @@
 //! Target `open(2)` flags for symlink-safe SoraFS node filesystem access.
 //!
 //! Linux and Android take the per-architecture bits from `rustix`; the Apple and BSD values are
-//! architecture-independent. Off Unix the helpers are no-ops.
+//! architecture-independent. Windows opens the reparse entry itself; callers must inspect
+//! and reject its reparse attributes before reading it.
 use std::fs::OpenOptions;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -25,7 +26,12 @@ compile_error!("SoraFS node filesystem flags are not qualified for this Unix tar
 pub(crate) fn set_no_follow_flag(options: &mut OpenOptions) {
     #[cfg(unix)]
     options.custom_flags(platform_no_follow_flag());
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT.
+    }
+    #[cfg(not(any(unix, windows)))]
     let _ = options;
 }
 
@@ -75,6 +81,26 @@ pub(crate) const fn platform_directory_only_flag() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_open_retains_the_reparse_entry_instead_of_its_target() {
+        use std::os::windows::fs::{MetadataExt as _, symlink_file};
+        let temporary = tempfile::tempdir().unwrap();
+        let target = temporary.path().join("target");
+        let link = temporary.path().join("link");
+        std::fs::write(&target, b"must not follow").unwrap();
+        symlink_file(&target, &link).expect("native reparse fixture requires symlink privilege");
+        let mut options = OpenOptions::new();
+        options.read(true);
+        set_no_follow_flag(&mut options);
+        let opened = options.open(&link).unwrap();
+        assert_ne!(opened.metadata().unwrap().file_attributes() & 0x400, 0);
+        assert_ne!(
+            iroha_fs::FileIdentity::of(&opened).unwrap(),
+            iroha_fs::FileIdentity::of(&std::fs::File::open(&target).unwrap()).unwrap()
+        );
+    }
 
     // Pin the ABI value of every qualified target so neither a dependency change nor an edited
     // constant can silently weaken the symlink and directory checks.

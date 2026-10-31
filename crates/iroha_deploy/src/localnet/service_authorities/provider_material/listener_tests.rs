@@ -55,11 +55,9 @@ fn three_original_provider_peers_render_distinct_exact_https_identities() {
     let mut ports = BTreeSet::new();
     for (index, peer) in prepared.peers.iter().enumerate() {
         let bytes = iroha_fs::read_private(&peer.config_path, 1024 * 1024).unwrap();
-        let config = parse_localnet_peer_config(
-            std::str::from_utf8(&bytes).unwrap(),
-            Some(&peer.config_path),
-        )
-        .unwrap();
+        let config =
+            config::parse_peer_config(std::str::from_utf8(&bytes).unwrap(), &peer.config_path)
+                .unwrap();
         validate_peer_https(
             &manifest,
             root,
@@ -80,7 +78,7 @@ fn three_original_provider_peers_render_distinct_exact_https_identities() {
             assert_eq!(
                 https.certificate_chain,
                 [root
-                    .join(LOCALNET_RUNTIME_DIRECTORY)
+                    .join(RUNTIME_DIRECTORY)
                     .join(DIRECTORY)
                     .join(PROVIDERS_DIRECTORY)
                     .join(index.to_string())
@@ -88,7 +86,7 @@ fn three_original_provider_peers_render_distinct_exact_https_identities() {
             );
             assert_eq!(
                 https.private_key,
-                root.join(LOCALNET_RUNTIME_DIRECTORY)
+                root.join(RUNTIME_DIRECTORY)
                     .join(DIRECTORY)
                     .join(PROVIDERS_DIRECTORY)
                     .join(index.to_string())
@@ -157,7 +155,7 @@ fn retained_profile_refuses_missing_moved_or_retargeted_https_without_reissuing_
                     https.insert(
                         "private_key".into(),
                         toml::Value::String(
-                            root.join(LOCALNET_RUNTIME_DIRECTORY)
+                            root.join(RUNTIME_DIRECTORY)
                                 .join(DIRECTORY)
                                 .join(tls_identity::CA_KEY)
                                 .to_str()
@@ -170,7 +168,7 @@ fn retained_profile_refuses_missing_moved_or_retargeted_https_without_reissuing_
                     https.insert(
                         "certificate_chain".into(),
                         toml::Value::Array(vec![toml::Value::String(
-                            root.join(LOCALNET_RUNTIME_DIRECTORY)
+                            root.join(RUNTIME_DIRECTORY)
                                 .join(DIRECTORY)
                                 .join(tls_identity::CA_CERT)
                                 .to_str()
@@ -185,7 +183,7 @@ fn retained_profile_refuses_missing_moved_or_retargeted_https_without_reissuing_
             }
         }
         let changed = Zeroizing::new(toml::to_string(&*table).unwrap());
-        parse_localnet_peer_config(&changed, Some(&prepared.peers[0].config_path)).unwrap();
+        config::parse_peer_config(&changed, &prepared.peers[0].config_path).unwrap();
         directory
             .write_atomic("peer0.toml", changed.as_bytes(), PublishMode::Replace)
             .unwrap();

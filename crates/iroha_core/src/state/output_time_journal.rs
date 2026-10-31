@@ -10,18 +10,18 @@
 //! Instruction clones, guard lookups, mutation graphs, permission cleanup and event
 //! backing are not funded by these captured-evidence charges. Calling Execute
 //! preserves its existing guards/events/cleanup but does not authenticate the
-//! enclosing executor/callback scope. The legacy all-table decrease_repeats sweep
+//! enclosing executor/callback scope. The legacy all-table `decrease_repeats` sweep
 //! is not intercepted. Register preserves its original deferred-byte policy; a
 //! captured Action does not become canonical/schema-authorized by being recorded.
 //! Production journal/output-V2 activation remains outside.
 
+use crate::smartcontracts::Execute;
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 use iroha_data_model::{
     isi::error::InstructionExecutionError,
     prelude::{AccountId, Burn, EventFilterBox, Mint, Register, Trigger, Unregister},
     trigger::TriggerId,
 };
-use crate::smartcontracts::Execute;
 use norito::core::EncodeWorkLimits;
 
 use super::OutputTransaction;
@@ -298,38 +298,59 @@ impl<'block, 'state, 'pool> ApplyingTimeRetryJournal<'block, 'state, 'pool> {
             return Err(TimeRetryJournalError::ForeignPool);
         }
         let ordinal = self.next_ordinal;
-        let next_ordinal = ordinal.checked_add(1)
+        let next_ordinal = ordinal
+            .checked_add(1)
             .ok_or(TimeRetryJournalError::EncounterOverflow)?;
-        if !matches!(instruction.object().action().filter(), EventFilterBox::Time(_)) {
+        if !matches!(
+            instruction.object().action().filter(),
+            EventFilterBox::Time(_)
+        ) {
             return Err(TimeRetryJournalError::NonTimeRegistration);
         }
         // The original instruction remains owned until actual Execute consumes it.
         // This temporary ID clone and Register's own cloned/decoded State graph
         // are not funded by the record/source backing charges.
         let id = instruction.object().id().clone();
-        let transaction = self.output.transaction.as_ref()
+        let transaction = self
+            .output
+            .transaction
+            .as_ref()
             .ok_or(TimeRetryJournalError::MissingTransaction)?;
-        let before = transaction.world.triggers
+        let before = transaction
+            .world
+            .triggers
             .capture_applying_time_source(&id, &mut self.source_work, self.pool, self.encode_limits)
             .map_err(TimeRetryJournalError::Source)?;
-        if before.as_ref().is_some_and(|source| !source.belongs_to(self.pool)) {
+        if before
+            .as_ref()
+            .is_some_and(|source| !source.belongs_to(self.pool))
+        {
             return Err(TimeRetryJournalError::ForeignPool);
         }
         // Do not turn a missing typed row into global-ID absence, or reject a
         // present row as a fabricated duplicate. The genuine entrypoint decides.
         self.next_ordinal = next_ordinal;
-        let transaction = self.output.transaction.as_mut()
+        let transaction = self
+            .output
+            .transaction
+            .as_mut()
             .ok_or(TimeRetryJournalError::MissingTransaction)?;
-        instruction.execute(authority, transaction)
+        instruction
+            .execute(authority, transaction)
             .map_err(TimeRetryJournalError::Execution)?;
-        let after = transaction.world.triggers
+        let after = transaction
+            .world
+            .triggers
             .capture_applying_time_source(&id, &mut self.source_work, self.pool, self.encode_limits)
             .map_err(TimeRetryJournalError::Source)?
             .ok_or(TimeRetryJournalError::MutationTargetDisappeared)?;
         if !after.belongs_to(self.pool) {
             return Err(TimeRetryJournalError::ForeignPool);
         }
-        transaction.world.triggers.require_applying_time_route(&id, &mut self.source_work)
+        transaction
+            .world
+            .triggers
+            .require_applying_time_route(&id, &mut self.source_work)
             .map_err(TimeRetryJournalError::Source)?;
         self.records.push_reserved(OwnedTimeRetryTransition {
             ordinal,
@@ -401,11 +422,17 @@ impl<'block, 'state, 'pool> ApplyingTimeRetryJournal<'block, 'state, 'pool> {
             return Err(TimeRetryJournalError::ForeignPool);
         }
         let ordinal = self.next_ordinal;
-        let next_ordinal = ordinal.checked_add(1)
+        let next_ordinal = ordinal
+            .checked_add(1)
             .ok_or(TimeRetryJournalError::EncounterOverflow)?;
-        let transaction = self.output.transaction.as_ref()
+        let transaction = self
+            .output
+            .transaction
+            .as_ref()
             .ok_or(TimeRetryJournalError::MissingTransaction)?;
-        let before = transaction.world.triggers
+        let before = transaction
+            .world
+            .triggers
             .capture_applying_time_source(id, &mut self.source_work, self.pool, self.encode_limits)
             .map_err(TimeRetryJournalError::Source)?
             .ok_or(TimeRetryJournalError::MissingTimeSource)?;
@@ -414,24 +441,38 @@ impl<'block, 'state, 'pool> ApplyingTimeRetryJournal<'block, 'state, 'pool> {
         }
         // Generic Set mutators dispatch through ids; a typed row alone is not
         // proof that that separate original routing entry still names Time.
-        transaction.world.triggers
+        transaction
+            .world
+            .triggers
             .require_applying_time_route(id, &mut self.source_work)
             .map_err(TimeRetryJournalError::Source)?;
         self.next_ordinal = next_ordinal;
-        let transaction = self.output.transaction.as_mut()
+        let transaction = self
+            .output
+            .transaction
+            .as_mut()
             .ok_or(TimeRetryJournalError::MissingTransaction)?;
         match operation {
-            TimeInstructionMutation::Unregister => Unregister::trigger(id.clone())
-                .execute(authority, transaction),
-            TimeInstructionMutation::Mint(amount) => Mint::trigger_repetitions(amount, id.clone())
-                .execute(authority, transaction),
-            TimeInstructionMutation::Burn(amount) => Burn::trigger_repetitions(amount, id.clone())
-                .execute(authority, transaction),
-        }.map_err(TimeRetryJournalError::Execution)?;
-        let after = transaction.world.triggers
+            TimeInstructionMutation::Unregister => {
+                Unregister::trigger(id.clone()).execute(authority, transaction)
+            }
+            TimeInstructionMutation::Mint(amount) => {
+                Mint::trigger_repetitions(amount, id.clone()).execute(authority, transaction)
+            }
+            TimeInstructionMutation::Burn(amount) => {
+                Burn::trigger_repetitions(amount, id.clone()).execute(authority, transaction)
+            }
+        }
+        .map_err(TimeRetryJournalError::Execution)?;
+        let after = transaction
+            .world
+            .triggers
             .capture_applying_time_source(id, &mut self.source_work, self.pool, self.encode_limits)
             .map_err(TimeRetryJournalError::Source)?;
-        if after.as_ref().is_some_and(|source| !source.belongs_to(self.pool)) {
+        if after
+            .as_ref()
+            .is_some_and(|source| !source.belongs_to(self.pool))
+        {
             return Err(TimeRetryJournalError::ForeignPool);
         }
         match (operation, after.is_some()) {
@@ -620,7 +661,10 @@ impl<'block, 'state, 'pool> TimeRetryScope<'_, 'block, 'state, 'pool> {
         if self.journal.first_error.is_some() {
             return Err(TimeRetryScopeRefused);
         }
-        if let Err(original) = self.journal.execute_time_instruction_inner(authority, id, operation) {
+        if let Err(original) = self
+            .journal
+            .execute_time_instruction_inner(authority, id, operation)
+        {
             self.journal.remember_refusal(original);
             return Err(TimeRetryScopeRefused);
         }
@@ -661,12 +705,16 @@ impl StagedTimeRetryEvidence<'_, '_> {
 
     pub(super) fn belongs_to(&self, pool: &AllocationBudget) -> bool {
         self.records.belongs_to(pool)
-            && self
-                .records
-                .as_slice()
-                .iter()
-                .all(|record| record.before.as_ref().is_none_or(|before| before.belongs_to(pool))
-                    && record.after.as_ref().is_none_or(|after| after.belongs_to(pool)))
+            && self.records.as_slice().iter().all(|record| {
+                record
+                    .before
+                    .as_ref()
+                    .is_none_or(|before| before.belongs_to(pool))
+                    && record
+                        .after
+                        .as_ref()
+                        .is_none_or(|after| after.belongs_to(pool))
+            })
     }
 }
 

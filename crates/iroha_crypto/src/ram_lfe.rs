@@ -52,10 +52,10 @@ mod affine_secret;
 mod availability_tests;
 use affine_secret::SecretAffineCircuit;
 mod bgv_affine;
-mod bgv_bounded;
-mod bgv_bounded_refresh;
 mod bgv_input;
+mod bgv_nonlinear;
 mod bgv_nonlinear_compiler;
+mod bgv_nonlinear_refresh;
 mod canonical;
 mod class;
 mod clearing;
@@ -67,16 +67,18 @@ mod reference;
 mod specification_tests;
 mod trace;
 pub use bgv_affine::{RamLfeBgvAffineErrorV1, RamLfeBgvAffinePlanV1, RamLfeBgvAffineProgramV1};
-pub use bgv_bounded::{
-    RamLfeBgvBoundedBudgetV1, RamLfeBgvBoundedErrorV1, RamLfeBgvBoundedLayerChoiceV1,
-    RamLfeBgvBoundedOperationsV1, RamLfeBgvBoundedPlanV1, RamLfeBgvBoundedProgramV1,
-    RamLfeBgvBoundedScheduleV1,
-};
-pub use bgv_bounded_refresh::{RamLfeBgvBoundedPreparationV1, RamLfeBgvBoundedRefreshChoiceV1};
 pub use bgv_input::{RamLfeBgvInputErrorV1, RamLfeBgvPackedInputV1};
+pub use bgv_nonlinear::{
+    RamLfeBgvNonlinearBudgetV1, RamLfeBgvNonlinearErrorV1, RamLfeBgvNonlinearLayerChoiceV1,
+    RamLfeBgvNonlinearLayersV1, RamLfeBgvNonlinearOperationsV1, RamLfeBgvNonlinearPlanV1,
+    RamLfeBgvNonlinearProgramV1, RamLfeBgvNonlinearScheduleV1,
+};
 pub use bgv_nonlinear_compiler::{
     RamLfeBgvNonlinearCompileErrorV1, RamLfeBgvNonlinearCompilerV1, RamLfeBgvNonlinearShapeV1,
     RamLfeBgvNonlinearStageV1, RamLfeBgvRefreshMapV1,
+};
+pub use bgv_nonlinear_refresh::{
+    RamLfeBgvNonlinearPreparationV1, RamLfeBgvNonlinearRefreshChoiceV1,
 };
 pub use canonical::{
     RAM_LFE_V1_OUTPUT_LEAKAGE_BITS, RAM_LFE_V1_PRIVATE_CONTEXTS, RAM_LFE_V1_PUBLIC_DOMAINS,

@@ -75,7 +75,9 @@ fn canonical_byte_element_body(body: &[u8], flags: u8) -> bool {
     if compact_len_enabled_for_flags(flags) {
         body.len().is_multiple_of(2)
             && body
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .all(|element| element[0] == LENGTH_ONE[0])
     } else {
         let stride = byte_element_stride(flags);

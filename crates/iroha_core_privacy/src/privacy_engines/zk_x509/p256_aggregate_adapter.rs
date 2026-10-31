@@ -1603,12 +1603,13 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
         if selection.arithmetic_copy {
             let events =
                 value_arithmetic_copy_events_v1(self.next_row, self.arithmetic_operations)?;
-            let sources = p256_value_bus_opened_values_v1(&self.base.base_row_v1(self.next_row)?);
+            let base = P256AggregateAuxRowScratchV1(self.base.base_row_v1(self.next_row)?);
+            let sources = P256AggregateAuxRowScratchV1(p256_value_bus_opened_values_v1(&base.0));
             let mut arithmetic =
                 P256AggregateAuxRowScratchV1([F::ZERO; P256_VALUE_ARITHMETIC_COPY_AUX_WIDTH_V1]);
             self.arithmetic_copy_running = build_compact_arithmetic_copy_aux_row_v1(
                 &events,
-                &sources,
+                &sources.0,
                 self.arithmetic_copy_running,
                 self.arithmetic_copy_terminal,
                 self.arithmetic_copy_challenges,
@@ -4795,11 +4796,11 @@ fn p256_main_value_fixed_source_v1(
     )?)
 }
 /// Borrow the admitted public matrix without allocating another field owner.
-struct P256PublicArithmeticFixedDestinationV1<'a> {
+struct P256PublicFixedDestinationV1<'a> {
     columns: &'a mut [Vec<F>],
     committed: bool,
 }
-impl Drop for P256PublicArithmeticFixedDestinationV1<'_> {
+impl Drop for P256PublicFixedDestinationV1<'_> {
     fn drop(&mut self) {
         if !self.committed {
             for column in &mut *self.columns {
@@ -4813,20 +4814,32 @@ impl Drop for P256PublicArithmeticFixedDestinationV1<'_> {
 fn fill_public_arithmetic_fixed_matrix_with_v1(
     rows: usize,
     columns: &mut [Vec<F>],
-    mut fixed_row: impl FnMut(
+    fixed_row: impl FnMut(
         usize,
     ) -> Result<
         [F; P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1],
         P256AggregateAdapterErrorV1,
     >,
 ) -> Result<(), P256AggregateAdapterErrorV1> {
+    fill_public_fixed_matrix_with_v1(rows, columns, fixed_row)
+}
+
+/// Shared ordered public row emission into the already admitted final matrix.
+fn fill_public_fixed_matrix_with_v1<const WIDTH: usize>(
+    rows: usize,
+    columns: &mut [Vec<F>],
+    mut fixed_row: impl FnMut(usize) -> Result<[F; WIDTH], P256AggregateAdapterErrorV1>,
+) -> Result<(), P256AggregateAdapterErrorV1> {
+    const {
+        assert!(WIDTH > 0 && WIDTH <= P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1);
+    }
     if !rows.is_power_of_two()
-        || columns.len() != P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1
+        || columns.len() != WIDTH
         || columns.iter().any(|column| column.len() != rows)
     {
         return Err(P256AggregateAdapterErrorV1::Topology);
     }
-    let mut destination = P256PublicArithmeticFixedDestinationV1 {
+    let mut destination = P256PublicFixedDestinationV1 {
         columns,
         committed: false,
     };
@@ -5035,6 +5048,64 @@ impl P256MainVerifierFixedSourceV1 {
             columns,
             |row| fixed.row_v1(row),
         )
+    }
+    /// Fill the sole Log16 window or sink schedule once per public row.
+    pub(crate) fn fill_log16_fixed_matrix_v1(
+        &self,
+        registration: P256MainRegistrationV1,
+        columns: &mut [Vec<F>],
+    ) -> Result<(), P256AggregateAdapterErrorV1> {
+        let shape = registration.shape_v1()?;
+        if shape.trace_size != 1 << 16
+            || columns.len() != shape.fixed_width
+            || columns
+                .iter()
+                .any(|column| column.len() != shape.trace_size)
+        {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        match (registration.adapter_v1(), registration.local_instance_v1()) {
+            (P256MainAdapterV1::WindowBatch, 0) => {
+                fill_public_fixed_matrix_with_v1(shape.trace_size, columns, |row| {
+                    p256_main_window_fixed_row_v1(self.window, row)
+                })
+            }
+            (P256MainAdapterV1::BindingSink, 0) => {
+                let fixed = self.sink_v1(registration);
+                fill_public_fixed_matrix_with_v1(shape.trace_size, columns, |row| fixed.row_v1(row))
+            }
+            _ => Err(P256AggregateAdapterErrorV1::Topology),
+        }
+    }
+    /// Emit every execution or sorted fixed cell once per public row.
+    pub(crate) fn fill_value_fixed_matrix_v1(
+        &self,
+        registration: P256MainRegistrationV1,
+        columns: &mut [Vec<F>],
+    ) -> Result<(), P256AggregateAdapterErrorV1> {
+        let shape = registration.shape_v1()?;
+        if shape.trace_size != P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1
+            || registration.adapter_v1() != P256MainAdapterV1::ValueBus
+            || columns.len() != shape.fixed_width
+            || columns
+                .iter()
+                .any(|column| column.len() != shape.trace_size)
+        {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        match registration.local_instance_v1() {
+            0 => {
+                let fixed = self.execution_v1(registration.role_v1());
+                fill_public_fixed_matrix_with_v1(shape.trace_size, columns, |row| fixed.row_v1(row))
+            }
+            1 => {
+                let fixed = self.sorted_v1(registration.role_v1());
+                fill_public_fixed_matrix_with_v1(shape.trace_size, columns, |row| {
+                    Ok(fixed.row_v1(row)?)
+                })
+            }
+            _ => Err(P256AggregateAdapterErrorV1::Topology),
+        }
     }
     /// Independent eight-column replay oracle for the public matrix fill.
     #[cfg(test)]
@@ -6777,6 +6848,57 @@ impl P256MainBoundSourceV1 {
             .as_ref()
             .ok_or(P256AggregateAdapterErrorV1::Phase)?
             .fill_arithmetic_fixed_matrix_v1(registration, columns)
+    }
+    /// Replay the complete Log16 public matrix from this exact bound source.
+    /// Geometry precedes phase validation exactly as in fixed-column replay.
+    pub(crate) fn fill_log16_fixed_matrix_v1(
+        &self,
+        registration: P256MainRegistrationV1,
+        columns: &mut [Vec<F>],
+    ) -> Result<(), P256AggregateAdapterErrorV1> {
+        let shape = registration.shape_v1()?;
+        if shape.trace_size != 1 << 16
+            || !matches!(
+                registration.adapter_v1(),
+                P256MainAdapterV1::WindowBatch | P256MainAdapterV1::BindingSink
+            )
+            || registration.local_instance_v1() != 0
+            || columns.len() != shape.fixed_width
+            || columns
+                .iter()
+                .any(|column| column.len() != shape.trace_size)
+        {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        self.ensure_bound_v1()?;
+        self.fixed
+            .as_ref()
+            .ok_or(P256AggregateAdapterErrorV1::Phase)?
+            .fill_log16_fixed_matrix_v1(registration, columns)
+    }
+    /// Replay the complete ValueBus public matrix from this exact bound owner.
+    /// As with fixed-column replay, geometry refusal precedes phase validation.
+    pub(crate) fn fill_value_fixed_matrix_v1(
+        &self,
+        registration: P256MainRegistrationV1,
+        columns: &mut [Vec<F>],
+    ) -> Result<(), P256AggregateAdapterErrorV1> {
+        let shape = registration.shape_v1()?;
+        if shape.trace_size != P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1
+            || registration.adapter_v1() != P256MainAdapterV1::ValueBus
+            || !matches!(registration.local_instance_v1(), 0 | 1)
+            || columns.len() != shape.fixed_width
+            || columns
+                .iter()
+                .any(|column| column.len() != shape.trace_size)
+        {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        self.ensure_bound_v1()?;
+        self.fixed
+            .as_ref()
+            .ok_or(P256AggregateAdapterErrorV1::Phase)?
+            .fill_value_fixed_matrix_v1(registration, columns)
     }
     /// Borrow execution replay from this exact checked MAIN owner. As with the
     /// arithmetic replay factory, all terminal copies come from the private
@@ -10511,3 +10633,15 @@ mod arithmetic_aux_compact_tests;
 #[cfg(test)]
 #[path = "p256_value_aux_checkpoint_tests.rs"]
 mod value_aux_checkpoint_tests;
+
+#[cfg(test)]
+#[path = "p256_arithmetic_convolution_cost_tests.rs"]
+mod arithmetic_convolution_cost_tests;
+
+#[cfg(test)]
+#[path = "p256_log16_fixed_matrix_tests.rs"]
+mod log16_fixed_matrix_tests;
+
+#[cfg(test)]
+#[path = "p256_value_fixed_matrix_tests.rs"]
+mod value_fixed_matrix_tests;

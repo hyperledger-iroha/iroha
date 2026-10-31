@@ -7633,9 +7633,7 @@ fn agent_spend_limit_for_asset_definition<'a>(
         .spend_limits
         .iter()
         .find(|limit| {
-            resolve_agent_asset_definition_literal(state_transaction, &limit.asset_definition)
-                .ok()
-                .is_some_and(|definition_id| definition_id.to_string() == canonical_asset_definition)
+            resolve_agent_asset_definition_literal(state_transaction, &limit.asset_definition).is_ok_and(|definition_id| definition_id.to_string() == canonical_asset_definition)
         })
         .ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
@@ -8097,7 +8095,7 @@ fn binding_state_totals(
 }
 const REGISTERED_SORACLOUD_BFV_BACKEND: &str = "fhe/bfv-rns/v1";
 fn u64_bit_width(value: u64) -> u16 {
-    u16::try_from(u64::BITS - value.leading_zeros()).expect("u64 bit width fits u16")
+    u16::try_from(value.bit_width()).expect("u64 bit width fits u16")
 }
 #[cfg(test)]
 #[test]

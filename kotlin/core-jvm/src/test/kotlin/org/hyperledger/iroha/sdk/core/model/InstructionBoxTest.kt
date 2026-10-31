@@ -205,7 +205,9 @@ class InstructionBoxTest {
             Arguments.of("iroha.execute_trigger", InstructionKind.EXECUTE_TRIGGER),
             Arguments.of("iroha.log", InstructionKind.LOG),
             Arguments.of("iroha.upgrade", InstructionKind.UPGRADE),
-            Arguments.of("iroha.runtime_upgrade", InstructionKind.UPGRADE),
+            // Governed change sets carry no executor upgrade; the retired manifest prefix is no alias.
+            Arguments.of("iroha.runtime.support.attest.v1", InstructionKind.CUSTOM),
+            Arguments.of("iroha.runtime_upgrade.propose", InstructionKind.CUSTOM),
             Arguments.of("custom.something", InstructionKind.CUSTOM),
         )
     }

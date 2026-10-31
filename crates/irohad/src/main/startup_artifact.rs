@@ -1,6 +1,7 @@
 //! Bounded readers and decoders for local startup trust-root artifacts.
 use super::{ConfigError, ReportResult, StartError};
 use error_stack::{Report, ResultExt as _};
+use iroha_fs::FileMetadata;
 use iroha_genesis::{
     GenesisBlock, RawGenesisTransaction, decode_signed_genesis, read_signed_genesis_bytes,
 };
@@ -80,7 +81,7 @@ pub fn read_bounded_startup_artifact(
             format!("{label} byte limit is not representable on this platform"),
         )
     })?;
-    let named_before = fs::symlink_metadata(path)?;
+    let named_before = FileMetadata::symlink_metadata(path)?;
     if startup_artifact_metadata_is_link(&named_before) || !named_before.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -104,7 +105,7 @@ pub fn read_bounded_startup_artifact(
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let mut file = options.open(path)?;
-    let opened_before = file.metadata()?;
+    let opened_before = FileMetadata::of(&file)?;
     if startup_artifact_metadata_is_link(&opened_before)
         || !opened_before.is_file()
         || !same_startup_artifact_snapshot(&named_before, &opened_before)
@@ -130,8 +131,8 @@ pub fn read_bounded_startup_artifact(
     if bytes.len() > max_bytes {
         return Err(startup_artifact_too_large(label, max_bytes));
     }
-    let opened_after = file.metadata()?;
-    let named_after = fs::symlink_metadata(path)?;
+    let opened_after = FileMetadata::of(&file)?;
+    let named_after = FileMetadata::symlink_metadata(path)?;
     if startup_artifact_metadata_is_link(&named_after)
         || !named_after.is_file()
         || bytes.len() != capacity
@@ -151,7 +152,7 @@ fn startup_artifact_too_large(label: &str, max_bytes: usize) -> io::Error {
         format!("{label} exceeds the {max_bytes}-byte first-release limit"),
     )
 }
-fn startup_artifact_metadata_is_link(metadata: &fs::Metadata) -> bool {
+fn startup_artifact_metadata_is_link(metadata: &FileMetadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
     }
@@ -165,7 +166,7 @@ fn startup_artifact_metadata_is_link(metadata: &fs::Metadata) -> bool {
     false
 }
 #[cfg(unix)]
-fn same_startup_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn same_startup_artifact_snapshot(left: &FileMetadata, right: &FileMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev()
         && left.ino() == right.ino()
@@ -176,22 +177,37 @@ fn same_startup_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> 
         && left.ctime_nsec() == right.ctime_nsec()
 }
 #[cfg(windows)]
-fn same_startup_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn same_startup_artifact_snapshot(left: &FileMetadata, right: &FileMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
+    left.identity() == right.identity()
+        && left.links() == right.links()
         && left.file_size() == right.file_size()
         && left.last_write_time() == right.last_write_time()
 }
 #[cfg(not(any(unix, windows)))]
-fn same_startup_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn same_startup_artifact_snapshot(left: &FileMetadata, right: &FileMetadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn startup_snapshots_distinguish_equal_bytes_and_preserve_hardlink_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first");
+        let second = directory.path().join("second");
+        let alias = directory.path().join("alias");
+        fs::write(&first, b"same bytes").unwrap();
+        fs::write(&second, b"same bytes").unwrap();
+        fs::hard_link(&first, &alias).unwrap();
+        let original = FileMetadata::symlink_metadata(&first).unwrap();
+        let distinct = FileMetadata::symlink_metadata(&second).unwrap();
+        let linked = FileMetadata::symlink_metadata(&alias).unwrap();
+        assert!(!same_startup_artifact_snapshot(&original, &distinct));
+        assert!(same_startup_artifact_snapshot(&original, &linked));
+        assert!(!startup_artifact_metadata_is_link(&original));
+    }
+
     #[test]
     fn bounded_reader_accepts_exact_limit_and_rejects_sparse_overflow() {
         let directory = tempfile::tempdir().expect("create startup-artifact test directory");

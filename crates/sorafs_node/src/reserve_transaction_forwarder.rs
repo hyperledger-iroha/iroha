@@ -2479,6 +2479,18 @@ mod tests {
     use sorafs_manifest::deal::XorQuantity;
     use std::{fs, sync::Arc, thread, time::Duration};
     use tempfile::TempDir;
+    fn private_state_tempdir() -> std::io::Result<TempDir> {
+        let temporary = TempDir::new()?;
+        #[cfg(windows)]
+        {
+            // Create only this fresh empty fixture through the canonical private owner.
+            std::fs::remove_dir(temporary.path())?;
+            drop(iroha_fs::PrivateDirectory::open_or_create(
+                temporary.path(),
+            )?);
+        }
+        Ok(temporary)
+    }
     fn forwarder_policy() -> ReserveTransactionForwarderPolicyV1 {
         ReserveTransactionForwarderPolicyV1 {
             max_pending: 32,
@@ -3185,7 +3197,7 @@ mod tests {
         let decision = key(15);
         let provider = key(16);
         let context = provider_context(&operations, &decision, &provider, 6, cursor(50, 0xA5));
-        let temp = TempDir::new().unwrap();
+        let temp = private_state_tempdir().unwrap();
         let operation_id = {
             let forwarder =
                 ReserveTransactionForwarder::open(temp.path(), forwarder_policy()).unwrap();
@@ -3227,7 +3239,7 @@ mod tests {
         let decision = key(18);
         let provider = key(19);
         let context = provider_context(&operations, &decision, &provider, 8, cursor(60, 0xA6));
-        let temp = TempDir::new().unwrap();
+        let temp = private_state_tempdir().unwrap();
         {
             let forwarder =
                 ReserveTransactionForwarder::open(temp.path(), forwarder_policy()).unwrap();
@@ -3244,7 +3256,7 @@ mod tests {
             ReserveTransactionForwarder::open(temp.path(), forwarder_policy()),
             Err(ReserveTransactionForwarderError::InvalidCheckpoint)
         ));
-        let oversized = TempDir::new().unwrap();
+        let oversized = private_state_tempdir().unwrap();
         let mut restrictive = forwarder_policy();
         restrictive.checkpoint_max_bytes = 32;
         fs::write(
@@ -3277,7 +3289,7 @@ mod tests {
     fn persisted_checkpoint_and_operation_frames_use_distinct_declared_identities() {
         let context = provider_context(&key(1), &key(2), &key(3), 7, cursor(10, 0xA1));
         let operation = request_operation(&context);
-        let directory = TempDir::new().unwrap();
+        let directory = private_state_tempdir().unwrap();
         let forwarder =
             ReserveTransactionForwarder::open(directory.path(), forwarder_policy()).unwrap();
         let id = forwarder

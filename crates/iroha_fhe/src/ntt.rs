@@ -546,9 +546,11 @@ mod tests {
                 for (i, &a) in left.iter().enumerate() {
                     for (j, &b) in right.iter().enumerate() {
                         let slot = (i + j) % length;
-                        expected[slot] = ((u128::from(expected[slot])
-                            + u128::from(a) * u128::from(b))
-                            % u128::from(modulus)) as u64;
+                        expected[slot] = u64::try_from(
+                            (u128::from(expected[slot]) + u128::from(a) * u128::from(b))
+                                % u128::from(modulus),
+                        )
+                        .expect("residue below u64 modulus");
                     }
                 }
                 let mut actual = left.clone();

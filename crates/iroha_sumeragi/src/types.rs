@@ -617,7 +617,7 @@ mod tests {
             assert_eq!(f, (n - 1) / 3, "n={n}");
             assert_eq!(q, n - f, "n={n}");
             // Two quorums intersect in at least f + 1 members (one honest).
-            assert!(2 * q >= n + f + 1, "n={n}");
+            assert!(2 * q > n + f, "n={n}");
             // At least f + 1 honest members inside any quorum.
             assert!(q > f, "n={n}");
             // A quorum is reachable with f members silent.

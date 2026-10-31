@@ -1,4 +1,4 @@
-//! Public account-bootstrap capabilities projected from the original committed crypto policy.
+//! Public account-bootstrap discovery projected from the committed crypto policy.
 
 use iroha_data_model::{NetworkId, crypto_admission_policy::CryptoAdmissionPolicyV1};
 use norito::derive::{JsonDeserialize, JsonSerialize};
@@ -7,8 +7,10 @@ use norito::derive::{JsonDeserialize, JsonSerialize};
 pub const ACCOUNT_CAPABILITIES_MAX_BYTES_V1: usize = 4 * 1024;
 
 /// Public, account-free projection for `GET /v1/accounts/capabilities`.
+///
+/// All four fields are required. Additional metadata is ignored and cannot select a signer.
+/// This discovery document is not the canonical encoding of the committed crypto policy.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
 pub struct AccountCapabilitiesV1 {
     /// Exact bootstrap schema version.
     pub schema_version: u16,
@@ -16,7 +18,7 @@ pub struct AccountCapabilitiesV1 {
     pub network_id: NetworkId,
     /// Canonical I105 address network discriminant.
     pub network_prefix: u16,
-    /// Exact admitted names in canonical algorithm-tag order; no signer preference is implied.
+    /// Unique canonical algorithm names; wire order has no meaning and implies no preference.
     pub allowed_signing: Vec<String>,
 }
 
@@ -84,9 +86,56 @@ mod tests {
         assert_eq!(response.allowed_signing, ["secp256k1"]);
         let mut json = norito::json::to_value(&response).unwrap();
         json.as_object_mut().unwrap().insert(
-            "default_signing".into(),
-            norito::json::Value::from("ed25519"),
+            "metadata".into(),
+            norito::json!({"description": "public discovery"}),
         );
-        assert!(norito::json::from_value::<AccountCapabilitiesV1>(json).is_err());
+        assert_eq!(
+            norito::json::from_value::<AccountCapabilitiesV1>(json).unwrap(),
+            response
+        );
+    }
+
+    #[test]
+    fn account_capabilities_require_unambiguous_identity_and_policy_fields() {
+        let response = AccountCapabilitiesV1::from_policy(
+            network_id(),
+            369,
+            &CryptoAdmissionPolicyV1::new(vec![Algorithm::Secp256k1]).unwrap(),
+        );
+        let json = norito::json::to_value(&response).unwrap();
+        for field in [
+            "schema_version",
+            "network_id",
+            "network_prefix",
+            "allowed_signing",
+        ] {
+            let mut missing = json.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            missing
+                .as_object_mut()
+                .unwrap()
+                .insert("metadata".into(), json.clone());
+            assert!(
+                norito::json::from_value::<AccountCapabilitiesV1>(missing).is_err(),
+                "metadata must not replace required {field}"
+            );
+        }
+        let encoded = norito::json::to_json(&response).unwrap();
+        for field in [
+            "schema_version",
+            "network_id",
+            "network_prefix",
+            "allowed_signing",
+        ] {
+            let duplicate = format!(
+                "{{\"{field}\":{},{}",
+                norito::json::to_json(&json[field]).unwrap(),
+                &encoded[1..]
+            );
+            assert!(
+                norito::json::from_str::<AccountCapabilitiesV1>(&duplicate).is_err(),
+                "duplicate {field} must fail"
+            );
+        }
     }
 }

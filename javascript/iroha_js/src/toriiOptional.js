@@ -17,7 +17,11 @@ export {
 export {
   _inspectOrdinaryCanonicalTransactionPayloadBindings as inspectCanonicalTransactionPayloadBindings,
 } from "./transactionCodec.js";
-export { normalizeGovernanceProposalWireV1 } from "./governanceProposalV1.js";
+export {
+  normalizeGovernanceProposalWireV1,
+  normalizeRuntimeChangeSetEndorsementsV1,
+  normalizeRuntimeChangeSetV1,
+} from "./governanceProposalV1.js";
 
 export {
   PARLIAMENT_ATTEMPT_DRAFT_PATH_V1,

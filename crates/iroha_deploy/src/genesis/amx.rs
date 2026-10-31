@@ -354,14 +354,15 @@ mod tests {
             alias,
         )
         .unwrap();
-        let spec = crate::localnet::PrivateRootSpec {
+        let spec = crate::sora_network::PrivateRootSpec {
             parent_network_id: chain.network_id(),
             dataspace_id: DataSpaceId::from_hash(&name.name_hash()),
             dataspace_alias: alias.into(),
         };
         let ports = crate::managed::LocalnetPorts::reserve().unwrap();
-        let prepared = crate::localnet::prepare_private_root("amx-bootstrap", &root, &ports, &spec)
-            .expect("generate the complete original private fee, SNS and validator policy");
+        let prepared =
+            crate::sora_network::prepare_private_root("amx-bootstrap", &root, &ports, &spec)
+                .expect("generate the complete original private fee, SNS and validator policy");
         let original = RawGenesisTransaction::from_path(root.join("genesis.json")).unwrap();
         let client = prepared.context.load_client_config().unwrap();
         let key = &client.key_pair;
@@ -369,7 +370,7 @@ mod tests {
         let config_bytes = iroha_fs::read_private(config_path, 1024 * 1024).unwrap();
         let rendered = std::str::from_utf8(&config_bytes).unwrap();
         let mut config =
-            crate::localnet::parse_localnet_peer_config(rendered, Some(config_path)).unwrap();
+            crate::sora_network::parse_localnet_peer_config(rendered, Some(config_path)).unwrap();
         let table = crate::secret_toml::Table::new(
             crate::secret_toml::parse_table(rendered, "original private AMX bootstrap fixture")
                 .unwrap(),

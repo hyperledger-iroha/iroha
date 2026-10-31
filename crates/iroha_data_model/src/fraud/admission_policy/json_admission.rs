@@ -381,7 +381,7 @@ fn decode_band<D: Destination>(
     let band = tag
         .as_ref()
         .parse::<FraudRiskBandV1>()
-        .map_err(|_| json::Error::Message("unknown JSON enum variant".into()))?;
+        .map_err(|()| json::Error::Message("unknown JSON enum variant".into()))?;
     let mut content = json::Parser::new(raw);
     content.parse_null()?;
     content.skip_ws();

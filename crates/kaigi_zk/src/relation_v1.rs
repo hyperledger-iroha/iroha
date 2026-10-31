@@ -179,7 +179,7 @@ pub(super) fn assign_sponge(
                 Value::known(Scalar::from(domain)),
             ];
             let mut state_cells: Option<[Cell; 3]> = None;
-            for (block, pair) in framed.chunks_exact(2).enumerate() {
+            for (block, pair) in framed.as_chunks::<2>().0.iter().enumerate() {
                 let start = offset + block * (POSEIDON_ROUNDS + 1);
                 config.q_absorb.enable(&mut region, start)?;
                 for index in 0..3 {

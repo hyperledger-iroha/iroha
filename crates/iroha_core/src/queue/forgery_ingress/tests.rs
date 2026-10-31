@@ -25,6 +25,18 @@ fn queue() -> Queue {
     Queue::test(iroha_config::parameters::actual::Queue::default(), &time)
 }
 
+/// The installed repeat cache's keys, least recently used first.
+fn cached_keys(queue: &Queue) -> Vec<IngressKey> {
+    queue
+        .forgery_ingress
+        .lock()
+        .as_ref()
+        .expect("a remote submission installed the cache")
+        .seen
+        .as_slice()
+        .to_vec()
+}
+
 #[test]
 fn exact_burst_and_fractional_refill_are_eight_pairings_per_second() {
     let pool = AllocationBudget::new(1 << 20);
@@ -249,6 +261,15 @@ fn signed_evidence(
     view: &StateView<'_>,
     evidence: SubmitSccpForgeryEvidenceV1,
 ) -> SignedTransaction {
+    signed_evidence_with(view, evidence, |_| {})
+}
+
+/// [`signed_evidence`] after `configure` adjusts the builder, e.g. its lifetime or nonce.
+fn signed_evidence_with(
+    view: &StateView<'_>,
+    evidence: SubmitSccpForgeryEvidenceV1,
+    configure: impl FnOnce(&mut iroha_data_model::transaction::TransactionBuilder),
+) -> SignedTransaction {
     use iroha_data_model::{
         account::AccountId,
         transaction::{FeePaymentIntent, TransactionBuilder},
@@ -263,7 +284,33 @@ fn signed_evidence(
     )
     .with_instructions([evidence]);
     builder.set_creation_time(Duration::from_millis(3_000));
+    configure(&mut builder);
     builder.sign(key.private_key())
+}
+
+/// Accept `evidence` from the fixed test authority against `time`, with an explicit
+/// lifetime and a nonce that gives equal evidence distinct transaction identities.
+fn accepted_evidence(
+    state: &crate::state::State,
+    time: &TimeSource,
+    evidence: &SubmitSccpForgeryEvidenceV1,
+    time_to_live: Duration,
+    nonce: u32,
+) -> crate::tx::AcceptedTransaction<'static> {
+    let signed = signed_evidence_with(&state.view(), evidence.clone(), |builder| {
+        builder.set_ttl(time_to_live);
+        builder.set_nonce(std::num::NonZeroU32::new(nonce).unwrap());
+    });
+    let parameters = state.transaction_admission_parameters();
+    crate::tx::AcceptedTransaction::accept_with_time_source(
+        signed,
+        state.network_id_ref(),
+        parameters.sumeragi().max_clock_drift(),
+        parameters.transaction(),
+        parameters.require_crypto_policy().unwrap(),
+        time,
+    )
+    .unwrap()
 }
 
 #[test]
@@ -298,14 +345,20 @@ fn actual_view_admission_verifies_native_evidence_and_never_publishes_it() {
             .with_exclusive(&parts)
             .with_content(&parts)
     );
-    assert!(matches!(
-        access.sccp_exempt_admission(&queue, &transaction),
-        Err(Error::SccpForgeryIngress(ForgeryIngressError::Seen))
-    ));
     assert_eq!(
         queue.active_len(),
         0,
         "preverification creates no queue publication by itself"
+    );
+    // Verified evidence leaves the repeat cache. With no queued transaction carrying it,
+    // a repeat is not shadowed and reaches the pairing again.
+    assert_eq!(cached_keys(&queue), []);
+    assert_eq!(
+        access
+            .sccp_exempt_admission(&queue, &transaction)
+            .unwrap()
+            .unwrap(),
+        checked
     );
     assert!(view.world().sccp_forgery_offences().is_empty());
     assert_eq!(store::forgery_max_generation(view.world()), None);
@@ -424,10 +477,14 @@ fn refused_signature_never_shadows_the_genuine_certificate() {
             .is_ok(),
         "a refused signature must not shadow the genuine certificate of the same triple"
     );
-    assert!(matches!(
-        queue.admit_forgery(&view, &signed_evidence(&view, valid), REMOTE),
-        Err(Error::SccpForgeryIngress(ForgeryIngressError::Seen))
-    ));
+    // Only the refused signature stays cached. The genuine one left the cache once it
+    // verified, and no queued transaction carries it, so a repeat reaches the pairing.
+    assert_eq!(cached_keys(&queue).len(), 1);
+    assert!(
+        queue
+            .admit_forgery(&view, &signed_evidence(&view, valid), REMOTE)
+            .is_ok()
+    );
     assert!(view.world().sccp_forgery_offences().is_empty());
     assert_eq!(store::forgery_max_generation(view.world()), None);
     assert_eq!(queue.active_len(), 0);
@@ -621,5 +678,110 @@ fn unresolved_signers_reach_the_pairing_until_their_generation_is_recorded() {
         EvidencePenaltyStatus::Applied {
             height: recorded_at + 2
         }
+    );
+}
+
+#[test]
+fn uncommitted_departure_after_seen_repeats_never_shadows_a_later_genuine_submission() {
+    use forgery::tests::{active_member_chain, future};
+    let _retirement_pin = crossbeam_epoch::pin();
+    let (chain, keys) = active_member_chain();
+    let evidence = future(&chain, &keys);
+    let state = chain.state();
+    let (clock, time) = TimeSource::new_mock(Duration::from_millis(3_000));
+    let queue = Queue::test(iroha_config::parameters::actual::Queue::default(), &time);
+    let accept = |ttl_ms: u64, nonce: u32| {
+        accepted_evidence(
+            state,
+            &time,
+            &evidence,
+            Duration::from_millis(ttl_ms),
+            nonce,
+        )
+    };
+    // A griefer relays the genuine certificate with a lifetime too short for any block,
+    // then keeps re-sending it. Each repeat is a cheap refusal while the first is queued.
+    queue
+        .push_with_lane_with_state(accept(100, 1), state)
+        .expect("the genuine certificate is admitted");
+    assert_eq!(queue.active_len(), 1);
+    for nonce in 2..34 {
+        let refused = queue
+            .push_with_lane_with_state(accept(100, nonce), state)
+            .unwrap_err();
+        assert!(
+            matches!(
+                refused.err,
+                Error::SccpForgeryIngress(ForgeryIngressError::Seen)
+            ),
+            "{:?}",
+            refused.err
+        );
+    }
+    // The admission expires uncommitted. The next admission culls it, which releases its
+    // pending claim, so an honest relay of the same certificate reaches the pairing again.
+    clock.advance(Duration::from_secs(2));
+    let honest = accept(60_000, 34);
+    let honest_hash = honest.hash_as_entrypoint();
+    queue
+        .push_with_lane_with_state(honest, state)
+        .expect("an expired admission must not shadow the genuine certificate");
+    assert_eq!(queue.active_len(), 1);
+    assert!(queue.txs.contains_key(&honest_hash));
+    // Eviction releases the claim alike. No verified key is left in the repeat cache.
+    queue.clear_all();
+    queue
+        .push_with_lane_with_state(accept(60_000, 35), state)
+        .expect("an evicted admission must not shadow the genuine certificate");
+    assert_eq!(queue.active_len(), 1);
+    assert_eq!(cached_keys(&queue), []);
+}
+
+#[test]
+fn queued_evidence_refuses_every_signature_of_its_triple_before_a_token() {
+    use forgery::tests::{active_member_chain, future};
+    let _retirement_pin = crossbeam_epoch::pin();
+    let (chain, keys) = active_member_chain();
+    let evidence = future(&chain, &keys);
+    let mut forged = evidence.clone();
+    forged.aggregate_signature = [0; 96];
+    let state = chain.state();
+    let (_, time) = TimeSource::new_mock(Duration::from_millis(3_000));
+    let queue = Queue::test(iroha_config::parameters::actual::Queue::default(), &time);
+    let ttl = Duration::from_secs(60);
+    queue
+        .push_with_lane_with_state(accepted_evidence(state, &time, &evidence, ttl, 1), state)
+        .expect("the genuine certificate is admitted");
+    let credit = queue.forgery_ingress.lock().as_ref().unwrap().credit_ns;
+    // The queued claim of (g, m, signers) refuses an exact repeat and a different signature
+    // alike: neither could join the queue, so neither may take a token or enter the cache.
+    // The keeper deduplicates too: a pairing would have refused its zero signature instead.
+    for (submitted, nonce, keeper) in [
+        (&evidence, 2, false),
+        (&forged, 3, false),
+        (&forged, 4, true),
+    ] {
+        let accepted = accepted_evidence(state, &time, submitted, ttl, nonce);
+        let refused = if keeper {
+            queue.push_local_keeper_with_state(accepted, state)
+        } else {
+            queue.push_with_lane_with_state(accepted, state)
+        }
+        .unwrap_err();
+        assert!(
+            matches!(
+                refused.err,
+                Error::SccpForgeryIngress(ForgeryIngressError::Seen)
+            ),
+            "{:?}",
+            refused.err
+        );
+    }
+    assert_eq!(queue.active_len(), 1);
+    assert_eq!(cached_keys(&queue), []);
+    assert_eq!(
+        queue.forgery_ingress.lock().as_ref().unwrap().credit_ns,
+        credit,
+        "a refusal by the queued claim takes no pairing token"
     );
 }

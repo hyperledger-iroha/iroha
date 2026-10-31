@@ -823,7 +823,7 @@ pub fn note_copy_constraint_residues_v1(
                 challenge,
             )
         });
-        for (pair, factors) in numerator.chunks_exact(2).enumerate() {
+        for (pair, factors) in numerator.as_chunks::<2>().0.iter().enumerate() {
             residues.push(
                 current_aux[offset + COPY_NUMERATOR_PAIRS + pair].sub(factors[0].mul(factors[1])),
             );
@@ -842,7 +842,7 @@ pub fn note_copy_constraint_residues_v1(
                     .mul(current_aux[offset + COPY_NUMERATOR_QUADS + 1]),
             ),
         );
-        for (pair, factors) in denominator.chunks_exact(2).enumerate() {
+        for (pair, factors) in denominator.as_chunks::<2>().0.iter().enumerate() {
             residues.push(
                 current_aux[offset + COPY_DENOMINATOR_PAIRS + pair].sub(factors[0].mul(factors[1])),
             );

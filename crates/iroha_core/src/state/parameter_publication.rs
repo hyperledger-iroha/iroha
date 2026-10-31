@@ -25,7 +25,7 @@ mod events;
 
 /// Exact semantic or original local cause before parameter publication.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ParameterChangeError {
+pub enum ParameterChangeError {
     /// Actual graph/event parsing and original resource provenance.
     #[error(transparent)]
     Ingress(#[from] ParameterIngressAttemptError),
@@ -128,7 +128,7 @@ impl EventSequence {
 
 /// Closed successor and notification prepared against one exact retained source.
 /// No constructor accepts a raw graph or an already decoded unowned projection.
-pub(crate) struct PreparedParameterChange {
+pub struct PreparedParameterChange {
     parameters: PreparedParameters,
     event: SharedDataEvent,
     external: Destination<EventBox>,
@@ -359,7 +359,7 @@ impl StateTransaction<'_, '_> {
 /// Preserve the actual graph operation's scoped decoder and physical owners at
 /// both instruction and authenticated genesis boundaries. Error decoration runs
 /// only after resource classification and cannot turn refusal into invalid input.
-pub(crate) fn parameter_ingress_attempt_error<E>(
+pub fn parameter_ingress_attempt_error<E>(
     actual: ParameterIngressAttemptError,
     invalid: impl FnOnce(crate::pipeline_gas_policy::ParameterIngressError) -> E,
 ) -> crate::execution_attempt::ExecutionAttemptError<E> {
@@ -378,7 +378,7 @@ pub(crate) fn parameter_ingress_attempt_error<E>(
 }
 
 /// Only direct ingress is used by preparation. It never calls the older complete
-/// raw-graph foreign-copy operation; that operation's native BigInt clone error
+/// raw-graph foreign-copy operation; that operation's native `BigInt` clone error
 /// is not converted or reconstructed into this execution provenance.
 fn direct_resource(
     original: crate::pipeline_gas_policy::ParameterIngressError,
@@ -431,13 +431,13 @@ fn direct_resource(
             | ParameterRetentionError::Shared(PrepaidSharedError::Reservation(_))
             | ParameterRetentionError::ForeignPool
             | ParameterRetentionError::StalePredecessor
-            | ParameterRetentionError::PlanMismatch,
+            | ParameterRetentionError::PlanMismatch
+            | ParameterRetentionError::Custom(
+                CustomParametersAdmissionError::Buffer(PrepaidBufferError::Reservation(_))
+                | CustomParametersAdmissionError::RetainedMutation
+                | CustomParametersAdmissionError::KeyValueMismatch,
+            ),
         )
-        | E::Retention(ParameterRetentionError::Custom(
-            CustomParametersAdmissionError::Buffer(PrepaidBufferError::Reservation(_))
-            | CustomParametersAdmissionError::RetainedMutation
-            | CustomParametersAdmissionError::KeyValueMismatch,
-        ))
         | E::Json(JsonRetentionError::Text(
             ChargedBufferFromChargeError::DemandOverflow
             | ChargedBufferFromChargeError::LayoutMismatch { .. },

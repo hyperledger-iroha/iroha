@@ -89,6 +89,10 @@ fn mq_sub(x: u32, y: u32) -> u32 {
 }
 // Halving modulo q (internal representation).
 #[inline]
+#[expect(
+    clippy::manual_midpoint,
+    reason = "mirrors the Falcon reference halving modulo q; x + q stays below 2^32"
+)]
 fn mq_half(x: u32) -> u32 {
     (x + ((x & 1).wrapping_neg() & Q)) >> 1
 }

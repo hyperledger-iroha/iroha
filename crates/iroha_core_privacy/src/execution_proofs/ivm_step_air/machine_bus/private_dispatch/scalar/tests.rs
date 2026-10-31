@@ -300,8 +300,10 @@ fn typed_unit_schema_charges_its_node_at_return_only() {
     assert_eq!(root_setup_gas(), 9);
     let return_words = crate::ivm_test_support::unit_return();
     let opcode_gas = return_words
-        .chunks_exact(4)
-        .map(|bytes| ivm::gas::cost_of(u32::from_le_bytes(bytes.try_into().unwrap())).unwrap())
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|bytes| ivm::gas::cost_of(u32::from_le_bytes(*bytes)).unwrap())
         .sum::<u64>();
     let validation_gas = 1 + ivm::call::CALL_WORD_BYTES_V1 as u64;
     let total_gas = root_setup_gas() + opcode_gas + validation_gas;

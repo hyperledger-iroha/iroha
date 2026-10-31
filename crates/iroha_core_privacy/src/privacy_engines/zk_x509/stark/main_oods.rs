@@ -89,9 +89,14 @@ fn log19_public_at_point_v1(
     openings
         .try_reserve_exact(2)
         .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+    // The current/next rows together exceed the stack-array budget; keep them heap-owned.
+    let mut combined = Vec::new();
+    combined
+        .try_reserve_exact(2)
+        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+    combined.resize(2, [E::ZERO; MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1]);
     let weights = lagrange_weights_v1(ZK_X509_MAX_NATIVE_TRACE_LOG2_V1, point)?;
     let (prefix, linear) = main_log19_weight_prefixes_v1(&weights)?;
-    let mut combined = [[E::ZERO; MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1]; 2];
     for segment in &schedule.segments {
         for (shift, row) in combined.iter_mut().enumerate() {
             let value =

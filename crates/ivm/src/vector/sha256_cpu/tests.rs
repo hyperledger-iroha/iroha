@@ -260,7 +260,7 @@ fn required_native(test_name: &str) {
         }
         padded.extend_from_slice(&((length as u64) * 8).to_be_bytes());
         let mut actual = INITIAL;
-        for chunk in padded.chunks_exact(64) {
+        for chunk in padded.as_chunks::<64>().0 {
             super::super::sha256_compress(&mut actual, chunk.try_into().unwrap());
             blocks += 1;
         }

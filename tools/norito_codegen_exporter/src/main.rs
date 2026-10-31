@@ -102,9 +102,8 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::governance::UpdatePlainConviction);
         $macro!(iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1);
         $macro!(iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1);
-        $macro!(iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade);
-        $macro!(iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade);
-        $macro!(iroha_data_model::isi::runtime_upgrade::CancelRuntimeUpgrade);
+        $macro!(iroha_data_model::isi::runtime_upgrade::AttestRuntimeSupportV1);
+        $macro!(iroha_data_model::isi::runtime_upgrade::ContainRuntimeV1);
     };
 }
 /// Command line arguments accepted by the exporter.

@@ -420,7 +420,112 @@ p95 startup/deployment measurements remain separate gates in the
 
 ## Configuration
 
-To run the Iroha peer binary, you must [generate the keys](#generating-keys) and provide a [configuration file](#configuration-file).
+A local development network needs no configuration: `kagami localnet up` starts and
+verifies four validators. A network of separate machines takes three steps, and no
+validator private key leaves its host.
+
+1. On every validator host, create the node directory:
+
+   ```bash
+   kagami node init --dir ./node --public-address 203.0.113.7:1337
+   ```
+
+   This writes the BLS validator key, the SoraNet transport key and the streaming
+   identity key to `node/secrets/` (owner-only) and a starter `node/config.toml`, and
+   prints `validator: PUBLIC_KEY@HOST:PORT=POP_HEX`, the node's roster entry with its
+   proof of possession. Send that line to whoever creates the network.
+
+2. Collect the lines of an exact `3f + 1` set of validators (4, 7, 10, ...) and create
+   the network:
+
+   ```bash
+   kagami network create --out-dir ./network \
+     --validator "$VALIDATOR_A" --validator "$VALIDATOR_B" \
+     --validator "$VALIDATOR_C" --validator "$VALIDATOR_D"
+   ```
+
+   Every key must be BLS-normal with a valid proof of possession at a distinct address.
+   The command signs genesis with a fresh genesis key and writes the four files to
+   copy to every node: `network.toml`, `genesis.signed.nrt`, `genesis.expected_hash`
+   and `nexus-amx-context.v1.bin`. The last file lets `--check-config` name exact
+   configuration fields when they differ from signed genesis. It also
+   writes `genesis.public_key`, the config-bound `genesis.json`, and `client.toml` for an
+   operator account that holds the network's XOR and its administrative permissions. The
+   genesis and operator private keys stay in the owner-only `network/secrets/`.
+   `--chain-id` names the chain (a fresh UUID by default), `--consensus-mode npos`
+   selects NPoS, and `--torii-url` sets the Torii API the operator client dials.
+
+3. Copy the four shared files into every node directory, validate it, and start the
+   validator. On the first boot of a brand-new network, pass
+   `--sumeragi-assert-fresh-key` once; without it, keys that never signed for the chain
+   wait for running peers to anchor them, and a new network never starts (never pass it
+   after losing node data):
+
+   ```bash
+   iroha3d --config node/config.toml --check-config
+   iroha3d --config node/config.toml --sumeragi-assert-fresh-key
+   ```
+
+The node's own `config.toml` names only its identity and listeners, and includes the
+shared file:
+
+```toml
+extends = "network.toml"
+data_dir = "."
+public_key = "ea0130..."
+
+[network]
+address = "0.0.0.0:1337"
+public_address = "203.0.113.7:1337"
+
+[torii]
+address = "127.0.0.1:8080"
+```
+
+`network.toml` carries the `chain`, the full `trusted_peers` roster with
+`trusted_peers_pop`, `[genesis]` and every consensus-bound section the genesis was
+signed with:
+
+```toml
+chain = "6b0f3e9a-..."
+trusted_peers = [
+  "ea0130...@203.0.113.7:1337",
+  "ea0130...@203.0.113.8:1337",
+]
+trusted_peers_pop = [
+  { public_key = "ea0130...", pop_hex = "..." },
+  { public_key = "ea0130...", pop_hex = "..." },
+]
+
+[genesis]
+public_key = "ed0120..."
+file = "genesis.signed.nrt"
+expected_hash_file = "genesis.expected_hash"
+
+[nexus.fusion]
+exit_teu = 50000000
+```
+
+Consensus-bound settings in `nexus`, `gov`, `oracle`, `content` and `settlement`
+feed policy digests committed by the signed genesis, so a
+node keeps them exactly as `network.toml` sets them; otherwise startup fails with a
+signed genesis policy mismatch. To join a network created some other way, put its chain,
+roster, `[genesis]` and the consensus-bound sections its reference node configuration
+sets into `network.toml` (Kagami localnets set `[nexus.fusion] exit_teu`).
+Pipeline, ZK and fraud validity policies come from committed parameters or protocol
+defaults; their node-local resource settings do not need to be copied for these digests.
+Everything else defaults: Kura, snapshot, DA, SoraFS, SoraNet and Torii state paths
+derive from `data_dir`; the transport and streaming public keys derive from their
+private keys; the streaming codec uses the rANS tables compiled into `iroha3d`; and
+governance and VPN accounts keep their defaults for any `chain_discriminant`.
+Addresses are plain `host:port` (the checked `addr:host:port#CRC` form is also
+accepted).
+
+`network/client.toml` dials `http://127.0.0.1:8080/` unless `--torii-url` names another
+validator's Torii API; `kagami node init` binds Torii to loopback, so pass
+`--api-address` there to reach a node from another machine.
+
+The sections below cover custom key custody and the complete file format.
 
 ### Generating Keys
 
@@ -488,6 +593,16 @@ The key files the configuration itself names under `<data_dir>/secrets/`
 same custody checks whenever the node file is loaded, before the configuration
 parser reads them; `--check-config` and `--check-storage` do read those.
 
+The SoraNet transport and streaming identities are node-local: the validator key
+certifies the transport key at every handshake, and the streaming key only
+encrypts this node's session snapshots. When the configuration reads
+`transport.key` or `streaming.key` only because `data_dir` completed its path (no
+inline key, explicit key file or configured public key) and the file is missing,
+the first load of the node file (a start or a check) creates it with a fresh
+Ed25519 key: create-new and owner-only, in an owner-only `secrets` directory that
+is created when absent. The path and public key go to stderr. An existing file is
+never replaced, and `validator.key` is never created.
+
 Deployment launchers that supply their own runtime-provider registry
 (`iroha3d_taira` until the cutover) do not use `node_secrets`.
 
@@ -498,9 +613,18 @@ Run these with a new binary before it replaces an old one:
 - `iroha3d --config <file> --check-config --json` prints the handshake- and
   genesis-bound values of this build and configuration as one Norito JSON object
   (`config_fingerprint`, `protocol_version`, `wire_schema_hash`,
-  `nexus_policy_digest`, `gas_schedule_hash`, `execution_policy_hash`,
+  `nexus_policy_digest`, `host_profiles`, `execution_policy_hash`,
   `nexus_amx_context_hash`, plus `status`). Genesis-bound values are `null`
   while the signed genesis is not available locally.
+- When this configuration derives other policy commitments than the signed
+  genesis, `--check-config` fails with a signed genesis policy mismatch. With the
+  network's `nexus-amx-context.v1.bin` (Kagami writes it beside
+  `genesis.signed.nrt`) next to the configured genesis file, the report lists
+  each differing Nexus field with both values, such as
+  `nexus.fusion.exit_teu: signed genesis 50000000, this node 6000`. The file is
+  used only when its hash equals the signed commitment. A mismatch outside the
+  Nexus/AMX context comes from `gov`, `oracle`, `content`, `settlement` or the
+  other `nexus` service sections.
 - `iroha3d --config <file> --check-storage` inspects a stopped node's store:
   it opens Kura in emergency-Fast mode (taking the store-root lock, so a store
   owned by a running node is refused), decodes every retained block body with
@@ -509,6 +633,23 @@ Run these with a new binary before it replaces an old one:
   `{tip_height, tip_hash, snapshot_height, prefix_hash_at_snapshot_height,
   snapshot_restore_dry_run, snapshot_restore_error}`. It exits nonzero when the
   store cannot be read or the restore dry run fails, and never writes to the store.
+- `iroha3d --config <file> --check-replay` replays a stopped node's store (or an
+  immutable copy of it) with this build. It opens the store as `--check-storage`
+  does, authenticates signed genesis against the configured trust anchor, copies
+  the whole store (every file but its lock) into the system temporary directory
+  (it needs free space for a copy of the store) and releases the original, restores
+  the newest snapshot on the copy as a Strict startup does or re-executes signed
+  genesis, and re-executes every later block, comparing each result with its
+  certificate. Blocks at or below
+  `snapshot.upgrade_checkpoint` are never re-executed. Progress goes to standard
+  error; the last line of standard output is
+  `{tip_height, start: {height, source}, replayed_to, outcome, divergence,
+  missing_height}` with `outcome` `matched`, `diverged` (the first block whose
+  result differs, its first differing commitment component such as
+  `world_state_root`, both values and every differing component) or
+  `missing_history` (the first height whose body the store no longer holds). It
+  exits nonzero unless every replayed block matched, and never writes to the
+  store, the snapshot directory or the tiered-state directory.
 
 `lifecycle.exit_on_stdin_close = true` makes the daemon shut down cleanly when
 its standard input reaches end-of-file; a local supervisor sets it and holds the
@@ -628,8 +769,8 @@ and independently approved exact hash for that exact sample roster before
 evaluating the manifest:
 
 ```bash
-cargo run --bin kagami -- localnet \
-  --seed Iroha --peers 4 --sora-profile nexus --consensus-mode npos \
+cargo run --bin kagami -- sora-network generate \
+  --seed Iroha --peers 4 --profile nexus \
   --out-dir target/compose-genesis
 export IROHA_GENESIS_SIGNED_FILE="$PWD/target/compose-genesis/genesis.signed.nrt"
 export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/compose-genesis/genesis.public_key"
@@ -646,7 +787,7 @@ not appear in Compose YAML or environment variables. Neither mode mounts the
 genesis signing key, client credentials, source manifest, or source peer config.
 Host-only account-onboarding and faucet services are omitted from the
 validator-only projection. Missing files and trust-root mismatches fail closed.
-For a deployed network, generate one authoritative `kagami localnet` bundle and
+For a deployed network, generate one authoritative `kagami sora-network` bundle and
 run `kagami docker` without `--seed`; Kagami validates and reuses its identities,
 PoPs, signed body, verifier key, hash, and policy-equivalent configs rather than
 inheriting the sample validator credentials.

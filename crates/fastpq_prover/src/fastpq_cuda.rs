@@ -918,8 +918,10 @@ pub(crate) fn fastpq_bn254_poseidon_hash_words(
         &mut output,
     )?;
     Ok(output
-        .chunks_exact(BN254_LIMBS)
-        .map(bn254_limbs_to_bytes)
+        .as_chunks::<BN254_LIMBS>()
+        .0
+        .iter()
+        .map(|limbs| bn254_limbs_to_bytes(limbs.as_slice()))
         .collect())
 }
 #[cfg(test)]

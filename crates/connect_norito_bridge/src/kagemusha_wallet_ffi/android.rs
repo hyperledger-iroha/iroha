@@ -63,7 +63,7 @@ impl AndroidPlatform {
             })
         })();
         if result.is_err() {
-            let _ = env.exception_clear();
+            env.exception_clear();
         }
         result.map_err(|_| Failure::code(INVALID))
     }
@@ -85,14 +85,14 @@ impl AndroidPlatform {
             let code = env.get_field(&reply, jni::jni_str!("code"), jni::jni_sig!("I"))?.i()?;
             let bytes = env.call_method(&reply, jni::jni_str!("bytes"), jni::jni_sig!("()[B"), &[])?.l()?;
             let bytes = JByteArray::cast_local(env, bytes)?;
-            let len = env.get_array_length(&bytes)?;
-            if len < 0 || len as usize > bound { return Err(jni::errors::Error::WrongJValueType("oversized", "bounded bytes")); }
+            let len = bytes.len(env)?;
+            if len > bound { return Err(jni::errors::Error::WrongJValueType("oversized", "bounded bytes")); }
             let bytes = env.convert_byte_array(&bytes)?;
             Ok((PlatformReply { tag: tag as u32, reason: reason as u32, code, length: bytes.len() }, bytes))
         });
         let result = result.and_then(|value| no_pending_exception(env).map(|()| value));
         if result.is_err() {
-            let _ = env.exception_clear();
+            env.exception_clear();
         }
         result
         });
@@ -157,17 +157,17 @@ impl Platform for AndroidPlatform {
             let code=env.get_field(&reply,jni::jni_str!("code"),jni::jni_sig!("I"))?.i()?;
             let bytes=env.call_method(&reply,jni::jni_str!("bytes"),jni::jni_sig!("()[B"),&[])?.l()?;
             let bytes=JByteArray::cast_local(env,bytes)?;
-            if env.get_array_length(&bytes)? != 0 { return Err(jni::errors::Error::WrongJValueType("nonempty", "chain-only bytes")); }
+            if bytes.len(env)? != 0 { return Err(jni::errors::Error::WrongJValueType("nonempty", "chain-only bytes")); }
             let originals=env.call_method(&reply,jni::jni_str!("certificatesDer"),jni::jni_sig!("()[[B"),&[])?.l()?;
             let originals=JObjectArray::<JByteArray>::cast_local(env, originals)?;
-            let count=env.get_array_length(&originals)?;
+            let count=originals.len(env)?;
             if (tag==0 && !(2..=8).contains(&count)) || (tag!=0 && count!=0) {
                 return Err(jni::errors::Error::WrongJValueType("chain count", "bounded original DER chain"));
             }
-            let mut chain=Vec::with_capacity(count as usize);
+            let mut chain=Vec::with_capacity(count);
             for index in 0..count {
-                let original=env.get_object_array_element(&originals,index as usize)?;
-                let length=env.get_array_length(&original)?;
+                let original=originals.get_element(env,index)?;
+                let length=original.len(env)?;
                 if !(1..=16_384).contains(&length) { return Err(jni::errors::Error::WrongJValueType("DER extent", "bounded original certificate")); }
                 chain.push(env.convert_byte_array(&original)?);
             }
@@ -175,7 +175,7 @@ impl Platform for AndroidPlatform {
         });
         let answer = answer.and_then(|value| no_pending_exception(env).map(|()| value));
         if answer.is_err() {
-            let _ = env.exception_clear();
+            env.exception_clear();
         }
         answer
         });

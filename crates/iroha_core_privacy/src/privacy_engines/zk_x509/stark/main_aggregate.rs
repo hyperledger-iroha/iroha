@@ -5,7 +5,8 @@
 // This is a private continuation of the parent module's fixed protocol
 // vocabulary; it does not define an independent extension surface.
 #[cfg(test)]
-use super::super::prover_observation::{PhaseTimerV1, PhaseV1};
+use super::super::prover_observation::{CompletionPhaseV1, PhaseTimerV1, PhaseV1};
+use super::super::sha_residue_output::ShaResidueSinkV1;
 use super::super::{
     der_stark::ZkX509DerStarkChallengesV1, rfc5280_stark::ZkX509Rfc5280StarkChallengesV1,
     sha_call_bus_stark::ZkX509ShaCallBusChallengesV1,
@@ -34,6 +35,8 @@ mod main_fri_retention;
 pub mod main_joint;
 #[path = "main_key_joins.rs"]
 pub(super) mod main_key_joins;
+#[path = "main_log16_fixed.rs"]
+mod main_log16_fixed;
 #[cfg(test)]
 #[path = "main_native_boundary_tests.rs"]
 mod main_native_boundary_tests;
@@ -41,6 +44,8 @@ mod main_native_boundary_tests;
 mod main_native_transform;
 #[path = "main_oods.rs"]
 mod main_oods;
+#[path = "main_residue_fold.rs"]
+mod main_residue_fold;
 #[cfg(test)]
 pub(super) use main_oods::verify_standalone_der_oods_v1;
 #[path = "main_quotient_cache.rs"]
@@ -622,6 +627,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         mixes: Vec<Vec<FriMixV1>>,
         ca: Option<main_joint::MainCaDeepContributionV1<'_>>,
         #[cfg(test)] deep_timer: PhaseTimerV1,
+        #[cfg(test)] encoding_completion: &mut CompletionPhaseV1,
     ) -> Result<Vec<u8>, ZkX509StarkErrorV1> {
         let proof_instance = self.binding.proof_instance_v1();
         let sources = MainTraceReplaySourcesV1::Bound {
@@ -887,10 +893,8 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         }
         #[cfg(test)]
         opening_timer.complete_v1();
-        // Record only these explicit owner releases and proof encoding. Other
-        // scope-exit drops remain visible as unattributed time until measured.
         #[cfg(test)]
-        let encoding_timer = PhaseTimerV1::start_v1(PhaseV1::MainProofEncodingAndExplicitCleanup);
+        encoding_completion.start_v1(PhaseV1::MainProofEncoding);
         drop(self.base_polynomials);
         drop(self.aux_polynomials);
         let fri_lanes = fri_materials
@@ -923,12 +927,8 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         };
         let aggregate_bytes = encode_zk_x509_segmented_stark_proof_v1(&proof, &self.layout)?;
         let encoded = encode_zk_x509_main_proof_envelope_v1(key_openings, &aggregate_bytes);
-        // The consumed replay and mask owners remain resident through encoding.
+        // Release consumed replay and mask owners before completing the encoding phase.
         drop((composition_material, fri_masks, key_mixes, mixes));
-        #[cfg(test)]
-        if encoded.is_ok() {
-            encoding_timer.complete_v1();
-        }
         encoded
     }
 }
@@ -1091,7 +1091,10 @@ impl MainProverConstraintProviderV1<'_, '_> {
                     consume(source.registration, column, coefficients)
                 })
             }
+            #[cfg(test)]
             Self::Log16(source) => source.stream_fixed_polynomials_v1(&mut consume),
+            #[cfg(not(test))]
+            Self::Log16(_) => Err(ZkX509StarkErrorV1::InternalInvariant),
             Self::Io(source) => source.stream_fixed_polynomials_v1(|column, coefficients| {
                 consume(source.registration, column, coefficients)
             }),
@@ -1211,78 +1214,80 @@ impl MainProverConstraintProviderV1<'_, '_> {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
         let inverse = denominators.at_v1(registration.segment.trace_log2, row)?;
-        if let Self::Log19(source) = self {
-            if matches!(
-                registration.segment.adapter,
-                SegmentAdapterIdV1::StrictDer | SegmentAdapterIdV1::Sha256CallBus
-            ) {
-                source.reusable_constraint_residues_v1(
-                    registration,
-                    opening,
-                    fixed_current,
-                    fixed_next,
-                    &mut scratch.values,
-                    context.ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
-                )?;
-                if scratch.values.len() != registration.segment.constraint_count {
-                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
-                }
-                return Ok(
-                    main_composition_mix::mix_residues_v1(&scratch.values, alphas)
-                        .mul_base(inverse),
-                );
-            }
-        }
-        let residues = match self {
-            Self::Log5(source) => {
-                source.constraint_residues_v1(registration, opening, fixed_current)?
-            }
-            Self::P256Scalar(source) => source.constraint_residues_v1(
+        let mut residues = main_residue_fold::MainResidueFoldV1::new_v1(alphas);
+        match self {
+            Self::Log5(source) => residues.extend_residues(source.constraint_residues_v1(
                 registration,
                 opening,
-                fixed_current
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-            )?,
+                fixed_current,
+            )?),
+            Self::P256Scalar(source) => residues.extend_residues(
+                source.constraint_residues_v1(
+                    registration,
+                    opening,
+                    fixed_current
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                )?,
+            ),
             Self::Projection(source) => {
                 if registration != source.registration {
                     return Err(ZkX509StarkErrorV1::ProfileMismatch);
                 }
-                projection_constraint_residues_v1(
+                residues.extend_residues(projection_constraint_residues_v1(
                     opening.base_current,
                     opening.base_next,
                     opening.aux_current,
                     opening.aux_next,
                     fixed_current,
                     source.challenges,
-                )?
+                )?)
             }
-            Self::Log16(source) => {
-                source.constraint_residues_v1(registration, opening, fixed_current)?
-            }
-            Self::Io(source) => source.constraint_residues_v1(
-                registration,
-                opening,
-                fixed_current
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-            )?,
-            Self::Log19(source) => source.constraint_residues_with_context_v1(
+            Self::Log16(source) => residues.extend_residues(source.constraint_residues_v1(
                 registration,
                 opening,
                 fixed_current,
-                fixed_next,
-                context,
-            )?,
+            )?),
+            Self::Io(source) => residues.extend_residues(
+                source.constraint_residues_v1(
+                    registration,
+                    opening,
+                    fixed_current
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                )?,
+            ),
+            Self::Log19(source) => {
+                if registration.segment.adapter == SegmentAdapterIdV1::StrictDer {
+                    source.reusable_der_constraint_residues_v1(
+                        registration,
+                        opening,
+                        fixed_current,
+                        fixed_next,
+                        &mut scratch.values,
+                        context.ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
+                    )?;
+                    residues.extend_residues(scratch.values.iter().copied());
+                } else {
+                    source.emit_constraint_residues_v1(
+                        registration,
+                        opening,
+                        fixed_current,
+                        fixed_next,
+                        &mut residues,
+                        context,
+                    )?;
+                }
+            }
         };
         if residues.len() != registration.segment.constraint_count {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
-        Ok(main_composition_mix::mix_residues_v1(&residues, alphas).mul_base(inverse))
+        residues.finish_v1(inverse)
     }
 }
 impl MainLog19ProverConstraintSourceV1<'_, '_> {
-    fn reusable_constraint_residues_v1(
+    fn reusable_der_constraint_residues_v1(
         &self,
         registration: RegisteredSegmentLayoutV1,
         opening: RegisteredOpenedRowsV1<'_>,
@@ -1329,34 +1334,6 @@ impl MainLog19ProverConstraintSourceV1<'_, '_> {
                 residues,
             )
             .map_err(ZkX509StarkErrorV1::from)?,
-            2..=5 => {
-                let segment = registration_index - 2;
-                let current = ZkX509ShaBatchRowV1 {
-                    base: *<&[F; ZK_X509_SHA_BATCH_BASE_WIDTH_V1]>::try_from(opening.base_current)
-                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    aux: *<&[F; ZK_X509_SHA_BATCH_AUX_WIDTH_V1]>::try_from(opening.aux_current)
-                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    fixed: *<&[F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1]>::try_from(fixed_current)
-                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                };
-                let next = ZkX509ShaBatchRowV1 {
-                    base: *<&[F; ZK_X509_SHA_BATCH_BASE_WIDTH_V1]>::try_from(opening.base_next)
-                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    aux: *<&[F; ZK_X509_SHA_BATCH_AUX_WIDTH_V1]>::try_from(opening.aux_next)
-                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    fixed: *<&[F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1]>::try_from(fixed_next)
-                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                };
-                super::super::sha_call_bus_stark::evaluate_sha_batch_local_with_bound_context_into_v1(
-                    &current,
-                    &next,
-                    self.composition_challenges,
-                    u8::try_from(segment).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    residues,
-                    &self.sha_fold_powers,
-                )
-                .map_err(map_main_sha_source_error_v1)?
-            }
             _ => return Err(ZkX509StarkErrorV1::ProfileMismatch),
         }
         if residues.len() != registration.segment.constraint_count {
@@ -1455,6 +1432,21 @@ fn stream_main_fixed_polynomial_sets_v1(
         }
         return Ok(());
     }
+    if let MainProverConstraintProviderV1::Log16(source) = provider {
+        for binding in source.bindings.iter().copied() {
+            main_bounded_transform::check_completion_v1(
+                fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1(),
+            )?;
+            let mut completed = main_log16_fixed::fixed_set_v1(
+                source,
+                binding.main,
+                transform_policy,
+                cache_plan(binding.main)?,
+            )?;
+            consume(&mut completed)?;
+        }
+        return Ok(());
+    }
     let mut pending: Option<ZeroizingMainFixedPolynomialSetV1> = None;
     provider.stream_fixed_polynomials_v1(|registration, local_column, coefficients| {
         if registration.segment.trace_log2 != provider.native_trace_log2_v1()
@@ -1510,8 +1502,8 @@ fn stream_main_fixed_polynomial_sets_v1(
     consume(&mut completed)
 }
 /// Construct the existing final fixed matrix directly, avoiding a second
-/// pending copy. Each public SHA or arithmetic row fills all its admitted columns
-/// once. Arithmetic transforms only its sealed public basis; all other initial
+/// pending copy. Each public SHA, arithmetic or ValueBus row fills all its
+/// admitted columns once. Arithmetic transforms only its sealed public basis; all other initial
 /// inverse transforms retain canonical column order. Both use the existing
 /// inverse adapter in batches of at most eight columns.
 fn main_log19_fixed_polynomial_set_v1(
@@ -1589,6 +1581,29 @@ fn main_log19_fixed_polynomial_set_v1(
             .map_err(map_main_sha_source_error_v1)?;
         #[cfg(test)]
         rows_timer.complete_v1();
+    } else if registration.segment.adapter == SegmentAdapterIdV1::P256ValueBus {
+        let binding = source.source.p256_binding_v1(registration)?;
+        const {
+            assert!(
+                P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1
+                    <= main_resources::MAIN_FIXED_REPLAY_ROW_WIDTH_V1
+            );
+            assert!(
+                P256_VALUE_BUS_STARK_FIXED_WIDTH_V1
+                    <= main_resources::MAIN_FIXED_REPLAY_ROW_WIDTH_V1
+            );
+        }
+        // Keep the same final columns and bounded interpolation. Only public
+        // schedule reconstruction changes from once per column to once per row.
+        for _ in 0..registration.segment.fixed_width {
+            columns.0.push(
+                zeroed_main_trace_column_v1(registration.segment.trace_size())?.into_vec_v1(),
+            );
+        }
+        source
+            .source
+            .p256
+            .fill_value_fixed_matrix_v1(binding.p256, &mut columns.0)?;
     } else {
         for column in 0..registration.segment.fixed_width {
             let values = source.source.native_fixed_column_v1(registration, column)?;
@@ -4207,3 +4222,7 @@ mod window_fp4_air_tests;
 #[cfg(test)]
 #[path = "main_value_fp4_air_tests.rs"]
 mod value_fp4_air_tests;
+
+#[cfg(test)]
+#[path = "main_value_fixed_tests.rs"]
+mod main_value_fixed_tests;

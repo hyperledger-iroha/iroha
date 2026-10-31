@@ -3670,7 +3670,7 @@ pub fn zk_x509_rfc_key_join_rows_v1(
 /// Exact required CRL calendar timestamps in the original RFC base polynomial.
 /// Rows are the final phase of fixed temporal slots six and seven, independent
 /// of private certificate depth, entry counts, or selected date encoding.
-pub(crate) fn zk_x509_rfc_crl_time_join_rows_v1(
+pub fn zk_x509_rfc_crl_time_join_rows_v1(
     shape: ZkX509Rfc5280StarkShapeV1,
 ) -> Result<([usize; 2], usize), ZkX509Rfc5280StarkErrorV1> {
     shape.validate()?;
@@ -4234,8 +4234,8 @@ pub(super) fn build_zk_x509_rfc5280_serial_source_rows_v1(
         || sign_padding != (magnitude[0] & 0x80 != 0)
         || usize::from(source.node.content_start)
             .checked_add(encoded.len())
-            .filter(|end| *end == usize::from(source.node.content_end))
-            .is_none()
+            .as_ref()
+            .is_none_or(|end| *end != usize::from(source.node.content_end))
         || source
             .encoded_contents
             .iter()

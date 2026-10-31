@@ -74,8 +74,7 @@ fn original_native_signer_roles_are_distinct_funded_and_exactly_scoped_in_execut
     );
     let root = prepared.context.client_config.parent().unwrap();
     let retained =
-        PrivateDirectory::open_exact(root.join(LOCALNET_RUNTIME_DIRECTORY).join(DIRECTORY))
-            .unwrap();
+        PrivateDirectory::open_exact(root.join(RUNTIME_DIRECTORY).join(DIRECTORY)).unwrap();
     assert!(
         !retained
             .entries(64)
@@ -103,9 +102,9 @@ fn original_native_signer_roles_are_distinct_funded_and_exactly_scoped_in_execut
         AccountId::new(reserve_key.public_key().clone())
     );
     let config_bytes = iroha_fs::read_private(&prepared.peers[0].config_path, 1024 * 1024).unwrap();
-    let config = parse_localnet_peer_config(
+    let config = config::parse_peer_config(
         std::str::from_utf8(&config_bytes).unwrap(),
-        Some(&prepared.peers[0].config_path),
+        &prepared.peers[0].config_path,
     )
     .unwrap();
     let genesis = RawGenesisTransaction::from_path(root.join("genesis.json")).unwrap();
@@ -131,7 +130,7 @@ fn original_native_signer_roles_are_distinct_funded_and_exactly_scoped_in_execut
                     &entry.account,
                     Json::new(role),
                     permissions,
-                    Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE),
+                    Quantity::from(SERVICE_FEE_BALANCE),
                 ));
             }
             for provider in &manifest.providers {
@@ -176,7 +175,7 @@ fn original_native_signer_roles_are_distinct_funded_and_exactly_scoped_in_execut
                         if role == StreamTokenAuthorityRole::IssuerOperator {
                             Quantity::from(34_u64)
                         } else {
-                            Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE)
+                            Quantity::from(SERVICE_FEE_BALANCE)
                         },
                     ));
                 }
@@ -230,11 +229,9 @@ fn original_native_signer_roles_are_distinct_funded_and_exactly_scoped_in_execut
     );
     for peer in &prepared.peers {
         let bytes = iroha_fs::read_private(&peer.config_path, 1024 * 1024).unwrap();
-        let config = parse_localnet_peer_config(
-            std::str::from_utf8(&bytes).unwrap(),
-            Some(&peer.config_path),
-        )
-        .unwrap();
+        let config =
+            config::parse_peer_config(std::str::from_utf8(&bytes).unwrap(), &peer.config_path)
+                .unwrap();
         assert_eq!(
             config.torii.sorafs_storage.native_transaction_signers,
             actual::SorafsNativeTransactionSignerBindings::default()
@@ -250,8 +247,7 @@ fn native_role_manifest_cannot_omit_reorder_duplicate_or_reinterpret_signed_acco
     let manifest = prepared.stream_token_authorities().unwrap().unwrap();
     let root = prepared.context.client_config.parent().unwrap();
     let retained =
-        PrivateDirectory::open_exact(root.join(LOCALNET_RUNTIME_DIRECTORY).join(DIRECTORY))
-            .unwrap();
+        PrivateDirectory::open_exact(root.join(RUNTIME_DIRECTORY).join(DIRECTORY)).unwrap();
     let original = retained.read(MANIFEST, MAX_MANIFEST).unwrap();
     let credentials = open_provider_directory(&retained, 0).unwrap();
     for mutation in 0..4 {
@@ -411,7 +407,7 @@ fn original_disabled_profile_refuses_valid_native_runtime_activation() {
         toml::Value::Table(bindings),
     );
     let bytes = Zeroizing::new(toml::to_string(&*table).unwrap());
-    let parsed = parse_localnet_peer_config(&bytes, Some(&prepared.peers[0].config_path)).unwrap();
+    let parsed = config::parse_peer_config(&bytes, &prepared.peers[0].config_path).unwrap();
     assert!(parsed.torii.sorafs_storage.enabled);
     let parsed_bindings = &parsed.torii.sorafs_storage.native_transaction_signers;
     assert_eq!(

@@ -56,7 +56,10 @@ fn prepared_custody_keeps_all_original_bytes_and_the_actual_pool() {
     let foreign = AllocationBudget::new(1_048_576);
     let mut scanner = scanner(&pool, limits());
     let (owned, semantics) = scanner.capture_and_scan(&source).unwrap();
-    assert!(matches!(semantics.filter_kind, TriggerLifecycleStateKindV1::Time));
+    assert!(matches!(
+        semantics.filter_kind,
+        TriggerLifecycleStateKindV1::Time
+    ));
     assert!(!semantics.has_retry_policy);
     assert_eq!(owned.as_bytes(), expected);
     assert_ne!(owned.as_bytes().as_ptr(), source.as_ptr());
@@ -65,7 +68,11 @@ fn prepared_custody_keeps_all_original_bytes_and_the_actual_pool() {
     assert!(!owned.belongs_to(&foreign));
     source.fill(0);
     source.clear();
-    assert_eq!(owned.as_bytes(), expected, "custody owns the original complete copy");
+    assert_eq!(
+        owned.as_bytes(),
+        expected,
+        "custody owns the original complete copy"
+    );
     drop(scanner);
     assert_eq!(pool.reserved_bytes(), expected.len());
     drop(owned);
@@ -111,7 +118,10 @@ fn malformed_frame_returns_the_complete_original_owner_and_first_error() {
     let mut scanner = scanner(&pool, limits());
     let controls = pool.reserved_bytes();
     let first = scanner.capture_and_scan(&source).unwrap_err();
-    assert!(matches!(first.failure(), ActionFrameScanFailureV1::Codec(_)));
+    assert!(matches!(
+        first.failure(),
+        ActionFrameScanFailureV1::Codec(_)
+    ));
     let first_address = std::ptr::from_ref(first.failure());
     let captured_address = first.frame().unwrap().as_bytes().as_ptr();
     assert_eq!(first.frame().unwrap().as_bytes(), source);
@@ -142,7 +152,10 @@ fn dropping_a_refused_preparation_disposes_its_byte_owner() {
     assert_eq!(pool.reserved_bytes(), controls + source.len());
     drop(refused);
     assert_eq!(pool.reserved_bytes(), controls);
-    assert!(scanner.failure().is_some(), "dropping byte custody cannot reset the range");
+    assert!(
+        scanner.failure().is_some(),
+        "dropping byte custody cannot reset the range"
+    );
     drop(scanner);
     assert_eq!(pool.reserved_bytes(), 0);
 }
@@ -160,7 +173,10 @@ fn copy_work_limit_refuses_before_backing_admission() {
     let peak = pool.peak_reserved_bytes();
     let failure = scanner.capture_and_scan(&source).unwrap_err();
     assert!(failure.frame().is_none());
-    assert!(matches!(failure.failure(), ActionFrameScanFailureV1::Structure(_)));
+    assert!(matches!(
+        failure.failure(),
+        ActionFrameScanFailureV1::Structure(_)
+    ));
     drop(failure);
     assert_eq!(pool.reserved_bytes(), controls);
     assert_eq!(pool.peak_reserved_bytes(), peak);

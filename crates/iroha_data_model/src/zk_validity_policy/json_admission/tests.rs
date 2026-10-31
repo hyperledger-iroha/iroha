@@ -23,6 +23,10 @@ mod captured {
     }
     #[derive(norito::derive::JsonDeserialize, norito::derive::JsonSerialize)]
     #[norito(deny_unknown_fields)]
+    #[expect(
+        clippy::struct_field_names,
+        reason = "mirrors the policy section's JSON field names"
+    )]
     pub struct ZkSccpValidityV1 {
         pub max_proofs_per_transaction: u32,
         pub max_proofs_per_block: u32,

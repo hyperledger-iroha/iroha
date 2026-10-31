@@ -15,17 +15,29 @@ pub(super) struct OnlinePhases {
     client: Client,
     request: PrivateSettlementRequest,
     worker: Arc<tokio::sync::Semaphore>,
+    storage: Arc<dyn WorkflowStorage>,
+    lease_id: WorkflowId,
 }
 impl OnlinePhases {
     pub fn new(
         client: Client,
         request: PrivateSettlementRequest,
         worker: Arc<tokio::sync::Semaphore>,
+        storage: Arc<dyn WorkflowStorage>,
     ) -> Self {
+        // Separate from the workflow engine's own runner lease. This exact Global
+        // request keeps the same phase custody across reconstructed operations and
+        // endpoint updates, without retaining any completed-payment history.
+        let lease_id = WorkflowId::from_bytes(domain_digest(
+            b"iroha:private-settlement:global-phase-worker:v1\0",
+            &[request.manifest().network_id.as_bytes(), &request.0.digest],
+        ));
         Self {
             client,
             request,
             worker,
+            storage,
+            lease_id,
         }
     }
 }
@@ -41,15 +53,22 @@ impl SettlementPhases for OnlinePhases {
                 .worker
                 .clone()
                 .try_acquire_owned()
-                .map_err(|_| PrivateSettlementError::Worker)?;
+                .map_err(|_| PrivateSettlementError::Capacity)?;
+            let lease = self
+                .storage
+                .acquire_runner(&self.lease_id)
+                .map_err(PrivateSettlementError::Custody)?;
             let client = self.client.clone();
             let request = self.request.clone();
-            // The original worker owns its permit and prepared-artifact Arc even if its
-            // awaiting call is dropped. No unbounded blocking task queue is created.
-            run_private_settlement_worker(permit, move || {
+            // The original join owner keeps this durable lease through OS TLS
+            // teardown, panic and cancelled result cleanup, including when the
+            // operation is dropped and another instance reopens the same store.
+            let (result, original_lease) = run_native_worker(permit, lease, move || {
                 run(&client, &request, phase, &journal, read_only)
             })
-            .await?
+            .await?;
+            drop(original_lease);
+            result
         })
     }
 }

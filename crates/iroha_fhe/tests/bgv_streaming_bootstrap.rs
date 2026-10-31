@@ -156,8 +156,15 @@ fn exact_stream_budgets_and_every_full_ring_basis_preserve_physical_phases() {
         .plaintext_precision(1)
         .expect("effective message precision");
     let fresh = profile.plan_fresh(precision).expect("fresh source shape");
-    let diagnostic = BootstrapPlan::new(&profile, &fresh, program(), &LEVELS, budget())
-        .expect("complete public pipeline before any encryption or key generation");
+    let diagnostic = BootstrapPlan::new(
+        &profile,
+        &fresh,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        program(),
+        &LEVELS,
+        budget(),
+    )
+    .expect("complete public pipeline before any encryption or key generation");
     let payload = diagnostic.payload();
     assert!(payload.stream_owned_residue_bytes > 0);
     assert!(payload.stream_metadata_bytes > 0);
@@ -177,20 +184,41 @@ fn exact_stream_budgets_and_every_full_ring_basis_preserve_physical_phases() {
             _ => short.scalar_word_operations -= 1,
         }
         assert!(matches!(
-            BootstrapPlan::new(&profile, &fresh, program(), &LEVELS, short),
+            BootstrapPlan::new(
+                &profile,
+                &fresh,
+                iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+                program(),
+                &LEVELS,
+                short
+            ),
             Err(BootstrapError::Budget { .. })
         ));
     }
-    let plan = BootstrapPlan::new(&profile, &fresh, program(), &LEVELS, exact)
-        .expect("exact stream and aggregate work ceilings admit the complete plan");
+    let plan = BootstrapPlan::new(
+        &profile,
+        &fresh,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        program(),
+        &LEVELS,
+        exact,
+    )
+    .expect("exact stream and aggregate work ceilings admit the complete plan");
     assert_eq!(plan.payload(), payload);
     assert_eq!(plan.output_shape(), diagnostic.output_shape());
     assert_eq!(plan.galois_elements(), diagnostic.galois_elements());
     let square_shape = profile
         .plan_multiply(plan.output_shape(), plan.output_shape())
         .expect("actual squared-output shape");
-    let repeat = BootstrapPlan::new(&profile, &square_shape, program(), &LEVELS, budget())
-        .expect("complete repeated bootstrap");
+    let repeat = BootstrapPlan::new(
+        &profile,
+        &square_shape,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        program(),
+        &LEVELS,
+        budget(),
+    )
+    .expect("complete repeated bootstrap");
     assert!(repeat.reduces_phase_bound());
     assert_eq!(
         repeat.output_shape().bound(),

@@ -561,7 +561,7 @@ mod tests {
         ];
         for (error, name) in names {
             assert_eq!(error.name(), name);
-            assert!(!error.to_string().is_empty());
+            assert_ne!(error.to_string(), "");
         }
     }
 

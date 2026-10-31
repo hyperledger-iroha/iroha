@@ -14,7 +14,10 @@ pub struct ExecutionEffects {
 }
 
 #[derive(Default)]
-#[expect(clippy::large_enum_variant, reason = "The root execution budget remains inline in its state machine without an extra allocation on instruction admission")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The root execution budget remains inline in its state machine without an extra allocation on instruction admission"
+)]
 enum EffectState {
     #[default]
     Idle,

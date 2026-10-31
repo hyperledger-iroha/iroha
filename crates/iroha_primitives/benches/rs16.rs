@@ -105,7 +105,9 @@ fn bench_backend(c: &mut Criterion, simd: bool) {
         });
     }
     let rows = payload(DATA_ROWS * MAXIMUM_ROW)
-        .chunks_exact(MAXIMUM_ROW)
+        .as_chunks::<MAXIMUM_ROW>()
+        .0
+        .iter()
         .map(|row| rs16::symbols_from_chunk(MAXIMUM_ROW / 2, row))
         .collect::<Vec<_>>();
     group.throughput(Throughput::Bytes((DATA_ROWS * MAXIMUM_ROW) as u64));

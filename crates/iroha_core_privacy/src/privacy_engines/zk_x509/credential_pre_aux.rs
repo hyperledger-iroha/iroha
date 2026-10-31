@@ -1081,12 +1081,10 @@ mod tests {
         );
         let encoded = encode_pre_aux_challenges_v1(&binding).expect("canonical challenge encoding");
         let decoded = encoded
-            .chunks_exact(core::mem::size_of::<u64>())
-            .map(|bytes| {
-                F(u64::from_be_bytes(
-                    bytes.try_into().expect("one encoded Goldilocks field"),
-                ))
-            })
+            .as_chunks::<{ core::mem::size_of::<u64>() }>()
+            .0
+            .iter()
+            .map(|bytes| F(u64::from_be_bytes(*bytes)))
             .collect::<Vec<_>>();
         assert!(
             encoded

@@ -101,11 +101,22 @@ fn f257_complete_current_bootstrap_plan_and_level_zero_carry_match_integer_oracl
     );
     assert_eq!(source.bound(), &Natural::from_u64(556_231_950_720));
     let upper_program = program();
-    let metadata_requirement =
-        BootstrapPlan::metadata_requirement(&profile, precision, &upper_program.plan())
-            .expect("complete public typed metadata bound before preparation");
-    let plan = BootstrapPlan::new(&profile, &source, upper_program, &LEVELS, budget())
-        .expect("complete current constructor, transforms and digit schedule");
+    let metadata_requirement = BootstrapPlan::metadata_requirement(
+        &profile,
+        precision,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        &upper_program.plan(),
+    )
+    .expect("complete public typed metadata bound before preparation");
+    let plan = BootstrapPlan::new(
+        &profile,
+        &source,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        upper_program,
+        &LEVELS,
+        budget(),
+    )
+    .expect("complete current constructor, transforms and digit schedule");
     let retained_metadata = plan
         .retained_metadata()
         .expect("observe complete prepared N65536 plan metadata");
@@ -129,8 +140,15 @@ fn f257_complete_current_bootstrap_plan_and_level_zero_carry_match_integer_oracl
     exact.stream_metadata_bytes = plan.payload().stream_metadata_bytes;
     exact.canonical_arithmetic_units = plan.payload().canonical_arithmetic_units;
     exact.scalar_word_operations = plan.payload().scalar_word_operations;
-    BootstrapPlan::new(&profile, &source, program(), &LEVELS, exact)
-        .expect("all four exact complete stream/work ceilings fit");
+    BootstrapPlan::new(
+        &profile,
+        &source,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        program(),
+        &LEVELS,
+        exact,
+    )
+    .expect("all four exact complete stream/work ceilings fit");
     for which in 0..4 {
         let mut insufficient = exact;
         let resource = match which {
@@ -152,7 +170,7 @@ fn f257_complete_current_bootstrap_plan_and_level_zero_carry_match_integer_oracl
             }
         };
         assert!(
-            matches!(BootstrapPlan::new(&profile,&source,program(),&LEVELS,insufficient),Err(BootstrapError::Budget { resource: found }) if found==resource)
+            matches!(BootstrapPlan::new(&profile,&source, iroha_fhe::bgv::BootstrapMessageSpace::Ring,program(),&LEVELS,insufficient),Err(BootstrapError::Budget { resource: found }) if found==resource)
         );
     }
 
@@ -186,8 +204,15 @@ fn f257_complete_current_bootstrap_plan_and_level_zero_carry_match_integer_oracl
     );
     let square_zero = lower_to_zero(&profile, square);
     assert_eq!(square_zero.bound(), &Natural::from_u64(4_854_894_088_388));
-    let repeated = BootstrapPlan::new(&profile, &square_zero, program(), &LEVELS, budget())
-        .expect("same complete schedule accepts square followed by all level drops");
+    let repeated = BootstrapPlan::new(
+        &profile,
+        &square_zero,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        program(),
+        &LEVELS,
+        budget(),
+    )
+    .expect("same complete schedule accepts square followed by all level drops");
     assert_eq!(repeated.output_shape(), plan.output_shape());
 
     // This exact upper bound comes from the strict dense ternary carry theorem,
@@ -205,7 +230,14 @@ fn f257_complete_current_bootstrap_plan_and_level_zero_carry_match_integer_oracl
         .plan_claimed(precision, 0, 2, limit.add_u64(1))
         .expect("ordinary phase capacity still admits this invalid carry source");
     assert!(matches!(
-        BootstrapPlan::new(&profile, &forbidden, program(), &LEVELS, budget()),
+        BootstrapPlan::new(
+            &profile,
+            &forbidden,
+            iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+            program(),
+            &LEVELS,
+            budget()
+        ),
         Err(BootstrapError::RoundingBound)
     ));
 }

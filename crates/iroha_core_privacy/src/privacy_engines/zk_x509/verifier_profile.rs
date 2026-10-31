@@ -66,7 +66,7 @@ pub fn compile_zk_x509_rfc_statement_from_authoritative_state_v1(
 /// Public digest and timestamp endpoints selected from the authoritative CRL revision.
 /// These digests are never obtained from proof metadata or private witness bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ZkX509CrlPublicInputsV1 {
+pub struct ZkX509CrlPublicInputsV1 {
     /// Domain-separated commitment to the complete exact signed CRL.
     pub(crate) crl_der: [u8; 32],
     /// Domain-separated commitment to its exact issuer SPKI.

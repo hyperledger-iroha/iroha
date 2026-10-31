@@ -331,11 +331,13 @@ fn billing_acknowledgement_cli_reads_bounded_binary_proof() {
     proof_file
         .write_all(&[0xA5; 48])
         .expect("write authentication proof");
+    // Release write access before the reader acquires exclusive custody of the bytes.
+    let proof_path = proof_file.into_temp_path();
     let args = BillingAcknowledgeArgs {
         statement_id: statement_id.clone(),
         expected_checkpoint_fingerprint: checkpoint.clone(),
         request_nonce: request_nonce.clone(),
-        authentication_proof: proof_file.path().to_path_buf(),
+        authentication_proof: proof_path.to_path_buf(),
     };
     let expected = SorafsBillingAcknowledgementProof::try_from_hex(&request_nonce, vec![0xA5; 48])
         .expect("expected proof");
@@ -399,13 +401,31 @@ fn hedging_billing_cli_rejects_symlink_proof() {
         read_billing_acknowledgement_proof(&link).expect_err("symlink proof must fail closed");
     assert!(error.to_string().contains("regular non-symlink file"));
 }
+#[cfg(windows)]
+#[test]
+fn billing_proof_original_handle_excludes_writers_and_name_replacement() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("proof.bin");
+    let moved = directory.path().join("moved.bin");
+    fs::write(&path, [0xA5; 32]).unwrap();
+    let original = open_direct_billing_acknowledgement_proof(&path).unwrap();
+    assert!(fs::OpenOptions::new().write(true).open(&path).is_err());
+    assert!(fs::rename(&path, &moved).is_err());
+    assert_eq!(fs::read(&path).unwrap(), [0xA5; 32]);
+    drop(original);
+    fs::write(&path, [0x5A; 32]).unwrap();
+    fs::rename(path, moved).unwrap();
+}
 test_items! {
 fn billing_proof_reader_retains_windows_direct_identity_guards() {
     let source = include_str!("../../sorafs.rs");
     for required_guard in [
         "FILE_FLAG_OPEN_REPARSE_POINT",
-        "metadata.volume_serial_number()",
-        "metadata.file_index()",
+        "FileMetadata::symlink_metadata(path)",
+        "FileMetadata::of(&file)",
+        "left.identity() == right.identity()",
+        "left.links() == 1",
+        "right.links() == 1",
         "left.file_size() == right.file_size()",
         "left.last_write_time() == right.last_write_time()",
         "left.creation_time() == right.creation_time()",
@@ -416,6 +436,22 @@ fn billing_proof_reader_retains_windows_direct_identity_guards() {
     ] {
         assert_compact! { source.contains(required_guard); "billing proof reader lost required direct-file guard `{required_guard}`" };
     }
+}
+fn billing_proof_metadata_rejects_distinct_equal_bytes_and_new_hard_links() {
+    let directory = TempDir::new().expect("proof directory");
+    let first = directory.path().join("first");
+    let second = directory.path().join("second");
+    fs::write(&first, b"equal proof bytes").unwrap();
+    fs::write(&second, b"equal proof bytes").unwrap();
+    let held = fs::File::open(&first).unwrap();
+    let original = FileMetadata::of(&held).unwrap();
+    assert!(billing_proof_metadata_unchanged(&original, &FileMetadata::symlink_metadata(&first).unwrap()));
+    assert!(!billing_proof_metadata_unchanged(&original, &FileMetadata::symlink_metadata(&second).unwrap()));
+    fs::hard_link(&first, directory.path().join("alias")).unwrap();
+    let linked = FileMetadata::of(&held).unwrap();
+    assert_eq!(original.identity(), linked.identity());
+    assert_eq!(linked.links(), 2);
+    assert!(!billing_proof_metadata_unchanged(&linked, &linked));
 }
 fn hedging_billing_proof_exact_read_detects_length_drift() {
     let path = Path::new("drifting-proof.bin");

@@ -13,7 +13,7 @@ use iroha_core::{
     state::{AllocationBudget, StateReadOnly, StateViewError, WorldStateSnapshotError},
     sumeragi::{
         certified_chain::{CertifiedBlock, CertifiedChain, CommittedBlock},
-        finality::AttestationBuildError,
+        finality::{AttestationBuildError, ProofError},
     },
 };
 use iroha_data_model::{
@@ -82,6 +82,9 @@ fn attestation_refusal_reason(error: &AttestationBuildError) -> &'static str {
         AttestationBuildError::RestartRequired => "restart_required",
         AttestationBuildError::InvalidStatus => "invalid_status",
         AttestationBuildError::InvalidSigner => "invalid_signer",
+        AttestationBuildError::FinalityProof(ProofError::RetainedUnavailable(_)) => {
+            "retained_unavailable"
+        }
         AttestationBuildError::FinalityProof(_) => "tip_proof",
         AttestationBuildError::GenesisFinalityProof(_) => "genesis_proof",
         AttestationBuildError::InvalidBody(_) => "invalid_body",
@@ -237,7 +240,7 @@ async fn handle(
     ]);
     let state = app.state.clone();
     let signer = app.torii_proxy_bridge_signer.clone();
-    let response = routing::run_admitted_blocking(
+    let (response, release) = routing::run_admitted_blocking(
         admission,
         "native resource names state worker failed",
         move || {
@@ -332,16 +335,17 @@ async fn handle(
             let _proof_charge = budget
                 .try_reserve_bytes(proof_bytes)
                 .map_err(|_| capacity())?;
-            let attestation = iroha_core::sumeragi::finality::build_attestation(
-                view,
-                status,
-                &identity,
-                fingerprint,
-                height,
-                challenge,
-                &signer,
-            )
-            .map_err(|error| refused("attestation", attestation_refusal_reason(&error)))?;
+            let (attestation, release) =
+                iroha_core::sumeragi::finality::build_attestation_with_release(
+                    view,
+                    status,
+                    &identity,
+                    fingerprint,
+                    height,
+                    challenge,
+                    &signer,
+                )
+                .map_err(|error| refused("attestation", attestation_refusal_reason(&error)))?;
             drop(chain);
             let mut body = captured
                 .with_native_resource_names_snapshot_v1(&tip, |snapshot, originals, keys, names| {
@@ -399,7 +403,7 @@ async fn handle(
                 axum::http::header::CONTENT_TYPE,
                 HeaderValue::from_static(content_type),
             );
-            Ok(response)
+            Ok((response, release))
         },
     )
     .await?;
@@ -416,6 +420,10 @@ async fn handle(
     )
     .await?;
     require_permission(&app, &account)?;
+    // So is the retained authority the embedded attestation was proved under.
+    if !iroha_core::sumeragi::finality::retained_attestation_releasable(&app.state, &release) {
+        return Err(refused("release", "retained_unavailable"));
+    }
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
         HeaderValue::from_static("private, no-store"),

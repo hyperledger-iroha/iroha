@@ -6,8 +6,9 @@ use integration_tests::sandbox::{
 use iroha::data_model::{
     isi::{SetKeyValue, repo::RepoIsi},
     kaigi::{
-        KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration,
-        kaigi_relay_feedback_key, kaigi_relay_metadata_key,
+        KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayHpkeSuiteV1,
+        KaigiRelayRegistration, encode_kaigi_relay_hpke_key_v1, kaigi_relay_feedback_key,
+        kaigi_relay_metadata_key,
     },
     prelude::*,
     repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
@@ -1899,7 +1900,11 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
     let registration = KaigiRelayRegistration {
         relay_id: relay_id.clone(),
-        hpke_public_key: vec![0xAA; 32],
+        hpke_public_key: encode_kaigi_relay_hpke_key_v1(
+            KaigiRelayHpkeSuiteV1::MlKem768AuthPsk,
+            &[0xAA; 1_184],
+        )
+        .wrap_err("frame the relay HPKE key")?,
         bandwidth_class: 5,
     };
     let registration_key =

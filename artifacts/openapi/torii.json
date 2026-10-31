@@ -274,11 +274,11 @@
         "type": "object"
       },
       "AccountCapabilitiesV1": {
-        "additionalProperties": false,
-        "description": "Public account-bootstrap capability V1; no account, key, operator configuration, or credential is returned. Maximum encoded JSON size is 4096 bytes.",
+        "additionalProperties": true,
+        "description": "Public account-bootstrap capability V1. Clients validate the four required discovery fields and ignore unrelated metadata; metadata never selects a signer or supplies missing required fields. No account, key, operator configuration, or credential is returned. Maximum encoded JSON size is 4096 bytes.",
         "properties": {
           "allowed_signing": {
-            "description": "Current admitted signing algorithms. Ordering conveys no preference.",
+            "description": "Current admitted signing algorithms as unique canonical names. Array order conveys no preference and need not be canonical.",
             "items": {
               "enum": [
                 "ed25519",
@@ -17747,122 +17747,182 @@
           }
         ]
       },
-      "GovernanceParliamentProposalPayloadRuntimeUpgradeManifestV1": {
+      "GovernanceParliamentProposalPayloadRuntimeChangeSetV1": {
         "additionalProperties": false,
-        "description": "Canonical first-release runtime-upgrade manifest. ABI delta lists are reserved and therefore empty.",
+        "description": "A governed change from the universal root's predecessor selection to its exact successor (iroha_data_model::runtime::lifecycle::ChangeSetV1). Published definitions and transitions are internally tagged Norito JSON objects.",
         "properties": {
-          "abi_hash": {
-            "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
-          },
-          "abi_version": {
-            "const": 1,
-            "format": "uint16",
-            "type": "integer"
-          },
-          "added_pointer_types": {
-            "items": {
-              "format": "uint16",
-              "maximum": 65535,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 0,
-            "type": "array"
-          },
-          "added_syscalls": {
-            "items": {
-              "format": "uint16",
-              "maximum": 65535,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 0,
-            "type": "array"
-          },
-          "description": {
-            "type": "string"
-          },
-          "end_height": {
+          "effective_height": {
+            "description": "First height executed under the successor.",
             "format": "uint64",
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           },
-          "name": {
-            "minLength": 1,
+          "network": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "predecessor": {
+            "description": "Identity of the selection the change starts from.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
-          "provenance": {
+          "publish": {
             "items": {
-              "$ref": "#/components/schemas/GovernanceManifestProvenanceV1"
+              "type": "object"
             },
             "type": "array"
           },
-          "sbom_digests": {
-            "items": {
-              "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeSbomDigestV1"
-            },
-            "type": "array"
-          },
-          "slsa_attestation": {
-            "description": "Canonical RFC 4648 standard base64 with exact padding and no whitespace.",
-            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+          "qualification": {
+            "description": "Digest of the qualification evidence for the successor composition.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
-          "start_height": {
-            "format": "uint64",
-            "maximum": 9007199254740991,
-            "minimum": 0,
-            "type": "integer"
+          "root": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "Universal",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          "successor": {
+            "description": "Identity of the exact selection the change produces.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "transitions": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
           }
         },
         "required": [
-          "name",
-          "description",
-          "abi_version",
-          "abi_hash",
-          "added_syscalls",
-          "added_pointer_types",
-          "start_height",
-          "end_height",
-          "sbom_digests",
-          "slsa_attestation",
-          "provenance"
+          "network",
+          "root",
+          "predecessor",
+          "successor",
+          "effective_height",
+          "publish",
+          "transitions",
+          "qualification"
         ],
         "type": "object"
       },
-      "GovernanceParliamentProposalPayloadRuntimeUpgradeSbomDigestV1": {
+      "GovernanceParliamentProposalPayloadRuntimeNoticeV1": {
         "additionalProperties": false,
+        "description": "Minimum notice of a runtime change: blocks after approval and committed milliseconds after proposal and approval.",
         "properties": {
-          "algorithm": {
-            "minLength": 1,
-            "type": "string"
+          "approval_cushion_ms": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           },
-          "digest": {
-            "description": "Canonical RFC 4648 standard base64 with exact padding and no whitespace.",
-            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
-            "type": "string"
+          "blocks": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ms": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
-          "algorithm",
-          "digest"
+          "blocks",
+          "ms",
+          "approval_cushion_ms"
         ],
         "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadRuntimeUpgradeActionV1": {
+        "description": "Schedule a change set at its effective height, or withdraw a scheduled one.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeChangeSetV1"
+              },
+              "kind": {
+                "const": "Schedule",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "description": "Identity of the scheduled change set.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "kind": {
+                "const": "Cancel",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "GovernanceParliamentProposalPayloadRuntimeUpgradeV1": {
         "additionalProperties": false,
+        "description": "A runtime change-set action for SORA Parliament, with the notice policy frozen at proposal time (specs/live_runtime_upgrades.md section 6).",
         "properties": {
-          "manifest": {
-            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeManifestV1"
+          "action": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeActionV1"
+          },
+          "notice": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeNoticeV1"
           },
           "proposal_operator": {
             "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "proposed_ms": {
+            "description": "Committed time of the block that admitted the proposal.",
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
           "proposal_operator",
-          "manifest"
+          "action",
+          "notice",
+          "proposed_ms"
         ],
         "type": "object"
       },
@@ -34809,7 +34869,7 @@
       },
       "PrivateSettlementContextProofV1": {
         "additionalProperties": false,
-        "description": "One selected context member. All batch members must carry identical complete World and native-lane preimages.",
+        "description": "One selected context member with the exact complete committed Parameters cell and native protocol row or complete-World absence proof at the same authenticated cut.",
         "properties": {
           "committee_keys": {
             "items": {
@@ -34824,12 +34884,29 @@
             "description": "Exact original canonical public SumeragiLaneState cell.",
             "x-iroha-norito-schema": "iroha_data_model::sumeragi_lanes::SumeragiLaneState"
           },
+          "parameters": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact complete original Parameters cell from the same World cut. Authenticate world.parameters before reading private_settlement_policy_v1 from custom; authenticated absence selects the immutable native V1 baseline, while malformed present payloads are refused.",
+            "x-iroha-norito-schema": "iroha_data_model::parameter::system::model::Parameters"
+          },
           "pool": {
             "$ref": "#/components/schemas/PrivateSettlementPoolCutProofV1"
+          },
+          "protocol_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrivacyProtocolPolicyV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "pool",
+          "parameters",
+          "protocol_policy",
           "lanes",
           "committee_keys"
         ],
@@ -35355,6 +35432,70 @@
           ]
         }
       },
+      "PrivateSettlementPolicyUpdateV1": {
+        "additionalProperties": false,
+        "description": "Private admission successor applied at the exact incoming effective height. Execution supplies scheduled_at_height and validates the original obligation drain before publication.",
+        "properties": {
+          "effective_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "next_limits": {
+            "$ref": "#/components/schemas/PrivateSettlementValidityLimitsV1"
+          },
+          "scheduled_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scheduled_at_height",
+          "effective_at_height",
+          "next_limits"
+        ],
+        "type": "object",
+        "x-iroha-norito-schema": "iroha_data_model::privacy::PrivateSettlementPolicyUpdateV1"
+      },
+      "PrivateSettlementPolicyV1": {
+        "additionalProperties": false,
+        "description": "Canonical payload of custom parameter private_settlement_policy_v1, bounded to 4096 JSON bytes. Authenticated absence retains the immutable native V1 baseline; a present payload must be canonical and valid. Current limits and any original protocol drain cannot be rewritten by a scheduling request.",
+        "properties": {
+          "current_limits": {
+            "$ref": "#/components/schemas/PrivateSettlementValidityLimitsV1"
+          },
+          "pending_update": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrivateSettlementPolicyUpdateV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "protocol_closure_drain": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrivateSettlementProtocolClosureDrainV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "current_limits",
+          "pending_update",
+          "protocol_closure_drain"
+        ],
+        "type": "object",
+        "x-iroha-custom-parameter-id": "private_settlement_policy_v1",
+        "x-iroha-max-json-bytes": 4096,
+        "x-iroha-norito-schema": "iroha_data_model::privacy::PrivateSettlementPolicyV1"
+      },
       "PrivateSettlementPoolCutProofV1": {
         "additionalProperties": false,
         "description": "Complete bounded World hash preimages and exact public selected pool/governance values; no restricted asset opening.",
@@ -35422,6 +35563,123 @@
           "logs_errors_events_must_use_public_allowlist": true,
           "plaintext_transaction_contents": "forbidden"
         }
+      },
+      "PrivateSettlementProtocolClosureDrainV1": {
+        "additionalProperties": false,
+        "description": "Execution-captured original expiry span bound to one exact native protocol-limit closure. The protocol identity, schedule heights and hash of the canonical next-limits frame must match its pending row. Later private-policy changes cannot reinterpret this original horizon.",
+        "properties": {
+          "effective_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "next_limits_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "original_max_expiry_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "protocol_id": {
+            "$ref": "#/components/schemas/PrivacyProtocolIdV1"
+          },
+          "scheduled_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "protocol_id",
+          "scheduled_at_height",
+          "effective_at_height",
+          "next_limits_hash",
+          "original_max_expiry_blocks"
+        ],
+        "type": "object",
+        "x-iroha-norito-schema": "iroha_data_model::privacy::PrivateSettlementProtocolClosureDrainV1"
+      },
+      "PrivateSettlementValidityLimitsV1": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_timeout_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "capsule_padding_classes": {
+            "description": "Nonzero mask of the four fixed native padding classes.",
+            "format": "uint8",
+            "maximum": 15,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "commit_timeout_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_capsule_bytes": {
+            "format": "uint64",
+            "maximum": 16777216,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_carrier_bytes": {
+            "format": "uint64",
+            "maximum": 4194304,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_expiry_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_participants": {
+            "format": "uint16",
+            "maximum": 255,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "max_proof_bytes": {
+            "format": "uint64",
+            "maximum": 8388608,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "min_auditor_approvals": {
+            "format": "uint16",
+            "maximum": 32,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "prepare_timeout_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sidecar_retention_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_participants",
+          "max_expiry_blocks",
+          "audit_timeout_blocks",
+          "prepare_timeout_blocks",
+          "commit_timeout_blocks",
+          "capsule_padding_classes",
+          "max_proof_bytes",
+          "max_capsule_bytes",
+          "max_carrier_bytes",
+          "sidecar_retention_blocks",
+          "min_auditor_approvals"
+        ],
+        "type": "object"
       },
       "ProofAttachment": {
         "additionalProperties": false,
@@ -38849,6 +39107,51 @@
             "type": "object"
           }
         ]
+      },
+      "RuntimeChangeSetEndorsementV1": {
+        "additionalProperties": false,
+        "description": "A trusted release signer's endorsement of a change set's provenance (iroha_data_model::runtime::lifecycle::ChangeSetEndorsementV1): the signer's signature over the domain iroha:runtime:change-set-endorsement:v1 with its NUL terminator, followed by the 32-byte change-set identity. The committed runtime_provenance_policy_v1 decides which signers count.",
+        "properties": {
+          "change_set": {
+            "description": "Identity of the endorsed change set.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "signature": {
+            "$ref": "#/components/schemas/CanonicalSignature"
+          },
+          "signer": {
+            "$ref": "#/components/schemas/NativePublicKeyV1"
+          }
+        },
+        "required": [
+          "change_set",
+          "signer",
+          "signature"
+        ],
+        "type": "object"
+      },
+      "RuntimeProposeUpgradeRequest": {
+        "additionalProperties": false,
+        "description": "The change set to schedule and the endorsements the committed runtime provenance policy requires: at most one from each trusted release signer. provenance is empty when the universal root commits no provenance policy.",
+        "properties": {
+          "change_set": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeChangeSetV1"
+          },
+          "provenance": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeChangeSetEndorsementV1"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "change_set",
+          "provenance"
+        ],
+        "type": "object"
       },
       "RwaPage": {
         "additionalProperties": false,
@@ -93385,6 +93688,52 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/runtime/containments": {
+      "get": {
+        "description": "Every recorded emergency containment of runtime definitions, with its lease, the restrictions it imposed and its status, by authorization height then identity.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "List runtime containments.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.containment.list"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
     "/v1/runtime/metrics": {
       "get": {
         "description": "Return runtime metrics snapshot.",
@@ -93521,9 +93870,9 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/runtime/upgrades": {
+    "/v1/runtime/release": {
       "get": {
-        "description": "List proposed and activated runtime upgrades.",
+        "description": "This node's build and release digest, whether its release executes the committed runtime selection, and for each scheduled change set whether it executes the successor selection, naming the first definition the release lacks. A node whose release cannot execute the selection due at a height stops before that height.",
         "responses": {
           "200": {
             "content": {
@@ -93554,7 +93903,53 @@
             "IrohaOperatorTimestampMs": []
           }
         ],
-        "summary": "List runtime upgrades.",
+        "summary": "Report this release's runtime support.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.release"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/runtime/upgrades": {
+      "get": {
+        "description": "The committed runtime selection and its identity, the attesting committee and its digest, and every recorded change set by effective height then identity.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "List runtime change sets.",
         "tags": [
           "Runtime"
         ],
@@ -93567,12 +93962,12 @@
         "x-iroha-tool-effect": "operator"
       }
     },
-    "/v1/runtime/upgrades/activate/{id}": {
+    "/v1/runtime/upgrades/attest/{id}": {
       "post": {
-        "description": "Activate a runtime upgrade by id.",
+        "description": "Sign, with this node's validator key, its attestation that its release executes the successor selection of the scheduled change set with the given 32-byte hex identity, bound to the current committee, and return the instruction that records it for an operator to submit. Refused when the change set is not scheduled, this node is not a committee member, or its release cannot execute the successor selection.",
         "parameters": [
           {
-            "description": "Upgrade identifier.",
+            "description": "Change-set identity, 32-byte hex.",
             "in": "path",
             "name": "id",
             "required": true,
@@ -93621,7 +94016,7 @@
             "IrohaOperatorTimestampMs": []
           }
         ],
-        "summary": "Activate a runtime upgrade.",
+        "summary": "Draft this node's runtime support attestation.",
         "tags": [
           "Runtime"
         ],
@@ -93629,14 +94024,14 @@
           "admission": "operator",
           "authentication": "operator_signature",
           "schemaVersion": 1,
-          "stableRouteId": "operator.runtime.upgrade.activate"
+          "stableRouteId": "operator.runtime.upgrade.attest"
         },
         "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/runtime/upgrades/cancel/{id}": {
       "post": {
-        "description": "Cancel a runtime upgrade by id.",
+        "description": "Draft the SORA Parliament proposal that withdraws the scheduled change set with the given 32-byte hex identity, for local signing.",
         "parameters": [
           {
             "description": "Upgrade identifier.",
@@ -93688,7 +94083,7 @@
             "IrohaOperatorTimestampMs": []
           }
         ],
-        "summary": "Cancel a runtime upgrade.",
+        "summary": "Draft a runtime change-set withdrawal.",
         "tags": [
           "Runtime"
         ],
@@ -93703,12 +94098,12 @@
     },
     "/v1/runtime/upgrades/propose": {
       "post": {
-        "description": "Submit a runtime upgrade proposal.",
+        "description": "Draft the SORA Parliament proposal that schedules the change set in the body with its release signers' endorsements, for local signing. Admission, including the committed provenance check, happens when the signed proposal executes.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/RuntimeProposeUpgradeRequest"
               }
             }
           },
@@ -93744,7 +94139,7 @@
             "IrohaOperatorTimestampMs": []
           }
         ],
-        "summary": "Propose a runtime upgrade.",
+        "summary": "Draft a runtime change-set proposal.",
         "tags": [
           "Runtime"
         ],

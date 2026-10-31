@@ -736,7 +736,7 @@ pub fn match_order_book_v1(
         remaining.extend(
             tier_bids
                 .into_iter()
-                .chain(tier_asks.into_iter())
+                .chain(tier_asks)
                 .filter(|entry| entry.order.remaining_gib > 0),
         );
     }

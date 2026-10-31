@@ -30,7 +30,9 @@ fn decode_signatures(public: &Frame, slots: usize) -> Result<Vec<SignatureWitnes
         .collect::<Result<Vec<_>, _>>()?;
     let mut witnesses = Vec::with_capacity(slots);
     for (words, raw) in values
-        .chunks_exact(SLOT_WORDS)
+        .as_chunks::<SLOT_WORDS>()
+        .0
+        .iter()
         .zip(public[0].chunks_exact(SLOT_WORDS))
     {
         let digest = Fp::from_repr(words[0].to_repr())

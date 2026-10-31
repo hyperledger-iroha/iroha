@@ -419,6 +419,10 @@ fn monetary_exemption_array_and_ledger_physical_refusals_keep_typed_allocator_er
 #[test]
 #[allow(unsafe_code)]
 fn monetary_move_parts_retain_exact_exemption_pointer_without_new_allocation_or_early_refund() {
+    struct Closed {
+        value: RootFeePolicy,
+        custody: RootFeePolicyCustody,
+    }
     let source = json::to_json(&fees()).unwrap();
     let budget = AllocationBudget::new(1 << 20);
     let owner = decode_fee_source(&source, &budget).unwrap();
@@ -429,10 +433,6 @@ fn monetary_move_parts_retain_exact_exemption_pointer_without_new_allocation_or_
         .as_slice()
         .as_ptr();
     let reserved = budget.reserved_bytes();
-    struct Closed {
-        value: RootFeePolicy,
-        custody: RootFeePolicyCustody,
-    }
     let observation = PhysicalObservation::start();
     // SAFETY: the same fields are immediately placed in one immutable value-first owner.
     let (value, custody) = unsafe { owner.into_allocation_parts() };
@@ -458,14 +458,14 @@ fn monetary_move_parts_retain_exact_exemption_pointer_without_new_allocation_or_
 #[test]
 #[allow(unsafe_code)]
 fn monetary_staking_move_parts_are_allocation_free_and_keep_the_exact_pool() {
-    let source = json::to_json(&staking()).unwrap();
-    let budget = AllocationBudget::new(1 << 20);
-    let owner = decode_staking_source(&source, &budget).unwrap();
-    let reserved = budget.reserved_bytes();
     struct Closed {
         value: PublicLaneStakingPolicy,
         custody: PublicLaneStakingPolicyCustody,
     }
+    let source = json::to_json(&staking()).unwrap();
+    let budget = AllocationBudget::new(1 << 20);
+    let owner = decode_staking_source(&source, &budget).unwrap();
+    let reserved = budget.reserved_bytes();
     let observation = PhysicalObservation::start();
     // SAFETY: no backing can change between extraction and this value-first owner.
     let (value, custody) = unsafe { owner.into_allocation_parts() };

@@ -930,7 +930,7 @@
       ],
       "status": "implemented",
       "evidence": {
-        "source": "6043d97c4003da4bbb3fc772d9a0548b3f456b16 plus the current narrow Norito feature classification/test repair and value-identical FHE inventory canonical-format repair. All cited commands ran on this arm64 Mac on 2026-10-11; C2 Rust owners were unchanged. Current report and retained logs/fingerprints: dist/zk-delivery-handoff/reports/C.2-reassessment-2026-10-11.md and review-c2/. Source fingerprint recheck confirms all57 non-inventory pinned files unchanged; the inventory was reconciled and the current Python3.12 guard passes787 files/23primitives. This is component implementation evidence, not a full rebuilt-workspace qualification.",
+        "source": "6043d97c4003da4bbb3fc772d9a0548b3f456b16 plus the current narrow Norito feature classification/test repair and value-identical FHE inventory canonical-format repair. All cited commands ran on this arm64 Mac on 2026-10-11; C2 Rust owners were unchanged. Current report and retained logs/fingerprints: dist/zk-delivery-handoff/reports/C.2-reassessment-2026-10-11.md and review-c2/. Source fingerprint recheck confirms all57 non-inventory pinned files unchanged; the inventory was reconciled and the current Python3.12 guard passes787 files/23primitives. This is component implementation evidence, not a full rebuilt-workspace qualification. Hardware closure on 2026-10-22: HEAD 61bc20da4add8362651bf0f8dfbd2ce62388fb42 plus the current required-AVX2 test, under Intel i7-11800H WSL2; the 50-file arithmetic source inventory and exact execution scope are recorded in docs/validation/intel_avx2.md. Prior consumer and ownership checks retain their historical source scope.",
         "paths": [
           "crates/iroha_fhe/Cargo.toml",
           "crates/iroha_fhe/src/lib.rs",
@@ -948,7 +948,8 @@
           "specs/fhe_ownership_inventory.json",
           "scripts/check_cargo_feature_hygiene.py",
           "pytests/scripts/check_cargo_feature_hygiene_test.py",
-          "Cargo.lock"
+          "Cargo.lock",
+          "docs/validation/intel_avx2.md"
         ],
         "commands": [
           {
@@ -1008,17 +1009,16 @@
             "outcome": "passed"
           },
           {
-            "command": "bash -o pipefail -c 'cd \"$(git rev-parse --show-toplevel)\" && test \"$(uname -m)\" = x86_64 && mkdir -p dist/zk-delivery-handoff/review-c2 && CARGO_TARGET_DIR=target/zk-c2-physical-avx2 CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --lib accel:: -- --nocapture 2>&1 | tee dist/zk-delivery-handoff/review-c2/physical-avx2.log && ! rg -q \"AVX2 is not available on this CPU\" dist/zk-delivery-handoff/review-c2/physical-avx2.log'",
-            "outcome": "not_run",
-            "platform_todo": {
-              "platform": "physical_x86_64",
-              "reason": "Required physical AVX2 instruction execution is unavailable on this arm64 development Mac. Existing direct kernel and CPU/lane-model comparison tests are runnable; the exact command requires an x86-64 checkout and rejects the informative AVX2-unavailable skip. Lane-model/QEMU evidence is not physical execution.",
-              "todo_site": {
-                "path": "crates/iroha_fhe/src/accel/avx2.rs",
-                "marker": "TODO: record a run of these kernels on a physical x86-64 CPU."
-              },
-              "owner": "V.4"
-            }
+            "command": "scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --lib accel::tests::required_avx2_execution -- --ignored --exact --nocapture",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --lib --test canonical_vectors --test clearing --test rns_chain_vectors",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --no-default-features --lib --test canonical_vectors --test clearing --test rns_chain_vectors",
+            "outcome": "passed"
           },
           {
             "command": "/opt/homebrew/bin/python3.12 -I -S scripts/check_fhe_ownership_map.py",
@@ -1038,8 +1038,8 @@
           },
           {
             "clause": "Scalar, Metal, NEON/SIMD and CUDA paths used by supported targets match canonical vectors; provide deterministic fallback and retain independent mathematical test oracles.",
-            "state": "partial",
-            "proof": "Local checks are complete: CARGO_TARGET_DIR=target/zk-resume-review CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --lib --test canonical_vectors --test clearing --test rns_chain_vectors and CARGO_TARGET_DIR=target/zk-resume-review CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --no-default-features --lib --test canonical_vectors --test clearing --test rns_chain_vectors each pass 163 unit+9 canonical-vector+7 clearing+4 wide-RNS-vector tests. crates/iroha_fhe/tests/canonical_vectors.rs independently re-derives pinned results with num-bigint, crates/iroha_fhe/tests/clearing.rs observes success/error/unwind erasure, and crates/iroha_fhe/tests/rns_chain_vectors.rs exercises 50-62-bit exact arithmetic. crates/iroha_fhe/src/accel.rs asserts NEON on this host and dispatches ineligible inputs to scalar. The entire remaining gap is the physical_x86_64 platform TODO command bash -o pipefail -c 'cd \"$(git rev-parse --show-toplevel)\" && test \"$(uname -m)\" = x86_64 && mkdir -p dist/zk-delivery-handoff/review-c2 && CARGO_TARGET_DIR=target/zk-c2-physical-avx2 CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --lib accel:: -- --nocapture 2>&1 | tee dist/zk-delivery-handoff/review-c2/physical-avx2.log && ! rg -q \"AVX2 is not available on this CPU\" dist/zk-delivery-handoff/review-c2/physical-avx2.log' at crates/iroha_fhe/src/accel/avx2.rs; it is not_run and owned by V.4, not passed or hardware qualification. crates/iroha_fhe/src/ntt.rs records that no word-modulus Metal/CUDA kernel exists or is selected; the earlier general C2 ruling does not require nonexistent paths, and new accelerator paths must reopen evidence."
+            "state": "met",
+            "proof": "The earlier arm64 scalar/NEON results and independent references remain recorded in crates/iroha_fhe/tests/canonical_vectors.rs, crates/iroha_fhe/tests/clearing.rs, crates/iroha_fhe/tests/rns_chain_vectors.rs and crates/iroha_fhe/src/accel.rs. The deferred AVX2 command is superseded by scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --lib accel::tests::required_avx2_execution -- --ignored --exact --nocapture (1 passed): it requires native x86-64 and selected AVX2 before running every direct instruction kernel comparison, so lane-model or scalar-only success cannot qualify. scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --lib --test canonical_vectors --test clearing --test rns_chain_vectors and scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --no-default-features --lib --test canonical_vectors --test clearing --test rns_chain_vectors each pass 164 unit, 9 canonical-vector, 7 clearing and 4 RNS-chain tests on the Intel i7-11800H. docs/validation/intel_avx2.md pins the source inventory, native instruction coverage, WSL2 virtualization and the scalar-only negative control. This closes the actual AVX2 instruction-execution gap, not bare-metal OS, named Xeon performance, whole-node or release qualification. crates/iroha_fhe/src/accel/avx2.rs links the actual execution evidence; crates/iroha_fhe/src/ntt.rs still records no word-modulus Metal/CUDA kernel exists or is selected. New accelerator paths must reopen evidence. Historical arm64 commands were CARGO_TARGET_DIR=target/zk-resume-review CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --lib --test canonical_vectors --test clearing --test rns_chain_vectors and CARGO_TARGET_DIR=target/zk-resume-review CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --no-default-features --lib --test canonical_vectors --test clearing --test rns_chain_vectors."
           }
         ]
       }
@@ -1103,8 +1103,8 @@
           "crates/iroha_fhe/src/bgv/routing.rs",
           "crates/iroha_fhe/src/ntt.rs",
           "crates/iroha_fhe/README.md",
-          "crates/iroha_crypto/src/ram_lfe/bgv_bounded.rs",
-          "crates/iroha_crypto/src/ram_lfe/bgv_bounded_tests.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_tests.rs",
           "crates/iroha_fhe/src/bgv/routing/layout.rs"
         ],
         "commands": [
@@ -1626,8 +1626,8 @@
           "crates/iroha_crypto/src/lib_tests.rs",
           "specs/fhe_ownership_inventory.json",
           "crates/iroha_fhe/src/bgv/routing.rs",
-          "crates/iroha_crypto/src/ram_lfe/bgv_bounded.rs",
-          "crates/iroha_crypto/src/ram_lfe/bgv_bounded_tests.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_tests.rs",
           "crates/iroha_fhe/src/bgv/encoding.rs"
         ],
         "commands": [
@@ -2910,7 +2910,7 @@
           {
             "clause": "Test interruption before submission, after ambiguous submission and after irreversible progress; resume checks committed outcome before retrying and never fabricates cross-transaction atomicity.",
             "state": "partial",
-            "proof": "The historical python3 dist/zk-delivery-handoff/scripts/run_sdk_original_decode_review.py passed 63 actual SDK tests at its source-pinned checkpoint, including interruption/status recovery, ambiguous admission, irreversible progress, cancellation races and six original-reader/writer regressions. Its zero/tight budgets preserved original kind after retirement and an unrelated equal-budget scope, unchanged stored/signed custody and successful same-byte retry; malformed data still yielded corruption/rejection and signed preflight refusal sent no HTTP. The earlier lower version 11 and model wire 10 tests passed at their recorded checkpoints, including bare-decode versus late checked-writer controls. None is promoted to the changed current dependency candidate, which still needs actual SDK/consumer qualification. Prior scratch CAS/refund mutants and 39 workflow guard tests are historical evidence. Non-Rust families and external multisignature signing remain open. crates/iroha/src/workflow/storage.rs retains Linux/Windows file-store and Windows ACL execution TODOs. Wider CoreZK/IVM/governance proof-reader error erasure and remaining wallet-original paths are separate F.2/F.4/product dependencies; neither a wallet component result nor this historical Rust workflow result qualifies them."
+            "proof": "The historical python3 dist/zk-delivery-handoff/scripts/run_sdk_original_decode_review.py passed 63 actual SDK tests at its source-pinned checkpoint, including interruption/status recovery, ambiguous admission, irreversible progress, cancellation races and six original-reader/writer regressions. Its zero/tight budgets preserved original kind after retirement and an unrelated equal-budget scope, unchanged stored/signed custody and successful same-byte retry; malformed data still yielded corruption/rejection and signed preflight refusal sent no HTTP. The earlier lower version 11 and model wire 10 tests passed at their recorded checkpoints, including bare-decode versus late checked-writer controls. None is promoted to the changed current dependency candidate, which still needs actual SDK/consumer qualification. Prior scratch CAS/refund mutants and 39 workflow guard tests are historical evidence. Non-Rust families and external multisignature signing remain open. crates/iroha/src/workflow/storage.rs now asserts actual native private custody for every journal, CAS lock and runner lease; its Linux storage suite passes. Full Windows SDK storage/engine execution remains pending separately from the native filesystem controls; specs/windows_intel_completion_goals.md tracks that outcome. Wider CoreZK/IVM/governance proof-reader error erasure and remaining wallet-original paths are separate F.2/F.4/product dependencies; neither a wallet component result nor this historical Rust workflow result qualifies them."
           }
         ]
       }
@@ -3681,23 +3681,23 @@
       ],
       "status": "in_progress",
       "evidence": {
-        "source": "Current optimizations source b2baae5187d320b92a66f902fa861d2f9a6bc8bb plus independently reviewed 2026-10-29 components. The sole bounded evaluator consumes RamLfeBgvPackedInputV1, constructed only from admitted reference bytes, clearing zero extension, effective F257 encoding and actual same-key local encryption. No raw/local cast or compatibility evaluator remains. Exact origin/profile/fresh-shape/all-key preflight precedes request-memory and private-map reads; outputs remain general local ciphertexts. One fixed loop handles public no-refresh and physical-refresh schedules. Every one of 16 layers routes21 banks to60 operands and computes20 A*B+C products; public support alone omits absent work. from_normal_form is the sole prepared-program factory: public aggregate admission and map-container capacity observation precede private compiler/map work; compiler drops afterward. All existing per-stage budgets remain mandatory. Complementary preparation payload/metadata caps include maximum distinct bootstrap plans, class maps/layouts, compiler/row scratch, public vectors and Natural capacities; complete canonical arithmetic/scalar-word caps count every physical call. These are architecture-local requested storage/work scopes, not allocator/RSS/whole-CPU/proof/key/profile limits. The unselected N128/F257/E3/q20x60 witness refreshes all21 banks initially and after each of the 16 layers:357 actual bootstraps with21 plans with exact matching source shapes,320 products,17 routes and3,667 prime drops. No noise bound is widened to share a plan. It returns effective F257/level0/bound4920306448512 with arithmetic units 16638667264 and scalar-word operations 2059780864 and scoped owned residues 1146880 bytes. Requested preparation payload is 375079776 retained and 375679778 peak bytes. Both complete refreshed 256-instruction, rank-16 tapes pass actual decryption and phase checks; the independent tape has64 distinct ordered outputs 193..256, checked by separate inverse Vandermonde and raw CRT and negacyclic convolution on every coefficient. The original full N128/q26 no-refresh tape also passes. All 8 prior bounded tests remain; exact/one-under preparation/work, count, overflow, distinct-source and error/unwind controls pass with direct compiler-cell and fixture-only residue retirement observations. Wave24 recorded RAM-LFE 256/5 ignored, full FHE 359/11 ignored, production and17 post-documentation specification passes. Evidence: dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-24-native-summary.json; first test-observer visibility compile failure and its two-line reviewed repair are retained. No production profile is selected or qualified. The complete full-size authenticated/imported input envelope within the original 1 MiB wire cap, full-size encrypted execution, construction-specific circular/KDM security, client/key/committed execution proofs, circuit privacy, original application resource limits and operation-v1 delivery remain unfinished. R9 private logical Refresh compilation is separate from this fixed bounded physical-refresh loop. The sole packed-input constructor now takes an explicit public source level, preplans every canonical drop before private slot reads, then performs actual fresh encryption and consuming modulus switching before returning the owner. Existing bounded consumers explicitly retain their prior fresh-top requirement. Current RAM-LFE258/6 ignored and production compilation pass; the explicit unselected N65536/F257/E3/q23 input diagnostic genuinely encrypts, drops22 levels, decrypts, checks all128 direct Vandermonde slots and full-ring centered phase, and roundtrips983252 canonical bytes. Exact source0 bound is556231950720. The phase oracle uses canonical fixture multiplication plus independent integer CRT, not an independent convolution implementation. This local input diagnostic does not establish a complete authenticated proof-bearing envelope, imported authority, full-size encrypted evaluation or selected security. Evidence: dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-25-native-summary.json.",
+        "source": "Observed checkout: optimizations HEAD 07329b3080e605a21dc8882b0b7568ee4bb04bdc plus the recorded uncommitted candidate changes. Current source and native evidence: captured optimizations wave29 component results in dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-29-native-summary.json (SHA-256 f8f5ace9c16ca10071d80b8652343583d69b3154c3e6576d541b5d254bf3a5cc), independently audited by dist/zk-delivery-handoff/candidates/wave29-native-independent-audit-2026-10-31/manifest.json (SHA-256 ed6ec2a17230c6114c828f49f32a248756131fd9ed7358f9b854cbcbedefaa31). Every result retains its exact source/Git capture and JSON/log hashes. These are the test bytes before subsequent test-only lint cleanup; later test changes require separate validation and the two strict lint failures remain preserved. One class-bound compiler and generic stored-bank/product-bank/scatter kernel executes bounded 21-to-60 geometry and Refresh 4-to-3 geometry. Closed packed-input/scalar ownership, exact-plan identity, stage/target tags and ordered state owners precede private arithmetic. Original packed input is retained by move; initialization/projection omit only justified masks. Every exact bootstrap source is readmitted against one actual shared preparation under separate stage, aggregate work, payload and typed-metadata caps. The three complete no-refresh/refreshed/independent bounded encrypted fixtures passed in target-bank-bounded-unrefreshed-01, target-bank-bounded-refreshed-01 and target-bank-bounded-independent-01 JSON/logs under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/; these are captured wave29 pre-test-cleanup results. Bounded numeric controls remain 357 bootstraps, 320 products, 17 routes, 3667 drops, arithmetic/word totals 16638609472/2059780864, final bound 1094861248 and supplied preparation payload 36238176 retained/36838178 peak bytes. The separate unselected N65536 bootstrap/repeat diagnostic now passes under the C.8 test scope; complete encrypted application qualification remains open. No production profile is qualified. Full-size encrypted application execution, construction-specific circular/KDM security, external input/key/committed execution proofs, circuit privacy, the complete authenticated input envelope under the original 1 MiB cap, original application resource limits, authenticated distributed opening and operation-v1 delivery remain unfinished work that can continue on this Mac. Separate post-cleanup validation is pinned by dist/zk-delivery-handoff/candidates/wave29-post-test-cleanup-native-audit-2026-11-01/focused-current-complete.json (SHA-256 43a897352051ddd8fec960078afb9a07ade5366502bf416721b0e07c06be0a6c): target-bank-clippy-05 passes focused all-target strict lint, target-bank-fhe-02 passes 376 ordinary tests with 15 ignored, and target-bank-ram-lfe-02 passes 275 with ten ignored; their exact JSON/log pairs are under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Source/Git captures hold for each invocation. These checks do not rerun or repin the earlier complete maximum tapes, and the separate N65536 bootstrap result retains its own receipt.",
         "paths": [
-          "crates/iroha_crypto/src/ram_lfe/bgv_bounded_compiler.rs",
-          "crates/iroha_crypto/src/ram_lfe/bgv_bounded_compiler_tests.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_compiler.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_compiler_tests.rs",
           "crates/iroha_fhe/src/bgv/routing.rs",
           "crates/iroha_crypto/src/ram_lfe/clearing.rs",
           "crates/iroha_crypto/src/ram_lfe/normal_form.rs",
           "specs/fhe_ownership_inventory.json",
-          "crates/iroha_crypto/src/ram_lfe/bgv_bounded.rs",
-          "crates/iroha_crypto/src/ram_lfe/bgv_bounded_tests.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_tests.rs",
           "crates/iroha_fhe/src/bgv/encoding.rs",
           "crates/iroha_fhe/src/bgv/routing/layout.rs",
           "crates/iroha_crypto/src/ram_lfe/bgv_affine.rs",
           "crates/iroha_fhe/src/bgv/bootstrap.rs",
           "crates/iroha_crypto/src/ram_lfe/bgv_input.rs",
-          "crates/iroha_crypto/src/ram_lfe/bgv_bounded_refresh.rs",
-          "crates/iroha_crypto/src/ram_lfe/bgv_bounded_refresh_tests.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_refresh.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_bounded_refresh_tests.rs",
           "crates/iroha_fhe/src/bgv/metadata.rs"
         ],
         "commands": [
@@ -3764,33 +3764,69 @@
           {
             "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_input::tests::full_size_q23_honest_level_zero_input_fits_raw_frame_and_preserves_packing -- --ignored --exact --nocapture --test-threads=1",
             "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::r9_tests::prepared_program_binds_original_class_and_exact_plan_before_input_or_memory_reads -- --exact --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe:: -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_surface seeded_and_explicit_coin_entry_points_are_not_public_outside_the_fixtures -- --exact --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::tests::unqualified_n128_complete_sixteen_layers_match_reference_and_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::tests::unqualified_n128_master_e3_full_refreshed_maximum_tape_matches_reference -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::independent_refresh_tests::refreshed_bounded_preserves_64_distinct_ordered_outputs_and_independent_full_ring_phase -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::r9_tests::refresh_class_first_gate_matches_select_and_independent_full_ring_phases -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true check --locked -p iroha_fhe -p iroha_crypto --lib",
+            "outcome": "passed"
           }
         ],
         "acceptance": [
           {
             "clause": "Implement bounded.v1 with all eleven tape instructions including Mul and complete SelectEqZero lowering, actual operand depth/equality exponentiation/select multiplication and a derived leveled noise/work plan.",
             "state": "partial",
-            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_bounded.rs: The canonical normal-form compiler preserves all fixed public supports and complete Mul/Select lowering. One closed-input evaluator now executes all 16 layers with320 products and 17 routes under either no-refresh or explicit fixed physical-refresh scheduling. The latter executes357 genuine bootstraps with exact-shape plan reuse and scoped preparation/work admission. Both complete256-instruction, rank-16 refreshed fixtures and the original no-refresh fixture pass reference/full-coefficient phase checks. No production profile, external input/key/execution proof, circuit privacy or operation-v1 qualification is established."
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs and bgv_nonlinear_compiler.rs retain all eleven instructions and fixed 16-layer bounded geometry with 320 products/17 routes. One generic scatter kernel also executes Refresh target-bank geometry without a parallel evaluator. Closed scalar ownership, exact source/class/plan/stage/key admission precede request-memory/private-row reads. Refreshed bounded evaluation uses 357 physical bootstraps and 21 exact descriptors under one shared core. The three complete no-refresh/refreshed/independent bounded encrypted fixtures passed in target-bank-bounded-unrefreshed-01, target-bank-bounded-refreshed-01 and target-bank-bounded-independent-01 JSON/logs under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/; these are captured wave29 pre-test-cleanup results. External input/key/committed execution proofs, circuit privacy, selected security and operation-v1 qualification remain unfinished."
           },
           {
             "clause": "Prove the normalizing lowering preserves bounded semantics under one fixed public schedule per class profile padded to the class maximum.",
             "state": "partial",
-            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_compiler_tests.rs checks canonical tape execution, every gate and Select intermediate, all 257 conditions and original rank limits. bgv_bounded_tests.rs additionally executes a complete256-instruction encrypted fixture under the fixed 16-layer schedule and compares independent scalar/reference outputs. Cryptographic binding to the committed tape remains unfinished."
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_compiler_tests.rs checks canonical tape execution, every gate and Select intermediate, all 257 conditions and original rank limits. bgv_nonlinear_tests.rs additionally executes a complete256-instruction encrypted fixture under the fixed 16-layer schedule and compares independent scalar/reference outputs. Cryptographic binding to the committed tape remains unfinished."
           },
           {
             "clause": "Prove class membership, all tape/slot/register/memory/depth/output limits, integer/RNS carries/quotients/rounding/key switching, malformed private transitions and class substitution.",
             "state": "partial",
-            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_compiler_tests.rs tests original rank17 rejection even after cancellation, class/budget/profile refusals and fixed maximum shape. Private integer/RNS/execution proof relations and class-substitution proof controls remain unfinished."
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_compiler_tests.rs tests original rank17 rejection even after cancellation, class/budget/profile refusals and fixed maximum shape. Private integer/RNS/execution proof relations and class-substitution proof controls remain unfinished."
           },
           {
             "clause": "Extend operation-v1 immediately, including opening and any available threshold mode; refresh remains independent later work.",
             "state": "unmet",
-            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_bounded.rs supplies generic encrypted arithmetic; authenticated client/key/execution relations, authorized opening and native/SDK operation-v1 delivery remain unimplemented. No existing production refusal was removed."
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs supplies generic encrypted arithmetic; authenticated client/key/execution relations, authorized opening and native/SDK operation-v1 delivery remain unimplemented. No existing production refusal was removed."
           },
           {
             "clause": "Demonstrate maximum-shape correctness and physical noise/work bounds; logical rank bounds ciphertext multiplication depth, not physical noise.",
             "state": "partial",
-            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_bounded_refresh_tests.rs: Original maximum256-instruction, rank-16 no-refresh and two refreshed N128 tapes pass with all320 products and fixed routing. Refreshed controls execute357bootstraps and verify exact declared A/W, source bounds, final level-0 bound 4920306448512, all 64 outputs and every centered full-ring phase coefficient; the independent fixture emits64 distinct values. Complete full-size N65536 encrypted evaluation, selected parameters, original input wire/proof/resource qualification and actual application delivery remain unfinished. Small-ring arithmetic cannot establish those outcomes."
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_tests.rs and bgv_nonlinear_bounded_refresh_tests.rs retain the maximum 256-instruction/rank 16 no-refresh and two refreshed fixtures, with all 64 outputs and independent full-coefficient phases. The refreshed controls remain 357 bootstraps, 17 routes, 3667 drops,arithmetic/word totals 16638609472/2059780864 and final bound 1094861248; 21 exact sources share preparation payload 36238176 retained/36838178 compiler-row peak bytes, with typed metadata separate. The three complete no-refresh/refreshed/independent bounded encrypted fixtures passed in target-bank-bounded-unrefreshed-01, target-bank-bounded-refreshed-01 and target-bank-bounded-independent-01 JSON/logs under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/; these are captured wave29 pre-test-cleanup results. Small-ring arithmetic does not qualify full-size encrypted execution, selected security, complete imported authentication, application resources or delivery."
           }
         ]
       }
@@ -3809,7 +3845,89 @@
       "acceptance": [
         "Demonstrate repeated refresh and correct output/noise on maximum supported workloads with opening, class-substitution and malformed-witness controls. Adding encrypted zero is not bootstrap. Failed cost projections trigger construction work; refresh stays mandatory and supported-class threshold tests extend with this slice. Prove physical noise bounds and fixed public refresh scheduling without exposing the private logical refresh schedule; logical rank bounds ciphertext multiplication depth, not physical noise."
       ],
-      "status": "planned"
+      "status": "in_progress",
+      "evidence": {
+        "source": "Observed checkout: optimizations HEAD 07329b3080e605a21dc8882b0b7568ee4bb04bdc plus the recorded uncommitted candidate changes. Current source and native evidence: captured optimizations wave29 component results in dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-29-native-summary.json (SHA-256 f8f5ace9c16ca10071d80b8652343583d69b3154c3e6576d541b5d254bf3a5cc), independently audited by dist/zk-delivery-handoff/candidates/wave29-native-independent-audit-2026-10-31/manifest.json (SHA-256 ed6ec2a17230c6114c828f49f32a248756131fd9ed7358f9b854cbcbedefaa31). Every result retains its exact source/Git capture and JSON/log hashes. These are the test bytes before subsequent test-only lint cleanup; later test changes require separate validation and the two strict lint failures remain preserved. All 319 mixed ordinals execute a fixed 2,871-step schedule: Initial, seven Square repetitions and Final. One product updates its target bank; untouched state/base ciphertext owners move unchanged. Three honest routing-level zero banks and one initial base bootstrap replace four initial refreshes. Closed zero-future/embedded-one invariants remove Unit without changing canonical rank ten, class membership or descriptor hash. The diagnostic schedule has 2,872 bootstraps/routes, 2,871 products and 28,714 drops. N128 retains 640 exact descriptors, arithmetic/word totals 73234637760/5767183744, final bound 1094861248 and supplied preparation payload 24003088 retained/24855250 peak; N256 uses two exact descriptors and final bound 2181235200. The complete N128 maximum319, nonzero-cross-banks and stored-alias64snapshots tapes passed in target-bank-full-r9-01.json/log; the complete N256 cross-bank tape passed separately in target-bank-full-r9-d2-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Both N128/N256 first-gate drivers also passed conditions 256 and zero with unequal branches 17/99, ten bootstraps and 36 independent all-bank phase checks per case. These are captured wave29 pre-test-cleanup results. The separate unselected N65536 bootstrap/repeat diagnostic now passes under the C.8 test scope; complete encrypted application qualification remains open. No production profile is qualified. Full-size encrypted application execution, construction-specific circular/KDM security, external input/key/committed execution proofs, circuit privacy, the complete authenticated input envelope under the original 1 MiB cap, original application resource limits, authenticated distributed opening and operation-v1 delivery remain unfinished work that can continue on this Mac. The current N65536/q23 ScalarSlots public planner passed all 640 exact source descriptors and exact/one-under resource checks in target-bank-public-q23-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/; it generates no key or ciphertext. Separate post-cleanup validation is pinned by dist/zk-delivery-handoff/candidates/wave29-post-test-cleanup-native-audit-2026-11-01/focused-current-complete.json (SHA-256 43a897352051ddd8fec960078afb9a07ade5366502bf416721b0e07c06be0a6c): target-bank-clippy-05 passes focused all-target strict lint, target-bank-fhe-02 passes 376 ordinary tests with 15 ignored, and target-bank-ram-lfe-02 passes 275 with ten ignored; their exact JSON/log pairs are under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Source/Git captures hold for each invocation. These checks do not rerun or repin the earlier complete maximum tapes, and the separate N65536 bootstrap result retains its own receipt.",
+        "paths": [
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_compiler.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_r9_tests.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_refresh.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_refresh_tests.rs",
+          "crates/iroha_fhe/src/bgv/bootstrap.rs",
+          "specs/ram_lfe_execution_proof.md"
+        ],
+        "commands": [
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::r9_tests::prepared_program_binds_original_class_and_exact_plan_before_input_or_memory_reads -- --exact --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe:: -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_surface seeded_and_explicit_coin_entry_points_are_not_public_outside_the_fixtures -- --exact --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::tests::unqualified_n128_complete_sixteen_layers_match_reference_and_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::tests::unqualified_n128_master_e3_full_refreshed_maximum_tape_matches_reference -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::independent_refresh_tests::refreshed_bounded_preserves_64_distinct_ordered_outputs_and_independent_full_ring_phase -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::r9_tests::refresh_class_first_gate_matches_select_and_independent_full_ring_phases -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true check --locked -p iroha_fhe -p iroha_crypto --lib",
+            "outcome": "passed"
+          }
+        ],
+        "acceptance": [
+          {
+            "clause": "Implement refresh.v1 with genuine noise-reducing refresh plus its complete hidden-program proof, limits between refreshes and total refresh count; extend the same native/SDK path.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_compiler.rs and bgv_nonlinear.rs implement all 319 mixed boundaries with 2,871 physical steps and 2,872 genuine bootstraps. Logical Refresh remains a semantic copy; physical refresh targets the one updated bank. Canonical rank ten, class admission and original limits are unchanged. The complete N128 maximum319, nonzero-cross-banks and stored-alias64snapshots tapes passed in target-bank-full-r9-01.json/log; the complete N256 cross-bank tape passed separately in target-bank-full-r9-d2-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Both N128/N256 first-gate drivers also passed conditions 256 and zero with unequal branches 17/99, ten bootstraps and 36 independent all-bank phase checks per case. These are captured wave29 pre-test-cleanup results. Hidden-program proof, authenticated opening, threshold/application integration and native/SDK operation-v1 delivery remain unfinished."
+          },
+          {
+            "clause": "Prove the normalizing lowering preserves refresh semantics under one fixed public schedule per class profile padded to the class maximum.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_refresh_tests.rs compares all 257 Select values, mixed kinds, aliases, saved lanes, snapshots, dead gates and maximum boundaries. Its independent closed-domain tests justify Unit removal and provide invalid future/base-one counterexamples. The generic evaluator has no arbitrary-state constructor or runtime plaintext inspection. Cryptographic binding to the committed private tape remains unfinished; clear arithmetic equivalence is not that proof."
+          },
+          {
+            "clause": "Demonstrate repeated refresh and correct output/noise on maximum supported workloads with opening, class-substitution and malformed-witness controls.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_r9_tests.rs retains the complete N128 maximum319, nonzero-cross-banks and 64-distinct-snapshots tapes. Independent full-ring phases observe all banks at gates 127/128/255/256/318 plus final ordered output. The N128/N256 first-gate drivers test conditions 256 and 0 with unequal 17/99 branches, 10 bootstraps and 36 all-bank phase checks per case. An additional N256 full cross-bank fixture covers scalar stride, targets one/two and projection through canonical evaluate. The complete N128 maximum319, nonzero-cross-banks and stored-alias64snapshots tapes passed in target-bank-full-r9-01.json/log; the complete N256 cross-bank tape passed separately in target-bank-full-r9-d2-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Both N128/N256 first-gate drivers also passed conditions 256 and zero with unequal branches 17/99, ten bootstraps and 36 independent all-bank phase checks per case. These are captured wave29 pre-test-cleanup results. Full-size selected-security/output-noise qualification, opening and malformed cryptographic-witness/class-substitution proof controls remain unfinished."
+          },
+          {
+            "clause": "Adding encrypted zero is not bootstrap.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs calls the same genuine dense encrypted-secret bootstrap as bounded evaluation, through closed scalar owners and one selected-bank executor. Honest public zero state construction does not replace any scheduled bootstrap. The complete N128 maximum319, nonzero-cross-banks and stored-alias64snapshots tapes passed in target-bank-full-r9-01.json/log; the complete N256 cross-bank tape passed separately in target-bank-full-r9-d2-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Both N128/N256 first-gate drivers also passed conditions 256 and zero with unequal branches 17/99, ten bootstraps and 36 independent all-bank phase checks per case. These are captured wave29 pre-test-cleanup results. Construction-specific KDM/circular security remains unqualified."
+          },
+          {
+            "clause": "Failed cost projections trigger construction work; refresh stays mandatory and supported-class threshold tests extend with this slice.",
+            "state": "partial",
+            "proof": "specs/ram_lfe_execution_proof.md preserves mandatory Refresh, canonical rank ten and original security/resource obligations. Target-only updates and uniform Unit removal reduce the fixed schedule to 2,872 bootstrap calls and 2,871 products. N128 uses 640 exact descriptors under one core and derivesarithmetic/word totals 73234637760/5767183744; its original final bound 1094861248 remains. The current N65536/q23 ScalarSlots public planner passed all 640 exact source descriptors and exact/one-under resource checks in target-bank-public-q23-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/; it generates no key or ciphertext. Public planning does not establish full-size encrypted execution or application qualification. Threshold/application integration and original resource qualification remain unmet."
+          },
+          {
+            "clause": "Prove physical noise bounds and fixed public refresh scheduling without exposing the private logical refresh schedule; logical rank bounds ciphertext multiplication depth, not physical noise.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs schedules only by public class/gate/stage geometry. Untouched state/base owners move unchanged; exact mixed source shapes and physical bounds are propagated without widening, and repeated Square maps require complete source-array equality. The complete N128 maximum319, nonzero-cross-banks and stored-alias64snapshots tapes passed in target-bank-full-r9-01.json/log; the complete N256 cross-bank tape passed separately in target-bank-full-r9-d2-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Both N128/N256 first-gate drivers also passed conditions 256 and zero with unequal branches 17/99, ten bootstraps and 36 independent all-bank phase checks per case. These are captured wave29 pre-test-cleanup results. Canonical rank remains the conservative class weight rather than a physical noise guarantee. Hidden-tape/execution proof, selected full-size security and complete resources remain open."
+          }
+        ]
+      }
     },
     {
       "id": "R.10",
@@ -3847,7 +3965,7 @@
       ],
       "status": "in_progress",
       "evidence": {
-        "source": "b2baae5187d320b92a66f902fa861d2f9a6bc8bb plus reviewed local BGV bootstrap/routing, packed bytes, normalization fusion consuming bank streaming and explicit public-scalar products, assessed2026-10-29. One private parity cursor serves complete-bank APIs and actual refresh; each closed scalar bank executes inverse-N, the canonical upper DAG, forward mapping and monomial accumulation before retirement. Full bank count and actual phase/noise transfers remain unchanged. Four explicit bootstrap ceilings admit composed retained residues, new stream metadata, complete declared arithmetic and scalar-word counts after bounded public preparation but before private execution. The unselected N65536/F257/E3/q24x60 public planner admits624MiB of scoped stream residues instead of retaining the12GiB initial512-bank array. A separate generic-bound q23x60 public plan repeats from the actual output4-to2, square, source2-to0 cycle; source bound5588487865142 satisfies strict carry. Neither full-size plan creates ciphertexts or keys. Public constant products now use the shared accelerated/fixed-modulus scalar kernel, preserving exact residues/noise while removing their NTTs; the complete upper DAG and generic private-polynomial operation remain unchanged. Actual unselected N256/F257/E3 encryption passes nine complete bootstraps, six squares and39 independent full-ring CRT/convolution phase checks at all256 coefficients. Wave20 evidence pins SIMD/portable scalar6each, explicit q24/q23 planning and the actual N256 encrypted test. The local owner now provides validation-only exact-shape/all-key preflight plus canonical trivial/add/add_plain/mul_plain delegates; local construction does not imply scalar-subalgebra membership or external authentication. The sole route returns original checked inputs and outputs by moves, preserving both component allocations without clones or an extra arithmetic output. Current fullFHE353/11ignored, RAM-LFE243/3ignored, complete bounded16 and maximum affine diagnostics, and production checks pass with source/index/HEAD held. Source-bound foundation evidence: dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-21-native-result.json; prior encrypted/planner evidence: dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-20-native-result.json. Full-size encrypted bootstrap, production parameters, complete application resources, external source/key/RNS/rounding/key-switch proofs, circuit privacy and construction-specific same-key circular/KDM security remain unfinished. Canonical CiphertextShape/SlotLinearPlan/BootstrapPlan metadata now separates checked inline owners, retained public vector/Natural capacity and sequential preparation scratch, with actual retained-capacity observations. Routing candidates/caches, rejected transfers, public program headers and bootstrap staging are included; existing layout/coefficient/upper-DAG budgets remain separate. FullFHE358/11ignored, RAM-LFE247/3ignored, complete N65536 q23/q24 public planner metadata observations and production checks pass with source/Git held. The sole closed plaintext product returns original and result owners by move, preserving deterministic reuse without cloning. Evidence: dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-23-native-summary.json. These architecture-local requested storage scopes exclude allocator overhead, compiler stack frames and RSS; whole-protocol resource qualification remains open. The complete bounded consumer now composes this same shared bootstrap 357 times per fixed 16-layer request, with21 plans with exact matching source shapes in its witness, explicit complementary aggregate preparation and declared-work caps, and two genuine maximum-tape decryption/phase checks. This closes the local bounded consumer orchestration gap; it does not implement R9 logical Refresh or qualify imported/full-size input, production security, complete proof or original application resources. Current component evidence: dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-24-native-summary.json.",
+        "source": "Observed checkout: optimizations HEAD 07329b3080e605a21dc8882b0b7568ee4bb04bdc plus the recorded uncommitted candidate changes. Current source and native evidence: captured optimizations wave29 component results in dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-29-native-summary.json (SHA-256 f8f5ace9c16ca10071d80b8652343583d69b3154c3e6576d541b5d254bf3a5cc), independently audited by dist/zk-delivery-handoff/candidates/wave29-native-independent-audit-2026-10-31/manifest.json (SHA-256 ed6ec2a17230c6114c828f49f32a248756131fd9ed7358f9b854cbcbedefaa31). Every result retains its exact source/Git capture and JSON/log hashes. These are the test bytes before subsequent test-only lint cleanup; later test changes require separate validation and the two strict lint failures remain preserved. The canonical bootstrap requires an explicit Ring or ScalarSlots message space. Closed scalar owners originate only from checked plaintext seeds and remain typed through ordinary arithmetic, routing and refresh; no general-local/frame promotion exists. ScalarSlots selects coefficient bank zero while retaining full dense encrypted-secret homomorphic decryption, strict carry, upper-digit DAG and inverse reconstruction. General refresh rejects scalar-only plans before private reads. Exact-source admission shares one immutable core; every descriptor and physical call remains charged. Captured ordinary FHE tests passed 375 with 14 ignored, and RAM-LFE passed 275 with ten ignored (target-bank-fhe-01.json/log and target-bank-ram-lfe-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/). The three bounded runs, two first-gate drivers, complete N128 three-tape and N256 cross-bank runs, current public640 planner and production compilation also passed in their separate captured wave29 receipts. Later test-only lint cleanup is not validated by these older test bytes. The current N65536/q23 ScalarSlots public planner passed all 640 exact source descriptors and exact/one-under resource checks in target-bank-public-q23-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/; it generates no key or ciphertext. Historical Ring evidence retains its original pins. C.8 has no RAM-LFE application or threshold dependency; consumers keep separate program/job statements. The separate unselected N65536 bootstrap/repeat diagnostic now passes under the C.8 test scope; complete encrypted application qualification remains open. No production profile is qualified. Construction-specific circular/KDM security, external source/key/RNS/rounding/key-switch/committed execution proofs, circuit privacy and complete shared-owner proof/work/custody qualification remain unfinished local work. Authenticated distributed opening, complete imported input envelopes and operation-v1 delivery remain separate consumer obligations. Separate post-cleanup validation is pinned by dist/zk-delivery-handoff/candidates/wave29-post-test-cleanup-native-audit-2026-11-01/focused-current-complete.json (SHA-256 43a897352051ddd8fec960078afb9a07ade5366502bf416721b0e07c06be0a6c): target-bank-clippy-05 passes focused all-target strict lint, target-bank-fhe-02 passes 376 ordinary tests with 15 ignored, and target-bank-ram-lfe-02 passes 275 with ten ignored; their exact JSON/log pairs are under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Source/Git captures hold for each invocation. These checks do not rerun or repin the earlier complete maximum tapes, and the separate N65536 bootstrap result retains its own receipt. The separate genuine N65536/F257/E3 q23 ScalarSlots diagnostic passes honest key generation, encryption, two bootstraps and one intervening square/repeated-refresh cycle: dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/scalar-fullsize-bootstrap-01.json (SHA-256 45b835d463ae60d117f83d99f7774242b4f715eddfa7d5a33bbc176c921e059d) and matching .log (SHA-256 2cb0b64265396b877b3bec74f4b2023dcee6ff51ef3e5b852d75dc4ff84834a7), independently audited by dist/zk-delivery-handoff/candidates/fullsize-scalar-native-independent-audit-2026-11-01/review.json (SHA-256 3794556f0f43914f5a6ecc84df937575ca2b9493030b1064b9cd8a8a6732eff2). Source/Git captures hold on this aarch64 macOS run. Seven checkpoints verify every 65,536-coefficient message/phase bound using production inner-product words and independent BigInt CRT against independent inverse-Vandermonde messages. Direct secret convolution checks only 135 fixed coordinates per actual limb, including all 128 scalar-stride locations and seven off-stride/boundary probes. Exact finite setup caps and each one-under refusal execute before genuine key generation. The fixture intentionally opens phases; BigInt buffers are not guaranteed cleared. This is neither complete N65536 RAM-LFE application execution nor selected security, proof, production custody, original application resource or cross-platform qualification.",
         "paths": [
           "crates/iroha_fhe/src/bgv/relative_trace.rs",
           "crates/iroha_fhe/src/bgv/mod.rs",
@@ -3876,7 +3994,8 @@
           "crates/iroha_fhe/src/bgv/poly.rs",
           "crates/iroha_fhe/tests/bgv_f257_local_bootstrap.rs",
           "crates/iroha_fhe/src/bgv/metadata.rs",
-          "crates/iroha_fhe/src/natural.rs"
+          "crates/iroha_fhe/src/natural.rs",
+          "crates/iroha_fhe/tests/bgv_f257_scalar_local_bootstrap.rs"
         ],
         "commands": [
           {
@@ -3998,18 +4117,58 @@
           {
             "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::specification_tests:: -- --test-threads=1",
             "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::r9_tests::prepared_program_binds_original_class_and_exact_plan_before_input_or_memory_reads -- --exact --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe:: -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_surface seeded_and_explicit_coin_entry_points_are_not_public_outside_the_fixtures -- --exact --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::tests::unqualified_n128_complete_sixteen_layers_match_reference_and_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::tests::unqualified_n128_master_e3_full_refreshed_maximum_tape_matches_reference -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::independent_refresh_tests::refreshed_bounded_preserves_64_distinct_ordered_outputs_and_independent_full_ring_phase -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::r9_tests::refresh_class_first_gate_matches_select_and_independent_full_ring_phases -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true check --locked -p iroha_fhe -p iroha_crypto --lib",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_f257_scalar_local_bootstrap scalar_q23_fullsize_honest_bootstrap_and_repeat_preserve_all_messages_and_phase_bounds -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
           }
         ],
         "acceptance": [
           {
             "clause": "Implement published genuine noise-refresh arithmetic with complete RNS/rounding/key-switch relation below RAM-LFE and SoraCloud applications.",
             "state": "partial",
-            "proof": "crates/iroha_fhe/src/bgv/bootstrap.rs executes genuine local scaled homomorphic decryption with matching encrypted-secret material and one consuming coefficient/upper-digit/inverse pipeline. Complete-bank APIs share its typed parity cursor. Dense-secret carry, exact phase transfers, closed origin and four scoped stream/work ceilings remain mandatory. External source/key/RNS/rounding/key-switch proofs and production/security qualification remain unfinished. Public-scalar products share one canonical residue kernel with exact centered norms, without changing the upper DAG, phases or precision divisions. Typed prepared-plan requested storage is now bounded and retained capacity observed independently of the coefficient/layout/upper-DAG payload scopes; full-size public planner observations pass. This does not establish aggregate application admission, RSS or complete resource qualification."
+            "proof": "crates/iroha_fhe/src/bgv/bootstrap.rs provides one scaled homomorphic-decryption/streaming coefficient/upper-digit/inverse pipeline with explicit Ring or ScalarSlots selection. A closed scalar owner admits only effective-precision scalar messages; the selected branch keeps full dense H and strict carry, genuine trace/recomposition identity products and one canonical executor. Exact source descriptors are readmitted against one shared core with all per-call budgets checked and core/descriptor metadata charged separately. The nonlinear consumer preserves scalar provenance through every operation and demotes only its public output. External source/key/RNS/rounding/execution proofs, circuit privacy and construction-specific security remain unfinished."
           },
           {
             "clause": "Actual repeated-refresh decryption/noise vectors and maximum proof/work/custody tests validate one shared owner.",
             "state": "partial",
-            "proof": "crates/iroha_fhe/tests/bgv_local_bootstrap.rs and bgv_streaming_bootstrap.rs verify full-ring CRT phases through repeated square/refresh, every N16 basis and fixed2to3 maps. Unit tests preserve all prior phase/quotient assertions and add pending-frontier/partial-accumulator error and unwind cleanup, collected/streamed residue equivalence and supported d1 cycles. Actual N256/F257/E3 local encryption also passes9 complete bootstraps/6squares/39 independent full-ring phase checks under unselected diagnostic parameters. Prior scalarSIMD/portable6each pass; current foundation fullFHE353, RAM-LFE243 and production checks pass. Same-owner delegate tests cover exact ordinary-kernel words, honest noise-ceiling refusal and consumed-source/partial-output error/unwind clearing; routing returns the original input allocations. Explicit q24/q23 F257 public planners verify independent schedule, strict carry and exact/one-under aggregate budgets without keys/ciphertexts. Existing packed983260-byte full-size raw-residue roundtrip remains source-present. Full-size encrypted bootstrap, complete maximum proof/work/custody and original resource/security qualification remain unmet."
+            "proof": "crates/iroha_fhe/tests/bgv_local_bootstrap.rs and bgv_streaming_bootstrap.rs retain repeated refresh, full-ring phases, ordinary-kernel word equality and cleanup controls. Captured ordinary FHE tests passed 375 with 14 ignored, and RAM-LFE passed 275 with ten ignored (target-bank-fhe-01.json/log and target-bank-ram-lfe-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/). The three bounded runs, two first-gate drivers, complete N128 three-tape and N256 cross-bank runs, current public640 planner and production compilation also passed in their separate captured wave29 receipts. Later test-only lint cleanup is not validated by these older test bytes. Target-bank application fixtures exercise the same shared executor and exact-source accounting; N128 three-tape and N256 cross-bank evidence must be cited separately. Historical wave20/wave26 q23/q24 public planners and raw-frame evidence retain their source pins and are not current complete imported proof-bearing envelopes or full-size encrypted execution. Maximum cryptographic proof/work/custody controls, construction-specific security and original application qualification remain open. C.8 has no application/threshold dependency. The current N65536/q23 ScalarSlots public planner passed all 640 exact source descriptors and exact/one-under resource checks in target-bank-public-q23-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/; it generates no key or ciphertext.   Separate post-cleanup validation is pinned by dist/zk-delivery-handoff/candidates/wave29-post-test-cleanup-native-audit-2026-11-01/focused-current-complete.json (SHA-256 43a897352051ddd8fec960078afb9a07ade5366502bf416721b0e07c06be0a6c): target-bank-clippy-05 passes focused all-target strict lint, target-bank-fhe-02 passes 376 ordinary tests with 15 ignored, and target-bank-ram-lfe-02 passes 275 with ten ignored; their exact JSON/log pairs are under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Source/Git captures hold for each invocation. These checks do not rerun or repin the earlier complete maximum tapes, and the separate N65536 bootstrap result retains its own receipt. The separate genuine N65536/F257/E3 q23 ScalarSlots diagnostic passes honest key generation, encryption, two bootstraps and one intervening square/repeated-refresh cycle: dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/scalar-fullsize-bootstrap-01.json (SHA-256 45b835d463ae60d117f83d99f7774242b4f715eddfa7d5a33bbc176c921e059d) and matching .log (SHA-256 2cb0b64265396b877b3bec74f4b2023dcee6ff51ef3e5b852d75dc4ff84834a7), independently audited by dist/zk-delivery-handoff/candidates/fullsize-scalar-native-independent-audit-2026-11-01/review.json (SHA-256 3794556f0f43914f5a6ecc84df937575ca2b9493030b1064b9cd8a8a6732eff2). Source/Git captures hold on this aarch64 macOS run. Seven checkpoints verify every 65,536-coefficient message/phase bound using production inner-product words and independent BigInt CRT against independent inverse-Vandermonde messages. Direct secret convolution checks only 135 fixed coordinates per actual limb, including all 128 scalar-stride locations and seven off-stride/boundary probes. Exact finite setup caps and each one-under refusal execute before genuine key generation. The fixture intentionally opens phases; BigInt buffers are not guaranteed cleared. This is neither complete N65536 RAM-LFE application execution nor selected security, proof, production custody, original application resource or cross-platform qualification."
           }
         ]
       }
@@ -4399,7 +4558,7 @@
       ],
       "status": "in_progress",
       "evidence": {
-        "source": "bf7defad2bac0079209de1802351ec4a0d343ff4 plus current adopted local implementation. The source-pinned dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/result.json completed three genuine complete credential proofs with separate replay using the same native verifier implementation and negative controls. Ordinary and maximum each encode 9,412,944 bytes and take 1060.961117s / 1053.277860s; RSS is 9,393,373,184 / 9,468,788,736 bytes. Both fail the unchanged 300-second and 1% unattributed-phase gates (19,511 / 19,832 ppm). The holder proof verifies but release correctly refuses its expired deadline. These are non-isolated local measurements: Swift and later GPU validation overlapped. They predate the subsequently adopted fixed-schedule/fixed-matrix and macOS feature-forwarding changes, so they do not qualify current performance. Darwin does not establish Linux 32 GiB RLIMIT_AS enforcement; no network submission occurred. Earlier commands below keep their recorded source scopes; prepared I.3 packets are not adopted work.",
+        "source": "bf7defad2bac0079209de1802351ec4a0d343ff4 plus current adopted local implementation. The source-pinned dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/result.json completed three genuine complete credential proofs with separate replay using the same native verifier implementation and negative controls. Ordinary and maximum each encode 9,412,944 bytes and take 1060.961117s / 1053.277860s; RSS is 9,393,373,184 / 9,468,788,736 bytes. Both fail the unchanged 300-second and 1% unattributed-phase gates (19,511 / 19,832 ppm). The holder proof verifies but release correctly refuses its expired deadline. These are non-isolated local measurements: Swift and later GPU validation overlapped. They predate the subsequently adopted fixed-schedule/fixed-matrix and macOS feature-forwarding changes, so they do not qualify current performance. Darwin does not establish Linux 32 GiB RLIMIT_AS enforcement; no network submission occurred. Earlier commands below keep their recorded source scopes; prepared I.3 packets are not adopted work. Linux harness controls at 61bc20da4add8362651bf0f8dfbd2ce62388fb42 plus the exit-during-sleep observation repair retain their scope; docs/validation/linux_resource_harness.md records RLIMIT_AS checks separately from complete prover qualification.",
         "paths": [
           "crates/iroha_measurement/src/schema.rs",
           "crates/iroha_measurement/src/recorder.rs",
@@ -4416,7 +4575,8 @@
           "crates/iroha/Cargo.toml",
           "Cargo.lock",
           "crates/iroha_measurement/fixtures/consumers.json",
-          "crates/iroha_measurement/README.md"
+          "crates/iroha_measurement/README.md",
+          "docs/validation/linux_resource_harness.md"
         ],
         "commands": [
           {
@@ -4444,8 +4604,8 @@
             "outcome": "failed"
           },
           {
-            "command": "python3 scripts/zk_resource_harness.py run --address-space-limit-bytes 34359738368 (on a Linux host, where RLIMIT_AS can be applied)",
-            "outcome": "not_run"
+            "command": "python3 -m unittest -v scripts/tests/zk_resource_harness_test.py",
+            "outcome": "passed"
           },
           {
             "command": "python3 scripts/zk_resource_harness.py run --require-thermal-state (on a physical iOS or Android device through an SDK emitter)",
@@ -4468,7 +4628,7 @@
           {
             "clause": "Provide one complete phase tree for proof/verification/native/SDK flows with inclusive/exclusive wall and CPU times, worker count/load, allocations/live buffers, ciphertext/key/proof bytes, peak RSS and enforced address-space observations.",
             "state": "partial",
-            "proof": "crates/iroha_measurement/src/schema.rs and crates/iroha_measurement/src/recorder.rs implement the shared phase tree; crates/iroha_measurement/tests/layering.rs checks dependency separation. crates/iroha/tests/sdk_phase_tree_measurement.rs now measures actual AccountClient preparation/signing/canonical frame encoding and exact roundtrip/signature checks, with frame Vec capacity counters, public-call phases and typed failed/unwound records. /opt/homebrew/bin/python3.12 dist/zk-delivery-handoff/scripts/run_e1_live_sdk_retry_2026_10_12.py passed current11 guards,4 SDK controls and original2accepted/2expectedrejected runs; independent Core replay is retained under dist/zk-delivery-handoff/reports/E.1-rust-sdk-live-adopted-independent-core-review-2026-10-12.json. Historical actual FASTPQ and X509 adapter evidence remains scoped to its recorded source. This does not complete every native/SDK emitter, every allocation family or six SDK deliveries; those are ordinary implementation gaps. Enforced Linux address-space and physical iOS/Android thermal measurements remain not run on this Mac, as documented in crates/iroha_measurement/README.md and platform.rs."
+            "proof": "crates/iroha_measurement/src/schema.rs and crates/iroha_measurement/src/recorder.rs implement the shared phase tree; crates/iroha_measurement/tests/layering.rs checks dependency separation. crates/iroha/tests/sdk_phase_tree_measurement.rs now measures actual AccountClient preparation/signing/canonical frame encoding and exact roundtrip/signature checks, with frame Vec capacity counters, public-call phases and typed failed/unwound records. /opt/homebrew/bin/python3.12 dist/zk-delivery-handoff/scripts/run_e1_live_sdk_retry_2026_10_12.py passed current11 guards,4 SDK controls and original2accepted/2expectedrejected runs; independent Core replay is retained under dist/zk-delivery-handoff/reports/E.1-rust-sdk-live-adopted-independent-core-review-2026-10-12.json. Historical actual FASTPQ and X509 adapter evidence remains scoped to its recorded source. This does not complete every native/SDK emitter, every allocation family or six SDK deliveries; those are ordinary implementation gaps. Current python3 -m unittest -v scripts/tests/zk_resource_harness_test.py passes 56 controls, including real Linux 8 GiB enforcement and a mismatched record refusal; a separate real-child run verifies both 32 GiB kernel limits. docs/validation/linux_resource_harness.md records the observed exit-during-sleep race, deterministic regression and unchanged rejection of actual observation failures. Complete native prover measurement and physical iOS/Android thermal measurements remain open; synthetic native tee records do not qualify them."
           },
           {
             "clause": "Unattributed proving time is at most 1%; record cache/warm-cold policy, named reference hardware, source/artifact/profile/config identity and raw failures.",

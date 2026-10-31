@@ -185,7 +185,9 @@ impl<F: PastaField> Circuit<F> for ShaCircuit<F> {
 /// The digest bytes as the eight public words.
 fn public<F: PastaField>(digest: &[u8; 32]) -> Vec<F> {
     digest
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|word| {
             F::from(u64::from(u32::from_be_bytes([
                 word[0], word[1], word[2], word[3],
@@ -236,7 +238,7 @@ fn fips_vectors() -> [(&'static [u8], [u8; 32]); 3] {
 
 fn hex32(text: &str) -> [u8; 32] {
     let mut out = [0_u8; 32];
-    for (byte, pair) in out.iter_mut().zip(text.as_bytes().chunks_exact(2)) {
+    for (byte, pair) in out.iter_mut().zip(text.as_bytes().as_chunks::<2>().0) {
         let digit = |c: u8| match c {
             b'0'..=b'9' => c - b'0',
             b'a'..=b'f' => c - b'a' + 10,

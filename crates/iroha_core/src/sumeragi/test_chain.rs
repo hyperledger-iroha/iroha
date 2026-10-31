@@ -41,6 +41,8 @@ pub use amx_approval::native_amx_approval_route_fixture;
 mod private_context;
 /// Real paid, certified private context for downstream HTTP authorization tests.
 pub use private_context::native_private_context_route_fixture;
+/// Genuine maximum payment originals shared with downstream native HTTP-owner fixtures.
+pub mod native_payment;
 #[path = "test_chain/retail_multisig.rs"]
 mod retail_multisig;
 #[cfg(test)]

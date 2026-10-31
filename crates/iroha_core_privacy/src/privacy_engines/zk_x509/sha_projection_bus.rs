@@ -3,35 +3,38 @@ use super::*;
 use crate::privacy_engines::zk_x509::projection_air::hash_bus;
 
 /// Four new private cyclic products follow the original SHA auxiliaries.
-pub(crate) const AUX_START_V1: usize = 78;
+pub const AUX_START_V1: usize = 78;
 /// Payload-word event selector; SHA padding bytes are masked out separately.
-pub(crate) const FIX_WORD_V1: usize = 134;
+pub const FIX_WORD_V1: usize = 134;
 /// Exact message length event on the call's final row.
-pub(crate) const FIX_LENGTH_V1: usize = 135;
+pub const FIX_LENGTH_V1: usize = 135;
 /// Actual SHA digest word event.
-pub(crate) const FIX_DIGEST_V1: usize = 136;
+pub const FIX_DIGEST_V1: usize = 136;
 pub(super) const FIX_END_V1: usize = 137;
-pub(crate) const WORDS_V1: usize = 512;
+pub const WORDS_V1: usize = 512;
 
-pub(crate) fn is_active_v1(manifest: ZkX509ShaCallManifestV1) -> bool {
+pub fn is_active_v1(manifest: ZkX509ShaCallManifestV1) -> bool {
     matches!(manifest.role, ZkX509ShaCallRoleV1::Projection(0..=6))
         && manifest.activation == ZkX509ShaCallActivationV1::Required
 }
 
-pub(super) fn populate_fixed_v1(
+pub(super) fn emit_fixed_v1(
     manifest: ZkX509ShaCallManifestV1,
     word: &[F; SHA_WORD_CAPACITY_FIXED_WIDTH_V1],
-    fixed: &mut [F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1],
+    mut emit: impl FnMut(usize, F),
 ) {
     if !is_active_v1(manifest) {
         return;
     }
-    fixed[FIX_WORD_V1] = F(u64::from(
-        word[SHA_WORD_CAPACITY_INPUT_WORD_V1] == F::ONE
-            && word[SHA_WORD_CAPACITY_INPUT_WORD_INDEX_V1].0 < WORDS_V1 as u64,
-    ));
-    fixed[FIX_LENGTH_V1] = word[SHA_WORD_CAPACITY_CALL_LAST_V1];
-    fixed[FIX_DIGEST_V1] = word[SHA_WORD_CAPACITY_DIGEST_SELECTOR_V1];
+    emit(
+        FIX_WORD_V1,
+        F(u64::from(
+            word[SHA_WORD_CAPACITY_INPUT_WORD_V1] == F::ONE
+                && word[SHA_WORD_CAPACITY_INPUT_WORD_INDEX_V1].0 < WORDS_V1 as u64,
+        )),
+    );
+    emit(FIX_LENGTH_V1, word[SHA_WORD_CAPACITY_CALL_LAST_V1]);
+    emit(FIX_DIGEST_V1, word[SHA_WORD_CAPACITY_DIGEST_SELECTOR_V1]);
 }
 
 pub(super) fn row_factor_v1<A: PolynomialAirFieldV1>(
@@ -150,7 +153,7 @@ pub(super) fn push_residues_v1<A: PolynomialAirFieldV1>(
     current: &ZkX509ShaBatchRowV1<A>,
     next: &ZkX509ShaBatchRowV1<A>,
     challenges: ZkX509ShaCallBusChallengesV1,
-    residues: &mut Vec<A>,
+    residues: &mut impl super::ShaResidueSinkV1<A>,
 ) {
     let first = current.fixed[ZK_X509_SHA_FIXED_SEGMENT_FIRST_V1];
     for lane in 0..4 {

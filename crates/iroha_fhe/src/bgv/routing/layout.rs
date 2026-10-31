@@ -402,7 +402,7 @@ mod tests {
             let mut offsets = vec![0];
             let mut segments = Vec::new();
             for row in 0..3 * slots {
-                for column in 0..2 * slots + 1 {
+                for column in 0..=2 * slots {
                     if (row * 7 + column * 11) % 13 < 3 {
                         segments.push(SlotLinearSegment::new(column, 1, 1));
                     }
@@ -421,9 +421,20 @@ mod tests {
                                 .coefficient_index(output * slots + row, input * slots + column)
                                 .is_some()
                         });
-                        assert_eq!(layout.diagonal_active(output, input, odd as u32), expected);
                         assert_eq!(
-                            layout.diagonal_active(output, input, (odd + 2 * slots) as u32),
+                            layout.diagonal_active(
+                                output,
+                                input,
+                                u32::try_from(odd).expect("small slot geometry")
+                            ),
+                            expected
+                        );
+                        assert_eq!(
+                            layout.diagonal_active(
+                                output,
+                                input,
+                                u32::try_from(odd + 2 * slots).expect("small slot geometry")
+                            ),
                             expected
                         );
                     }

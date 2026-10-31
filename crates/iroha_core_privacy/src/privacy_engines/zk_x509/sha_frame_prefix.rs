@@ -20,7 +20,7 @@ use iroha_data_model::privacy::{
 };
 /// Public expectation for one message byte, before the SHA padding byte.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ShaFrameByteV1 {
+pub enum ShaFrameByteV1 {
     /// Constant byte from a domain, field header, or protocol constant.
     Constant(u8),
     /// Bits 8 through 12 of the call's private raw length.
@@ -100,7 +100,7 @@ fn field_frame_byte_v1(
 ///
 /// Raw certificate/CRL TBS calls have no added frame. Publicly inactive
 /// projection calls hash the empty message and therefore have no frame bytes.
-pub(crate) fn sha_frame_byte_v1(
+pub fn sha_frame_byte_v1(
     manifest: ZkX509ShaCallManifestV1,
     offset: usize,
 ) -> Option<ShaFrameByteV1> {

@@ -2072,20 +2072,6 @@ impl Execute for Unregister<Account> {
                     .into(),
                 ));
         }
-        if let Some((upgrade_id, _)) = state_transaction
-            .world
-            .runtime_upgrades
-            .iter()
-            .find(|(_, record)| record.proposer == account_id)
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it has active runtime upgrade proposal state (upgrade 0x{}); retain proposer account for governance audit references",
-                        hex::encode(upgrade_id.0)
-                    )
-                    .into(),
-                ));
-        }
         if let Some((binding_digest, _)) = state_transaction
             .world
             .twitter_bindings
@@ -3170,7 +3156,7 @@ impl Execute for Transfer<Account, DomainId, Account> {
             let domain = state_transaction.world.domain_mut(&object)?;
             if domain.owned_by() != &source {
                 return Err(Error::InvariantViolation(
-                    format!("Can't transfer domain {domain} since {source} doesn't own it",).into(),
+                    format!("Can't transfer domain {domain} since {source} doesn't own it").into(),
                 ));
             }
             domain.set_owned_by(destination.clone());

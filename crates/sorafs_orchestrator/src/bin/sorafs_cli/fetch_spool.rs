@@ -1,7 +1,18 @@
 //! Private fetch spools become visible only after complete manifest verification.
-use std::{fs, path::Path};
+#[cfg(any(not(windows), test))]
+use std::fs;
+#[cfg(not(windows))]
+use std::path::Path;
+#[cfg(not(windows))]
 use tempfile::NamedTempFile;
 
+#[cfg(windows)]
+#[path = "fetch_spool/windows.rs"]
+mod windows;
+#[cfg(windows)]
+pub(super) use windows::{create, publish};
+
+#[cfg(not(windows))]
 pub(super) fn create(output: Option<&Path>) -> Result<NamedTempFile, String> {
     match output {
         Some(path) => {
@@ -18,6 +29,7 @@ pub(super) fn create(output: Option<&Path>) -> Result<NamedTempFile, String> {
     .map_err(|error| format!("failed to create private fetch spool: {error}"))
 }
 
+#[cfg(not(windows))]
 pub(super) fn publish(spool: NamedTempFile, path: &Path) -> Result<(), String> {
     spool
         .as_file()

@@ -162,15 +162,29 @@ fn public_api_preserves_zero_x_dense_and_three_square_refresh_cycles() {
             let shape = profile
                 .plan_switch_to_level(&fresh, level)
                 .expect("public lowering");
-            BootstrapPlan::new(&profile, &shape, program(), &LEVELS, budget())
-                .expect("first honest refresh plan")
+            BootstrapPlan::new(
+                &profile,
+                &shape,
+                iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+                program(),
+                &LEVELS,
+                budget(),
+            )
+            .expect("first honest refresh plan")
         })
         .collect();
     let square_shape = profile
         .plan_multiply(plans[0].output_shape(), plans[0].output_shape())
         .expect("same-level square after bootstrap");
-    let repeat = BootstrapPlan::new(&profile, &square_shape, program(), &LEVELS, budget())
-        .expect("repeat plan from the exact squared bound");
+    let repeat = BootstrapPlan::new(
+        &profile,
+        &square_shape,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        program(),
+        &LEVELS,
+        budget(),
+    )
+    .expect("repeat plan from the exact squared bound");
     assert!(repeat.reduces_phase_bound());
     assert_eq!(
         repeat.output_shape().bound(),
@@ -244,7 +258,15 @@ fn public_api_rejects_same_profile_foreign_key_origins() {
     let profile = profile();
     let precision = profile.plaintext_precision(1).expect("message precision");
     let fresh = profile.plan_fresh(precision).expect("fresh shape");
-    let plan = BootstrapPlan::new(&profile, &fresh, program(), &LEVELS, budget()).expect("plan");
+    let plan = BootstrapPlan::new(
+        &profile,
+        &fresh,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        program(),
+        &LEVELS,
+        budget(),
+    )
+    .expect("plan");
     let (secret, first) =
         LocalBootstrapKey::generate(&profile, plan.galois_elements(), setup_budget())
             .expect("first local key owner");
@@ -326,7 +348,7 @@ fn public_route_preserves_origin_through_mixed_bounds_and_repeated_refresh() {
     assert_ne!(route.output_shapes()[1], route.output_shapes()[2]);
     let map = SlotLinearMap::prepare_rows(&route, |row, values| {
         match row / 2 {
-            0 => values[4] = (row + 1) as u32,
+            0 => values[4] = u32::try_from(row + 1).expect("six output rows"),
             1 => values[row % 2] = 1,
             _ => values.copy_from_slice(if row % 2 == 0 {
                 &[1, 2, 3, 4, 1]
@@ -340,12 +362,30 @@ fn public_route_preserves_origin_through_mixed_bounds_and_repeated_refresh() {
     let plans: Vec<_> = route
         .output_shapes()
         .iter()
-        .map(|shape| BootstrapPlan::new(&profile, shape, program(), &LEVELS, budget()).unwrap())
+        .map(|shape| {
+            BootstrapPlan::new(
+                &profile,
+                shape,
+                iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+                program(),
+                &LEVELS,
+                budget(),
+            )
+            .unwrap()
+        })
         .collect();
     let repeat_shape = profile
         .plan_multiply(plans[0].output_shape(), plans[0].output_shape())
         .unwrap();
-    let repeat = BootstrapPlan::new(&profile, &repeat_shape, program(), &LEVELS, budget()).unwrap();
+    let repeat = BootstrapPlan::new(
+        &profile,
+        &repeat_shape,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        program(),
+        &LEVELS,
+        budget(),
+    )
+    .unwrap();
     assert!(repeat.reduces_phase_bound());
     let mut galois = route.galois_elements().to_vec();
     for plan in plans.iter().chain(core::iter::once(&repeat)) {

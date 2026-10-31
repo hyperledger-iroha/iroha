@@ -697,7 +697,7 @@ fn announced_set<'a>(header: &HeaderV1<'a>) -> Result<AnnouncedSetV1<'a>, BscLcE
         return Err(BscLcError::InvalidRoster);
     }
     let mut validators = Roster::empty();
-    for entry in raw.chunks_exact(VALIDATOR_BYTES) {
+    for entry in raw.as_chunks::<VALIDATOR_BYTES>().0 {
         validators.entries[validators.len] = BscValidatorRef {
             consensus_address: &entry[..20],
             vote_public_key: &entry[20..],
@@ -2066,7 +2066,7 @@ mod tests {
         let head = delta.head.expect("moved");
         assert_eq!(head.latest_finalized.source_height, 6_000);
         assert_eq!(head.latest_set_id, 5_000);
-        assert!(delta.new_sets.is_empty());
+        assert_eq!(delta.new_sets, []);
         assert_eq!(delta.checkpoints.len(), 2);
         let again = advance(&chain, &mut memory, vec![step], now).expect("idempotent");
         assert!(again.is_empty());
@@ -2627,7 +2627,7 @@ mod tests {
             Err(SccpLcAttemptErrorV1::Buffer(_))
         ));
         assert_eq!(input.headers[0].as_ptr(), original);
-        assert!(out.checkpoints().is_empty());
+        assert_eq!(out.checkpoints(), []);
         let unrelated = AllocationBudget::new(1024);
         let unrelated_grant = unrelated.try_reserve_bytes(1024).unwrap();
         drop(unrelated_grant);
@@ -2778,7 +2778,7 @@ mod tests {
                 Err(SccpLcAttemptErrorV1::Output(_))
             ));
             assert_eq!(output.set_count(), 0);
-            assert!(output.checkpoints().is_empty());
+            assert_eq!(output.checkpoints(), []);
             assert_eq!(input.checkpoint_header.as_ptr(), original);
             let unrelated = AllocationBudget::new(1024);
             drop(unrelated.try_reserve_bytes(1024).unwrap());

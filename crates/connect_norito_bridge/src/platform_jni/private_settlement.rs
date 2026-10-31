@@ -5,7 +5,7 @@ fn read_java_private_settlement_bytes(
     array: &jni::objects::JByteArray<'_>,
     maximum: usize,
 ) -> Option<Vec<u8>> {
-    let length = usize::try_from(env.get_array_length(array).ok()?).ok()?;
+    let length = array.len(env).ok()?;
     if length > maximum {
         return None;
     }
@@ -152,9 +152,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AtomicPrivat
     expected_network_id: jni::objects::JByteArray<'_>,
     requested_payload_digest: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_native_private_settlement_committee_proof_response_verify_v1(
-            &mut env,
+            env,
             response_json,
             expected_network_id,
             requested_payload_digest,
@@ -172,9 +172,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AtomicPrivat
     requested_payload_digest: jni::objects::JByteArray<'_>,
     auditor_public_key_utf8: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_native_private_settlement_auditor_capsule_response_verify_with_request_v1(
-            &mut env,
+            env,
             response_json,
             request_json,
             expected_network_id,
@@ -194,9 +194,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AtomicPrivat
     requested_payload_digest: jni::objects::JByteArray<'_>,
     auditor_public_key_utf8: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_native_private_settlement_audit_approval_response_verify_v1(
-            &mut env,
+            env,
             response_json,
             request_json,
             expected_network_id,

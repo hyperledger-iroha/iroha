@@ -190,6 +190,9 @@ impl Worker<'_> {
                     decoded: None,
                     returned_refusal: None,
                     amx_legs: None,
+                    uid_bindings: None,
+                    successor_context: Default::default(),
+                    policy_decode_controls: None,
                     parent_service:
                         super::super::certified_chain::ParentServicePreparation::default(),
                 }),
@@ -266,6 +269,9 @@ mod tests {
                 decoded: None,
                 returned_refusal: None,
                 amx_legs: None,
+                uid_bindings: None,
+                successor_context: Default::default(),
+                policy_decode_controls: None,
                 parent_service:
                     super::super::super::certified_chain::ParentServicePreparation::default(),
             };
@@ -370,7 +376,7 @@ mod tests {
     #[test]
     fn native_original_proposal_rechecks_clock_after_worker_wait_and_restart() {
         let (clock, time_source) =
-            iroha_primitives::time::TimeSource::new_mock(Duration::from_millis(20_000));
+            iroha_primitives::time::TimeSource::new_mock(Duration::from_secs(20));
         publication_tests::with_worker_clock(
             time_source,
             move |chain, worker, _blocks, _events| {

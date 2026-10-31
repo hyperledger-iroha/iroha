@@ -400,12 +400,13 @@ def test_node_local_validity_bounds_are_defects_owned_by_a_task() -> None:
     assert defects, "today's node-local validity bounds are recorded"
     assert set(defects.values()) == {"F.4"}
     assert "storage.config_da_ingest_quota_max_bytes_per_account" in defects
-    assert "proof.config_private_settlement_max_proof_bytes" in defects
+    assert "proof.private_settlement_admission_max_proof_bytes" not in defects
     # F.4 moved the ZK consensus-policy hash inventory (45 bounds) and the
     # execution limits of the pipeline (15 bounds) into committed State: they are
-    # no longer node-local defects and name the committed policy. The ten
-    # [nexus] bounds remain.
-    assert len(defects) == 10
+    # no longer node-local defects and name the committed policy. Four
+    # unrelated [nexus] validity bounds remain; private settlement admission now
+    # comes from World privacy policy, and sidecar capacity is local refusal only.
+    assert len(defects) == 4
     pipeline_policy = [
         item
         for item in CONTRACT["bounds"]
@@ -519,7 +520,7 @@ def test_ram_lfe_budgets_are_derived_and_open_ones_carry_no_number() -> None:
 
 def test_open_items_are_reconciled_when_their_task_is_implemented() -> None:
     # X.2's four-validator resource-agreement item is closed by its same-source run;
-    # the native maximum proof is X.4's open item and the carrier source is F.4's.
+    # the native maximum proof is X.4's open item; unrelated local limits remain F.4's.
     assert problems(CONTRACT, {**TASKS, "X.2": "implemented"}) == []
 
     def reopened(contract: dict) -> None:
@@ -704,6 +705,7 @@ def test_rust_expression_reader_and_evaluator(tmp_path: Path) -> None:
 
     assert read("BASE") == "4 * 1024"
     assert evaluate(read("BASE"), {}, {}, "t") == 4_096
+    assert evaluate("u8::MAX as usize", {}, {}, "t") == 255
     derived = read("DERIVED")
     assert derived == "(BASE as u64 + crate::other::EXTRA as u64) * 2"
     values = {"a.base": 4_096, "a.extra": 4}
@@ -721,6 +723,9 @@ def test_rust_expression_reader_and_evaluator(tmp_path: Path) -> None:
     error = CHECKER["ContractError"]
     with pytest.raises(error, match="has no entry in `refs`"):
         evaluate(derived, {}, {}, "t")
+    for unowned in ["unowned::MAX as usize", "u16::MAX as usize"]:
+        with pytest.raises(error, match="has no entry in `refs`"):
+            evaluate(unowned, {}, {}, "t")
     with pytest.raises(error, match="refers to unverified bound"):
         evaluate(derived, refs, {"a.base": 1}, "t")
     with pytest.raises(error, match="is not defined"):
@@ -1307,19 +1312,15 @@ def test_a_value_bound_into_state_but_compared_nowhere_is_recorded_unenforced() 
         "proof.config_confidential_max_public_inputs",
         "proof.config_confidential_registry_max_vk_entries",
         "proof.config_confidential_registry_max_params_entries",
-        "proof.config_private_settlement_max_proof_bytes",
-        "proof.config_private_settlement_max_capsule_bytes",
-        "storage.config_private_settlement_sidecar_max_records",
-        "storage.config_private_settlement_sidecar_max_total_bytes",
     }
     for identifier in unenforced:
         item = bound(CONTRACT, identifier)
         assert "enforcement" not in item and item["unenforced"]["owner"] == "F.4"
-    # The settlement leg limits are compared by Torii's service only: an observation, never
-    # an enforcement site of a state transition.
-    proof = bound(CONTRACT, "proof.config_private_settlement_max_proof_bytes")
-    assert proof["value"] == 8 * MIB and len(proof["observations"]) == 2
-    assert all("iroha_torii" in entry["path"] for entry in proof["observations"])
+    # Native private admission is selected from authenticated committed policy.
+    proof = bound(CONTRACT, "proof.private_settlement_admission_max_proof_bytes")
+    assert proof["value"] == 8 * MIB and len(proof["enforcement"]) == 2
+    assert proof["source"] == "committed" and "unenforced" not in proof
+    assert all("iroha_torii" in entry["path"] for entry in proof["enforcement"])
 
     def sited(contract: dict) -> None:
         item = bound(contract, "proof.config_confidential_max_public_inputs")
@@ -1328,7 +1329,7 @@ def test_a_value_bound_into_state_but_compared_nowhere_is_recorded_unenforced() 
     assert_fails(edited(sited), "a bound with enforcement sites is not `unenforced`")
 
     def observation_gone(contract: dict) -> None:
-        bound(contract, "proof.config_private_settlement_max_proof_bytes")["observations"][0][
+        bound(contract, "proof.private_settlement_admission_max_proof_bytes")["enforcement"][0][
             "contains"
         ] = "|| request.payload.proof.len() as u64 > config.no_such_limit.get()"
 
@@ -1463,18 +1464,17 @@ def test_every_limit_in_an_owner_file_is_listed_or_excluded() -> None:
         "completeness crates/iroha_core/src/sumeragi/payload.rs: `MAX_QUEUE_SCAN` is neither",
     )
 
-    def nexus_default_unlisted(contract: dict) -> None:
-        # The verifier's case: the settlement carrier default was in no scope.
-        identifier = "transaction.config_private_settlement_max_carrier_bytes"
+    def private_admission_unlisted(contract: dict) -> None:
+        # Removing the committed carrier owner must not evade the typed census.
+        identifier = "transaction.private_settlement_max_carrier_bytes"
         contract["bounds"] = [item for item in contract["bounds"] if item["id"] != identifier]
         contract["relations"] = [item for item in contract["relations"] if identifier not in item["expr"]]
-        catalog = next(item for item in contract["catalogs"] if item["id"] == "nexus_consensus_policy_v1")
-        del catalog["fields"]["atomic_private_settlement.max_carrier_bytes"]
-        catalog["excluded"][0]["fields"].append("atomic_private_settlement.max_carrier_bytes")
+        catalog = next(item for item in contract["catalogs"] if item["id"] == "private_settlement_validity_v1")
+        del catalog["fields"]["max_carrier_bytes"]
 
     assert_fails(
-        edited(nexus_default_unlisted),
-        "`pub mod nexus {`: `MAX_CARRIER_BYTES` is neither a listed bound nor excluded",
+        edited(private_admission_unlisted),
+        "field `max_carrier_bytes` of `PrivateSettlementValidityLimitsV1` is neither",
     )
 
     def stale(contract: dict) -> None:
@@ -1949,7 +1949,7 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
         if item["class"] == "consensus" and item["source"] == "node_local"
     }
     assert listed == node_local, "every node-local validity bound is a catalog field"
-    assert len(node_local) == 10
+    assert len(node_local) == 4
     for identifier in node_local:
         assert bound(CONTRACT, identifier)["defect"]["owner"] == "F.4"
     pipeline = catalogs["execution_policy_digest_v1"]["fields"]
@@ -1985,7 +1985,7 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
         assert all(group["reason"] for group in catalog["excluded"])
     assert len(catalogs["execution_policy_digest_v1"]["fields"]) == 15
     assert len(catalogs["zk_consensus_policy_hash"]["fields"]) == 45
-    assert len(catalogs["nexus_consensus_policy_v1"]["fields"]) == 10
+    assert len(catalogs["nexus_consensus_policy_v1"]["fields"]) == 4
     # The execution-policy digest binds 157 fields: fraud is one exact typed policy,
     # and ten committee sizes come from a loop. Ordinary signing admission now has
     # the separate committed CryptoAdmissionPolicyV1 owner, so the four retired
@@ -2009,22 +2009,35 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
     assert nexus["struct"] == "NexusConsensusPolicyPreimageV1"
     assert nexus["function"] == "nexus_consensus_policy_preimage_with_runtime_policies"
     for field, identifier in (
-        ("atomic_private_settlement.max_participants", "transaction.config_private_settlement_max_participants"),
-        ("atomic_private_settlement.max_carrier_bytes", "transaction.config_private_settlement_max_carrier_bytes"),
-        ("atomic_private_settlement.max_proof_bytes", "proof.config_private_settlement_max_proof_bytes"),
-        ("atomic_private_settlement.max_capsule_bytes", "proof.config_private_settlement_max_capsule_bytes"),
-        ("atomic_private_settlement.sidecar_max_records", "storage.config_private_settlement_sidecar_max_records"),
         ("uploaded_models.max_plaintext_bytes_per_model", "storage.config_uploaded_model_max_plaintext_bytes"),
         ("da.ingest_quota_max_bytes_per_account", "storage.config_da_ingest_quota_max_bytes_per_account"),
     ):
         assert nexus["fields"][field] == identifier
-    carrier = bound(CONTRACT, "transaction.config_private_settlement_max_carrier_bytes")
-    assert carrier["value"] == 4 * MIB and carrier["defect"]["owner"] == "F.4"
+    private = catalogs["private_settlement_validity_v1"]
+    assert private["source"] == "committed"
+    assert private["fields"] == {
+        "max_participants": "transaction.private_settlement_max_participants",
+        "max_carrier_bytes": "transaction.private_settlement_max_carrier_bytes",
+        "max_proof_bytes": "proof.private_settlement_admission_max_proof_bytes",
+        "max_capsule_bytes": "proof.private_settlement_admission_max_capsule_bytes",
+    }
+    for identifier in private["fields"].values():
+        item = bound(CONTRACT, identifier)
+        assert item["source"] == "committed" and "defect" not in item
+    carrier = bound(CONTRACT, "transaction.private_settlement_max_carrier_bytes")
+    assert carrier["value"] == 4 * MIB
     assert {site["stage"] for site in carrier["enforcement"]} >= {"follower"}
-    # The default carrier fits; authoritative committed-policy enforcement still has an owner.
     includable = relation(CONTRACT, "private_settlement_carrier_within_includable_transaction")
     assert includable["expect"] == {"today": "holds", "x2_target": "holds"}
-    assert includable["open"]["owner"] == "F.4"
+    assert "open" not in includable and includable["enforcement"]
+    missing_private = copy.deepcopy(CONTRACT)
+    missing_private["catalogs"] = [
+        item for item in missing_private["catalogs"]
+        if item["id"] != "private_settlement_validity_v1"
+    ]
+    found = []
+    CHECKER["check_catalogs"](ROOT, missing_private, TASKS, found)
+    assert "catalogs: `private_settlement_validity_v1` is checked against the source" in found
 
     def unlisted(contract: dict) -> None:
         del contract["catalogs"][0]["fields"]["pipeline.ivm_max_decoded_bytes"]
@@ -2453,17 +2466,11 @@ def test_catalog_lifetime_preimage_detects_added_and_removed_bound_fields(tmp_pa
     ]
 
 
-def test_catalog_lifetime_preimage_retains_all_actual_nexus_resource_fields() -> None:
-    """The actual borrowed Nexus preimage still exposes each of its ten resource leaves."""
-    catalog = next(c for c in CONTRACT["catalogs"] if c["id"] == "nexus_consensus_policy_v1")
-    observed = CHECKER["catalog_fields"]((ROOT / catalog["path"]).read_text(), catalog, "t")
+def _assert_nexus_resource_catalog_retains_frozen_slots(contract: dict, source: str) -> None:
+    """Separate immutable signed slots from dynamic bounds and local custody limits."""
+    catalog = next(c for c in contract["catalogs"] if c["id"] == "nexus_consensus_policy_v1")
+    observed = CHECKER["catalog_fields"](source, catalog, "t")
     expected = {
-        "atomic_private_settlement.max_participants",
-        "atomic_private_settlement.max_carrier_bytes",
-        "atomic_private_settlement.max_proof_bytes",
-        "atomic_private_settlement.max_capsule_bytes",
-        "atomic_private_settlement.sidecar_max_records",
-        "atomic_private_settlement.sidecar_max_total_bytes",
         "uploaded_models.max_plaintext_bytes_per_model",
         "uploaded_models.max_chunk_count_per_model",
         "da.ingest_quota_max_count_per_account",
@@ -2471,10 +2478,108 @@ def test_catalog_lifetime_preimage_retains_all_actual_nexus_resource_fields() ->
     }
     assert set(catalog["fields"]) == expected
     assert expected.issubset(observed)
+    # These original signed V1 slots remain in source order. The independent Rust
+    # literal golden pins their types, values, bytes and position in the preimage.
+    frozen = [
+        "atomic_private_settlement." + name
+        for name in (
+            "proof_profile_version", "max_participants", "max_expiry_blocks",
+            "audit_timeout_blocks", "prepare_timeout_blocks", "commit_timeout_blocks",
+            "capsule_padding_classes_bytes", "max_proof_bytes", "max_capsule_bytes",
+            "max_carrier_bytes", "sidecar_retention_blocks", "sidecar_max_records",
+            "sidecar_max_total_bytes", "default_min_auditor_approvals",
+            "permitted_policy_versions",
+        )
+    ]
+    assert [field for field in observed if field.startswith("atomic_private_settlement.")] == frozen
+    exclusions = [
+        item for item in catalog["excluded"]
+        if any(field.startswith("atomic_private_settlement.") for field in item["fields"])
+    ]
+    assert len(exclusions) == 1
+    assert exclusions[0]["fields"] == frozen
+    reason = exclusions[0]["reason"]
+    assert "NexusConsensusAtomicPrivateSettlementV1::frozen_v1" in reason
+    assert "not runtime admission settings or local capacity ceilings" in reason
+    assert "frozen_private_settlement_v1_matches_original_commitment_bytes_and_position" in reason
+    body = CHECKER["_function_body"](source, catalog["function"], "t", catalog["path"])
+    assert re.search(
+        r"atomic_private_settlement\s*:\s*NexusConsensusAtomicPrivateSettlementV1::frozen_v1\(\)",
+        body,
+    )
+    for name in ("sidecar_max_records", "sidecar_max_total_bytes"):
+        item = bound(contract, "storage.config_private_settlement_" + name)
+        assert item["class"] == "local_defer" and item["source"] == "node_local"
+        assert "catalog" not in item and "defect" not in item and "unenforced" not in item
     assert "fees" in observed
     assert {field for field in observed if field.startswith("staking.")} == {
         "staking.public_validator_mode", "staking.restricted_validator_mode", "staking.max_validators"
     }
+
+
+def test_catalog_lifetime_preimage_retains_all_actual_nexus_resource_fields() -> None:
+    """The preimage retains frozen signed slots without committing local capacity."""
+    catalog = next(c for c in CONTRACT["catalogs"] if c["id"] == "nexus_consensus_policy_v1")
+    _assert_nexus_resource_catalog_retains_frozen_slots(
+        CONTRACT, (ROOT / catalog["path"]).read_text()
+    )
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing_slot", "extra_slot", "reordered_slots", "missing_exclusion",
+    "extra_exclusion", "reclassified_slot", "unreasoned_exclusion",
+    "reclassified_capacity", "catalogued_capacity", "dynamic_capacity_leak",
+])
+def test_nexus_frozen_catalog_refuses_slot_and_capacity_drift(mutation: str) -> None:
+    """Small source/catalog mutations cannot erase slots or recouple local capacity."""
+    contract = copy.deepcopy(CONTRACT)
+    catalog = next(c for c in contract["catalogs"] if c["id"] == "nexus_consensus_policy_v1")
+    source = (ROOT / catalog["path"]).read_text()
+    _assert_nexus_resource_catalog_retains_frozen_slots(contract, source)
+    exclusion = next(
+        item for item in catalog["excluded"]
+        if "atomic_private_settlement.proof_profile_version" in item["fields"]
+    )
+    if mutation in {"missing_slot", "extra_slot", "reordered_slots"}:
+        start = source.index("struct NexusConsensusAtomicPrivateSettlementV1 {")
+        end = source.index("\n}", start)
+        original = source[start:end]
+        if mutation == "missing_slot":
+            changed = original.replace("    sidecar_max_records: u32,\n", "")
+        elif mutation == "extra_slot":
+            changed = original + "\n    unreviewed_slot: u32,"
+        else:
+            changed = original.replace(
+                "    proof_profile_version: u16,\n    max_participants: u16,",
+                "    max_participants: u16,\n    proof_profile_version: u16,",
+            )
+        assert changed != original
+        source = source[:start] + changed + source[end:]
+    elif mutation == "missing_exclusion":
+        exclusion["fields"].pop()
+    elif mutation == "extra_exclusion":
+        exclusion["fields"].append("atomic_private_settlement.unreviewed_slot")
+    elif mutation == "reclassified_slot":
+        catalog["fields"]["atomic_private_settlement.max_participants"] = (
+            "transaction.private_settlement_max_participants"
+        )
+    elif mutation == "unreasoned_exclusion":
+        exclusion["reason"] = ""
+    elif mutation == "reclassified_capacity":
+        bound(contract, "storage.config_private_settlement_sidecar_max_records")["class"] = "consensus"
+    elif mutation == "catalogued_capacity":
+        bound(contract, "storage.config_private_settlement_sidecar_max_total_bytes")["catalog"] = {
+            "id": catalog["id"], "field": "atomic_private_settlement.sidecar_max_total_bytes"
+        }
+    else:
+        original = "atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1::frozen_v1(),"
+        assert original in source
+        source = source.replace(original, """atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1 {
+            sidecar_max_records: nexus.atomic_private_settlement.sidecar_max_records.get(),
+            ..NexusConsensusAtomicPrivateSettlementV1::frozen_v1()
+        },""", 1)
+    with pytest.raises(AssertionError):
+        _assert_nexus_resource_catalog_retains_frozen_slots(contract, source)
 
 
 def test_derived_bounds_are_recomputed_and_join_the_relations() -> None:
@@ -6553,20 +6658,16 @@ def test_open_ram_lfe_inputs_record_what_the_candidates_project() -> None:
 def test_private_carrier_relations_count_the_signed_frame_at_exact_and_one_over(
     identifier: str, budget: str, reserve: int
 ) -> None:
-    """A wire that fits by itself can still exceed the actual canonical frame budget."""
+    """The committed carrier cap already counts the complete canonical signed frame."""
     values = {item["id"]: item["value"] for item in CONTRACT["bounds"]}
-    # Independent fixed-V1 geometry: one version byte is replaced by Header::SIZE;
-    # the signed model pins zero padding with a compile-time native type invariant.
     assert values["transaction.norito_header_bytes"] == 40
-    overhead = values["transaction.norito_header_bytes"] - 1
-    exact_wire = values[budget] - reserve - overhead
+    exact_frame = values[budget] - reserve
     expression = relation(CONTRACT, identifier)["expr"]
     for extra, expected in [(0, True), (1, False)]:
-        probe = {**values, "transaction.config_private_settlement_max_carrier_bytes": exact_wire + extra}
+        probe = {**values, "transaction.private_settlement_max_carrier_bytes": exact_frame + extra}
         observed = CHECKER["evaluate_relation"](expression, probe, identifier)
         assert observed is expected, (
-            f"{identifier}: {exact_wire + extra} V1 wire bytes become "
-            f"{exact_wire + extra + overhead} canonical signed-frame bytes; "
+            f"{identifier}: {exact_frame + extra} complete canonical frame bytes; "
             f"with {reserve} reserved bytes and {values[budget]} budget, "
             f"the contract incorrectly returns {observed}"
         )

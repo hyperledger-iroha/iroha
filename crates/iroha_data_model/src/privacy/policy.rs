@@ -265,7 +265,7 @@ impl Default for PrivacyConsensusPolicyV1 {
     }
 }
 
-fn validate_privacy_policy_schedule_heights_v1(
+pub(super) fn validate_privacy_policy_schedule_heights_v1(
     scheduled_at_height: u64,
     effective_at_height: u64,
 ) -> Result<(), PrivacyPolicyValidationErrorV1> {

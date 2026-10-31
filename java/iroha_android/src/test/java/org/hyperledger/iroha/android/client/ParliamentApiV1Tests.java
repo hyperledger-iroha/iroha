@@ -447,7 +447,7 @@ public final class ParliamentApiV1Tests {
   @Test
   public void proposalAdmissionRejectsMissingUnknownAndMalformedNestedFields() {
     final Map<String, Object> runtime = validProposal("RuntimeUpgrade");
-    objectValue(objectValue(runtime.get("payload")).get("manifest")).remove("provenance");
+    scheduledChangeSet(runtime).remove("qualification");
     assertThrows(
         IllegalArgumentException.class,
         () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(runtime)));
@@ -494,8 +494,8 @@ public final class ParliamentApiV1Tests {
         () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(excessiveHold)));
 
     final Map<String, Object> impreciseHeight = validProposal("RuntimeUpgrade");
-    objectValue(objectValue(impreciseHeight.get("payload")).get("manifest"))
-        .put("start_height", new BigInteger("9007199254740992"));
+    scheduledChangeSet(impreciseHeight)
+        .put("effective_height", new BigInteger("9007199254740992"));
     assertThrows(
         IllegalArgumentException.class,
         () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(impreciseHeight)));
@@ -1121,19 +1121,9 @@ public final class ParliamentApiV1Tests {
           payload =
               map(
                   "proposal_operator", account(1),
-                  "manifest",
-                  map(
-                      "name", "runtime-v1",
-                      "description", "first release runtime",
-                      "abi_version", 1,
-                      "abi_hash", repeatedNumbers(32, 1),
-                      "added_syscalls", new ArrayList<Object>(),
-                      "added_pointer_types", new ArrayList<Object>(),
-                      "start_height", 10,
-                      "end_height", 20,
-                      "sbom_digests", new ArrayList<Object>(),
-                      "slsa_attestation", "",
-                      "provenance", new ArrayList<Object>()));
+                  "action", map("kind", "Schedule", "content", runtimeChangeSet()),
+                  "notice", map("blocks", 5, "ms", 0, "approval_cushion_ms", 0),
+                  "proposed_ms", 1_788_181_200_000L);
       case "SccpRouteGovernance" ->
           payload =
               map(
@@ -1266,6 +1256,24 @@ public final class ParliamentApiV1Tests {
 
   private static Map<String, Object> bscMainnet() {
     return map("network", "bsc_mainnet", "profile", null);
+  }
+
+  /** Minimal universal-root change set; the SDK passes its contents through to node admission. */
+  private static Map<String, Object> runtimeChangeSet() {
+    return map(
+        "network", networkId(),
+        "root", map("kind", "Universal", "content", null),
+        "predecessor", "01".repeat(32),
+        "successor", "02".repeat(32),
+        "effective_height", 20,
+        "publish", new ArrayList<Object>(),
+        "transitions", new ArrayList<Object>(),
+        "qualification", "03".repeat(32));
+  }
+
+  private static Map<String, Object> scheduledChangeSet(final Map<String, Object> proposal) {
+    return objectValue(
+        objectValue(objectValue(proposal.get("payload")).get("action")).get("content"));
   }
 
   private static String account(final int seed) {

@@ -1,6 +1,8 @@
 //! One existing workflow round owns original source/secret/proof custody.
 use super::*;
-use iroha::workflow::{CustodyHandleV1, WorkflowJournalV1, WorkflowStorageError};
+use iroha::workflow::{
+    CustodyHandleV1, WorkflowJournalV1, WorkflowRunnerLease, WorkflowStorageError,
+};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub fn driver_identity() -> DriverIdentityV1 {
@@ -63,10 +65,42 @@ pub struct PreparationDriver {
     artifacts: Arc<FilePrivateSettlementArtifacts>,
     source: Arc<dyn PrivateSettlementContextSource>,
     wallet: Arc<dyn PrivateSettlementWallet>,
-    verifier: Mutex<SumeragiFinalityVerifier>,
+    verifier: Arc<Mutex<SumeragiFinalityVerifier>>,
     reads: AtomicUsize,
+    retained_bytes: AtomicUsize,
     error: Mutex<Option<OneCallPrivateSettlementError>>,
     worker: Arc<tokio::sync::Semaphore>,
+}
+
+// Original artifact ownership includes the round lease until native digesting/final assembly
+// and actual worker TLS cleanup finish. The canonical worker remains the sole lifecycle owner.
+struct OriginalArtifacts {
+    artifacts: Vec<Artifact>,
+    // Derived from the same authenticated cut on every reopen; never node configuration.
+    max_carrier_bytes: u64,
+    lease: Box<dyn WorkflowRunnerLease>,
+}
+impl OriginalArtifacts {
+    async fn complete<T: Send + 'static>(
+        self,
+        worker: Arc<tokio::sync::Semaphore>,
+        work: impl FnOnce(Vec<Artifact>) -> std::result::Result<T, OneCallPrivateSettlementError>
+        + Send
+        + 'static,
+    ) -> std::result::Result<T, OneCallPrivateSettlementError> {
+        let permit = worker
+            .try_acquire_owned()
+            .map_err(|_| OneCallPrivateSettlementError::Capacity)?;
+        let Self {
+            artifacts,
+            lease,
+            max_carrier_bytes: _,
+        } = self;
+        let (result, original_lease) =
+            run_native_worker(permit, lease, move || work(artifacts)).await?;
+        drop(original_lease);
+        result
+    }
 }
 fn lock<T>(
     value: &Mutex<T>,
@@ -78,7 +112,31 @@ fn lock<T>(
 fn storage_error(error: WorkflowStorageError) -> OneCallPrivateSettlementError {
     OneCallPrivateSettlementError::Provider(eyre::Report::new(error))
 }
+fn remaining_finality_custody(
+    artifacts: &FilePrivateSettlementArtifacts,
+    maximum_total: usize,
+    retained: usize,
+) -> std::result::Result<Arc<FilePrivateSettlementFinality>, OneCallPrivateSettlementError> {
+    if retained == 0 {
+        return Err(OneCallPrivateSettlementError::Pending);
+    }
+    let remaining = maximum_total
+        .checked_sub(retained)
+        .ok_or(OneCallPrivateSettlementError::Capacity)?
+        .min(MAX_PRIVATE_SETTLEMENT_FINALITY_BYTES);
+    Ok(Arc::new(
+        artifacts
+            .finality()
+            .with_maximum_bytes(remaining)
+            .map_err(PrivateSettlementError::from)?,
+    ))
+}
+
 impl PreparationDriver {
+    pub(super) fn session_request(&self) -> &OneCallPrivateSettlementRequest {
+        &self.request
+    }
+
     pub fn new(
         account: AccountClient,
         request: OneCallPrivateSettlementRequest,
@@ -86,8 +144,14 @@ impl PreparationDriver {
         artifacts: Arc<FilePrivateSettlementArtifacts>,
         source: Arc<dyn PrivateSettlementContextSource>,
         wallet: Arc<dyn PrivateSettlementWallet>,
-        verifier: SumeragiFinalityVerifier,
+        mut verifier: SumeragiFinalityVerifier,
     ) -> Self {
+        // A future selected cut needs only the newest three decision witnesses.
+        // Preserve a caller's older selected-cut witnesses when its tip is already ahead.
+        if verifier.authenticated_height().unwrap_or(0) <= request.intent().authority_context_height
+        {
+            verifier.retain_recent_decisions(3);
+        }
         Self {
             account,
             request,
@@ -95,8 +159,9 @@ impl PreparationDriver {
             artifacts,
             source,
             wallet,
-            verifier: Mutex::new(verifier),
+            verifier: Arc::new(Mutex::new(verifier)),
             reads: AtomicUsize::new(0),
+            retained_bytes: AtomicUsize::new(0),
             error: Mutex::new(None),
             worker: Arc::new(tokio::sync::Semaphore::new(1)),
         }
@@ -117,13 +182,25 @@ impl PreparationDriver {
         OneCallPrivateSettlementError,
     > {
         let remaining = u16::try_from(self.reads.load(Ordering::Relaxed))
-            .ok()
-            .and_then(std::num::NonZeroU16::new)
-            .ok_or(OneCallPrivateSettlementError::Capacity)?;
+            .map_err(|_| OneCallPrivateSettlementError::Capacity)?;
         let mut options = *options;
         options.max_finality_proof_reads = remaining;
         Ok((lock(&self.verifier)?.clone(), options))
     }
+    /// Keep settlement checkpoint bytes inside the original one-call artifact allowance.
+    /// The complete original context, preparation prefix and proof artifacts were reloaded
+    /// and authenticated by `recovered_request` before this handoff can be used.
+    pub fn settlement_finality_custody(
+        &self,
+    ) -> std::result::Result<Arc<FilePrivateSettlementFinality>, OneCallPrivateSettlementError>
+    {
+        remaining_finality_custody(
+            &self.artifacts,
+            self.request.0.max_total_artifact_bytes,
+            self.retained_bytes.load(Ordering::Relaxed),
+        )
+    }
+
     pub fn take_error(
         &self,
     ) -> std::result::Result<Option<OneCallPrivateSettlementError>, OneCallPrivateSettlementError>
@@ -144,8 +221,76 @@ impl PreparationDriver {
     }
     async fn selected_block(
         &self,
-    ) -> std::result::Result<VerifiedSumeragiBlock, OneCallPrivateSettlementError> {
+        key: ArtifactKey,
+        mut lease: Box<dyn WorkflowRunnerLease>,
+    ) -> std::result::Result<
+        (VerifiedSumeragiBlock, Box<dyn WorkflowRunnerLease>, usize),
+        OneCallPrivateSettlementError,
+    > {
         let height = self.request.intent().authority_context_height;
+        let maximum = self
+            .request
+            .0
+            .max_artifact_bytes
+            .min(self.request.0.max_total_artifact_bytes);
+        let artifacts = self.artifacts.clone();
+        let network = self.request.intent().network_id;
+        let (chain, instance, scope, initial_epoch) = {
+            let selected = lock(&self.verifier)?;
+            (
+                selected.chain_id().to_owned(),
+                selected.instance(),
+                selected.root_scope(),
+                selected.initial_epoch().clone(),
+            )
+        };
+        let permit = self
+            .worker
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| OneCallPrivateSettlementError::Capacity)?;
+        // Import the native checkpoint on the same bounded worker as its encrypted read.
+        // Keeping nested canonical decoding off the async workflow's call stack also
+        // keeps synchronous authentication from blocking its current-thread executor.
+        let (saved, returned_lease) = run_native_worker(permit, lease, move || {
+            (|| -> std::result::Result<_, OneCallPrivateSettlementError> {
+                let Some((checkpoint, length)) = artifacts.read_finality(key, maximum)? else {
+                    return Ok(None);
+                };
+                if checkpoint.height() > height
+                    || checkpoint.network_id() != network
+                    || checkpoint.chain_id() != chain
+                {
+                    return Err(OneCallPrivateSettlementError::Binding);
+                }
+                // AEAD selects the local original, never a checkpoint returned by a peer.
+                // The independently supplied genesis owner still fixes every root identity.
+                let (restored, tip) = SumeragiFinalityVerifier::from_trusted_checkpoint_with_tip(
+                    &checkpoint,
+                    &network,
+                    &chain,
+                )?;
+                if restored.instance() != instance
+                    || restored.root_scope() != scope
+                    || restored.initial_epoch() != &initial_epoch
+                {
+                    return Err(OneCallPrivateSettlementError::Binding);
+                }
+                Ok(Some((restored, tip, length)))
+            })()
+        })
+        .await?;
+        lease = returned_lease;
+        let mut checkpoint_length = 0;
+        if let Some((restored, tip, length)) = saved? {
+            checkpoint_length = length;
+            // This file is the prefix selected for this pending preparation. The caller
+            // may bring a newer verifier whose bounded history no longer retains this cut.
+            *lock(&self.verifier)? = restored;
+            if tip.height() == height {
+                return Ok((tip, lease, length));
+            }
+        }
         loop {
             let next = lock(&self.verifier)?
                 .authenticated_height()
@@ -153,27 +298,70 @@ impl PreparationDriver {
                 .checked_add(1)
                 .ok_or(OneCallPrivateSettlementError::Binding)?;
             self.reads
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
                 .map_err(|_| OneCallPrivateSettlementError::Capacity)?;
             let target = next.min(height);
-            let proof = self
+            let response = self
                 .account
-                .get_sumeragi_finality_proof_async(
+                .read_sumeragi_finality_proof_response_async(
                     NonZeroU64::new(target).ok_or(OneCallPrivateSettlementError::Binding)?,
                     SumeragiRootScope::Global,
                 )
                 .await
                 .map_err(OneCallPrivateSettlementError::Provider)?;
-            if proof.height() != target {
-                return Err(OneCallPrivateSettlementError::Binding);
+            // Keep the committed in-memory owner unchanged until the new local
+            // checkpoint has a durable acknowledgement. On cancellation after publication,
+            // the next caller imports that original file under the same round lease.
+            if next - 1 > height {
+                // The caller already authenticated a later tip and supplied this older
+                // decision's witnesses. Borrow them without duplicating its history.
+                let verifier = self.verifier.clone();
+                let permit = self
+                    .worker
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| OneCallPrivateSettlementError::Capacity)?;
+                let (block, returned_lease) = run_native_worker(permit, lease, move || {
+                    let proof = response
+                        .decode_checked()
+                        .map_err(OneCallPrivateSettlementError::Provider)?;
+                    Ok::<_, OneCallPrivateSettlementError>(
+                        lock(&verifier)?.verify_retained_decision(&proof)?,
+                    )
+                })
+                .await?;
+                return Ok((block?, returned_lease, checkpoint_length));
             }
-            let block = if next > height {
-                lock(&self.verifier)?.verify_retained_decision(&proof)?
-            } else {
-                lock(&self.verifier)?.verify(&proof)?
-            };
+            let mut candidate = lock(&self.verifier)?.clone();
+            let artifacts = self.artifacts.clone();
+            let permit = self
+                .worker
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| OneCallPrivateSettlementError::Capacity)?;
+            let (advanced, returned_lease) = run_native_worker(permit, lease, move || {
+                (|| -> std::result::Result<_, OneCallPrivateSettlementError> {
+                    let proof = response
+                        .decode_checked()
+                        .map_err(OneCallPrivateSettlementError::Provider)?;
+                    let block = if next > height {
+                        candidate.verify_retained_decision(&proof)?
+                    } else {
+                        candidate.verify(&proof)?
+                    };
+                    let checkpoint = candidate.export_checkpoint(&proof)?;
+                    candidate.retain_recent_decisions(3);
+                    let length = artifacts.publish_finality(key, &checkpoint, maximum)?;
+                    Ok((candidate, block, length))
+                })()
+            })
+            .await?;
+            lease = returned_lease;
+            let (candidate, block, length) = advanced?;
+            checkpoint_length = length;
+            *lock(&self.verifier)? = candidate;
             if target == height {
-                return Ok(block);
+                return Ok((block, lease, checkpoint_length));
             }
         }
     }
@@ -197,8 +385,7 @@ impl PreparationDriver {
         &self,
         round: Digest32,
         may_prepare: bool,
-    ) -> std::result::Result<Option<Vec<Artifact>>, OneCallPrivateSettlementError> {
-        let block = Arc::new(self.selected_block().await?);
+    ) -> std::result::Result<Option<OriginalArtifacts>, OneCallPrivateSettlementError> {
         // The storage owner retains the original per-round proof lease across network waits
         // and moves it into each native worker. It is not cloneable: cancellation cannot
         // release custody while that worker still holds secrets or publishes its artifact.
@@ -228,6 +415,10 @@ impl PreparationDriver {
             round,
             ordinal: 0,
         };
+        let (block, returned_lease, checkpoint_length) =
+            self.selected_block(context_key, lease).await?;
+        lease = returned_lease;
+        let block = Arc::new(block);
         let artifacts = self.artifacts.clone();
         let maximum = request.0.max_artifact_bytes;
         let permit = self
@@ -235,8 +426,8 @@ impl PreparationDriver {
             .clone()
             .try_acquire_owned()
             .map_err(|_| OneCallPrivateSettlementError::Capacity)?;
-        let (original, original_lease) = run_private_settlement_worker(permit, move || {
-            (artifacts.read_context(context_key, maximum), lease)
+        let (original, original_lease) = run_native_worker(permit, lease, move || {
+            artifacts.read_context(context_key, maximum)
         })
         .await?;
         lease = original_lease;
@@ -256,7 +447,10 @@ impl PreparationDriver {
             }
             (proof, length, true)
         };
-        if context_length > request.0.max_total_artifact_bytes {
+        let retained_length = context_length
+            .checked_add(checkpoint_length)
+            .ok_or(OneCallPrivateSettlementError::Capacity)?;
+        if retained_length > request.0.max_total_artifact_bytes {
             return Err(OneCallPrivateSettlementError::Capacity);
         }
         let permit = self
@@ -266,8 +460,8 @@ impl PreparationDriver {
             .map_err(|_| OneCallPrivateSettlementError::Capacity)?;
         let artifacts = self.artifacts.clone();
         let original_block = block.clone();
-        let (original, original_lease) = run_private_settlement_worker(permit, move || {
-            let result = (|| -> std::result::Result<_, OneCallPrivateSettlementError> {
+        let (original, original_lease) = run_native_worker(permit, lease, move || {
+            (|| -> std::result::Result<_, OneCallPrivateSettlementError> {
                 proof.verify(
                     request.intent().network_id,
                     request.0.schema,
@@ -276,6 +470,7 @@ impl PreparationDriver {
                 )?;
                 // Public mismatches on any later leg must refuse before the first wallet
                 // opening or reservation. Reuse the producer's Model-owned exact join.
+                let mut max_carrier_bytes = request.0.max_carrier_bytes;
                 for (index, member) in proof.contexts.iter().enumerate() {
                     let selected = member.verify(
                         request.intent().network_id,
@@ -285,6 +480,8 @@ impl PreparationDriver {
                     )?;
                     selected
                         .verify_intent(request.intent(), request.intent().legs[index].ordinal)?;
+                    max_carrier_bytes =
+                        max_carrier_bytes.min(validate_selected_request(&request, &selected)?);
                     if selected.pool_cut().block_time_ms() < request.0.minimum_context_time_ms {
                         return Err(OneCallPrivateSettlementError::Binding);
                     }
@@ -298,15 +495,14 @@ impl PreparationDriver {
                 if publish {
                     artifacts.publish_context(context_key, &proof, maximum)?;
                 }
-                Ok((Arc::new(proof), digest))
-            })();
-            (result, lease)
+                Ok((Arc::new(proof), digest, max_carrier_bytes))
+            })()
         })
         .await?;
         lease = original_lease;
-        let (contexts, context_digest) = original?;
+        let (contexts, context_digest, max_carrier_bytes) = original?;
         let mut complete = Vec::with_capacity(self.request.intent().legs.len());
-        let mut bytes = context_length;
+        let mut bytes = retained_length;
         for index in 0..self.request.intent().legs.len() {
             let request = self.request.clone();
             let key = ArtifactKey {
@@ -323,8 +519,8 @@ impl PreparationDriver {
             let artifacts = self.artifacts.clone();
             let wallet = self.wallet.clone();
             let block = block.clone();
-            let (result,original_lease)=run_private_settlement_worker(permit,move||{
-                let result=(|| -> std::result::Result<Option<(Artifact,usize)>,OneCallPrivateSettlementError> {
+            let (result,original_lease)=run_native_worker(permit,lease,move||{
+                (|| -> std::result::Result<Option<(Artifact,usize)>,OneCallPrivateSettlementError> {
                     let leg=&request.intent().legs[index];
                     let context=contexts.contexts[index].verify(request.intent().network_id,request.0.schema,
                         PrivateSettlementPoolKeyV1{route:leg.route,pool_id:leg.pool_id},&block)?;
@@ -367,8 +563,7 @@ impl PreparationDriver {
                         return Err(OneCallPrivateSettlementError::Capacity);
                     }
                     Ok(Some((artifact,length)))
-                })();
-                (result,lease)
+                })()
             }).await?;
             lease = original_lease;
             let Some((artifact, length)) = result? else {
@@ -379,7 +574,12 @@ impl PreparationDriver {
                 .ok_or(OneCallPrivateSettlementError::Capacity)?;
             complete.push(artifact);
         }
-        Ok(Some(complete))
+        self.retained_bytes.store(bytes, Ordering::Relaxed);
+        Ok(Some(OriginalArtifacts {
+            artifacts: complete,
+            max_carrier_bytes,
+            lease,
+        }))
     }
 
     async fn report(
@@ -391,18 +591,23 @@ impl PreparationDriver {
         let Some(artifacts) = self.originals(context.round_id, may_prepare).await? else {
             return Ok(RoundReport::Waiting(status));
         };
-        let digests = artifacts
-            .iter()
-            .map(Artifact::digest)
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(RoundReport::Completed {
-            status,
-            transcript: norito::encode_canonical(&digests)?,
-            custody_handles: vec![CustodyHandleV1 {
-                label: "encrypted_prepared_artifacts".into(),
-                reference: context.round_id.to_vec(),
-            }],
-        })
+        let round_id = context.round_id;
+        artifacts
+            .complete(self.worker.clone(), move |artifacts| {
+                let digests = artifacts
+                    .iter()
+                    .map(Artifact::digest)
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(RoundReport::Completed {
+                    status,
+                    transcript: norito::encode_canonical(&digests)?,
+                    custody_handles: vec![CustodyHandleV1 {
+                        label: "encrypted_prepared_artifacts".into(),
+                        reference: round_id.to_vec(),
+                    }],
+                })
+            })
+            .await
     }
     pub async fn recovered_request(
         &self,
@@ -419,46 +624,130 @@ impl PreparationDriver {
         if !journal.steps[0].is_done() {
             return Err(OneCallPrivateSettlementError::Pending);
         }
+        let transcript = round
+            .transcript
+            .clone()
+            .ok_or(OneCallPrivateSettlementError::Binding)?;
         let Some(artifacts) = self.originals(round_id, false).await? else {
             return Err(OneCallPrivateSettlementError::Pending);
         };
-        let digests = artifacts
-            .iter()
-            .map(Artifact::digest)
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let recorded: Vec<Digest32> = norito::decode_canonical(
-            round
-                .transcript
-                .as_deref()
-                .ok_or(OneCallPrivateSettlementError::Binding)?,
-        )?;
-        if recorded != digests {
+        let request = self.request.clone();
+        let max_carrier_bytes = artifacts.max_carrier_bytes;
+        artifacts
+            .complete(self.worker.clone(), move |artifacts| {
+                let digests = artifacts
+                    .iter()
+                    .map(Artifact::digest)
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let recorded: Vec<Digest32> = norito::decode_canonical_with_limits(
+                    &transcript,
+                    norito::canonical_decode_limits(transcript.len()),
+                )?;
+                if recorded != digests {
+                    return Err(OneCallPrivateSettlementError::Binding);
+                }
+                let inputs = artifacts
+                    .into_iter()
+                    .map(Artifact::into_input)
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let bundle = finalize_atomic_private_settlement_provisional_bundle_v1(
+                    request.intent().clone(),
+                    inputs,
+                )
+                .map_err(AtomicPrivateSettlementPreparationErrorV1::Wallet)?;
+                Ok(PrivateSettlementRequest::new(
+                    bundle.materials,
+                    request.0.endpoints.clone(),
+                    max_carrier_bytes,
+                )?)
+            })
+            .await
+    }
+
+    pub async fn reconcile_verified(
+        &self,
+        journal: Option<&WorkflowJournalV1>,
+        prepared: PrivateSettlementRequest,
+        outcome: Arc<VerifiedPrivateSettlementOutcome>,
+    ) -> std::result::Result<(), OneCallPrivateSettlementError> {
+        let journal = journal.ok_or(OneCallPrivateSettlementError::Binding)?;
+        if journal.plan() != self.request.plan()
+            || !journal.steps[0].is_done()
+            || prepared.manifest().proof_intent() != *self.request.intent()
+        {
             return Err(OneCallPrivateSettlementError::Binding);
         }
-        let inputs = artifacts
-            .into_iter()
-            .map(Artifact::into_input)
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let bundle = finalize_atomic_private_settlement_provisional_bundle_v1(
-            self.request.intent().clone(),
-            inputs,
-        )
-        .map_err(AtomicPrivateSettlementPreparationErrorV1::Wallet)?;
-        Ok(PrivateSettlementRequest::new(
-            bundle.materials,
-            self.request.0.endpoints.clone(),
-            self.request.0.max_carrier_bytes,
-        )?)
+        let round = journal.steps[0]
+            .round
+            .as_ref()
+            .and_then(|round| round.round_id)
+            .ok_or(OneCallPrivateSettlementError::Binding)?;
+        let lease_id = WorkflowId::from_bytes(domain_digest(
+            b"iroha:private-settlement:proof-worker:v1\0",
+            &[&round],
+        ));
+        let lease = self
+            .storage
+            .acquire_runner(&lease_id)
+            .map_err(storage_error)?;
+        let permit = self
+            .worker
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| OneCallPrivateSettlementError::Capacity)?;
+        let wallet = self.wallet.clone();
+        let (result, original_lease) = run_native_worker(permit, lease, move || {
+            wallet.reconcile_verified(round, &prepared, &outcome)
+        })
+        .await?;
+        drop(original_lease);
+        result
     }
 }
+// Only the authenticated selected cut supplies semantic bounds. The request may choose
+// smaller local carrier custody, but it cannot expand the committed transaction contract.
+fn validate_selected_request(
+    request: &OneCallPrivateSettlementRequest,
+    context: &iroha_data_model::nexus::VerifiedPrivateSettlementContextV1<'_>,
+) -> std::result::Result<u64, OneCallPrivateSettlementError> {
+    let limits = context.admission_limits();
+    if !limits.permits_padding(request.0.padding)
+        // A cold original can be uploaded at any still-authorized height through expiry.
+        // Its signed retention must satisfy the store's minimum even at that last height.
+        || request.intent().expiry_height
+            .checked_add(limits.sidecar_retention_blocks)
+            .is_none_or(|minimum| request.0.retention_height < minimum)
+    {
+        return Err(OneCallPrivateSettlementError::Binding);
+    }
+    Ok(request.0.max_carrier_bytes.min(limits.max_carrier_bytes))
+}
+
+fn validate_material_limits(
+    limits: &iroha_data_model::privacy::PrivateSettlementValidityLimitsV1,
+    artifact: &Artifact,
+) -> std::result::Result<(), OneCallPrivateSettlementError> {
+    if artifact.proof.len() as u64 > limits.max_proof_bytes
+        || norito::canonical_frame_len(&artifact.capsule)? as u64 > limits.max_capsule_bytes
+        || !limits.permits_padding(artifact.capsule.padding)
+        || u16::from(artifact.policy.body.min_approvals) < limits.min_auditor_approvals
+    {
+        return Err(OneCallPrivateSettlementError::Binding);
+    }
+    Ok(())
+}
+
 fn validate_artifact(
     request: &OneCallPrivateSettlementRequest,
     context: &iroha_data_model::nexus::VerifiedPrivateSettlementContextV1<'_>,
     context_digest: Digest32,
     artifact: &Artifact,
 ) -> std::result::Result<(), OneCallPrivateSettlementError> {
+    validate_selected_request(request, context)?;
+    validate_material_limits(context.admission_limits(), artifact)?;
     let statement = &artifact.statement;
-    if artifact.context_digest != context_digest
+    if artifact.capsule.padding != request.0.padding
+        || artifact.context_digest != context_digest
         || artifact.context_id != context.pool_cut().context_id()
         || artifact.authority != *context.authority()
         || artifact.retention_height != request.0.retention_height
@@ -532,5 +821,53 @@ impl WorkflowDriver for PreparationDriver {
                 .await
                 .map_err(|e| self.remember(e))
         })
+    }
+}
+
+#[cfg(test)]
+mod completion_tests;
+#[cfg(test)]
+mod policy_tests;
+
+#[cfg(test)]
+mod finality_budget_tests {
+    use super::*;
+
+    #[test]
+    fn handoff_finality_custody_uses_only_the_original_aggregate_remainder() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("artifacts");
+        let artifacts = FilePrivateSettlementArtifacts::open(&path, &[53; 32]).unwrap();
+        assert!(matches!(
+            remaining_finality_custody(&artifacts, 100, 0),
+            Err(OneCallPrivateSettlementError::Pending)
+        ));
+        let remainder = remaining_finality_custody(&artifacts, 100, 99).unwrap();
+        assert!(remainder.with_maximum_bytes(1).is_ok());
+        assert!(
+            remainder.with_maximum_bytes(2).is_err(),
+            "the finalized record cannot obtain another full artifact budget"
+        );
+        assert!(remaining_finality_custody(&artifacts, 100, 100).is_err());
+        assert!(remaining_finality_custody(&artifacts, 100, 101).is_err());
+        let maximum =
+            remaining_finality_custody(&artifacts, MAX_PRIVATE_SETTLEMENT_FINALITY_BYTES + 1024, 1)
+                .unwrap();
+        assert!(
+            maximum
+                .with_maximum_bytes(MAX_PRIVATE_SETTLEMENT_FINALITY_BYTES)
+                .is_ok()
+        );
+        assert!(
+            maximum
+                .with_maximum_bytes(MAX_PRIVATE_SETTLEMENT_FINALITY_BYTES + 1)
+                .is_err()
+        );
+        assert!(Arc::ptr_eq(artifacts.finality(), artifacts.finality()));
+        assert_eq!(
+            std::fs::read_dir(&path).unwrap().count(),
+            0,
+            "budget selection and accessor create no finality or lock file and discard no original"
+        );
     }
 }

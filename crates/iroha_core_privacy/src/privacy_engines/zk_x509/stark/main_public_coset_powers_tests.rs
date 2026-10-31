@@ -227,7 +227,7 @@ fn joined_full_output_metal_four_and_eight_column_batches_match_exactly() {
                 let values = (0..1usize << native)
                     .map(|row| F((17 * row + 13 * column + 1) as u64))
                     .collect::<Vec<_>>();
-                let mask = (0..MASK_DEGREE + 1)
+                let mask = (0..=MASK_DEGREE)
                     .map(|degree| F((29 * degree + 7 * column + 3) as u64))
                     .collect::<Vec<_>>();
                 Column::from_vec_v1(

@@ -12,7 +12,7 @@
 //!   session installs with no restart, every validator reports its provider ready, `/readyz` turns
 //!   200, and the chain crosses a mandatory pulse that verifies against the installed session.
 //!
-//! Genesis is today's Kagami Taira localnet re-targeted to the profile (the P2 genesis builder
+//! Genesis is today's Kagami Taira network re-targeted to the profile (the P2 genesis builder
 //! replaces this, TODO(P2)): content of the Taira catalog the profile omits (the Digital Shekel
 //! dataspace and validator seats on lanes the profile does not define) is removed, the protocol
 //! custody account becomes the profile's keyless account, the `NPoS` epoch becomes the qual
@@ -58,23 +58,34 @@ use iroha_data_model::{
     },
     transaction::FeePaymentIntent,
 };
+use iroha_fs::ProcessStdio as Stdio;
 use iroha_genesis::{RawGenesisTransaction, validate_prepared_genesis_bundle};
 use iroha_model_base::{metadata::Metadata, peer::PeerId};
-use iroha_test_network::{init_instruction_registry, read_on_dedicated_thread};
+use iroha_test_network::{
+    BinaryKind, ResolvedCommand, ResolvedProgram, init_instruction_registry,
+    read_on_dedicated_thread, resolve_development_binary, resolve_release_prebuilt_binary,
+};
 use norito::json::{self, Value};
 use std::{
     collections::BTreeSet,
     fs,
     num::NonZeroU64,
-    os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
-    process::Stdio,
     str::FromStr as _,
     time::Duration,
 };
+#[path = "support/profile_files.rs"]
+mod profile_files;
+use profile_files::{owner_only_dir, private_file, workspace};
+#[path = "support/profile_peers.rs"]
+mod profile_peers;
+use profile_peers::{Peers, configure_lifecycle};
+
+#[cfg(windows)]
+#[path = "support/windows_unprivileged.rs"]
+mod windows_unprivileged;
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
-    process::{Child, Command},
     time::{Instant, sleep, timeout_at},
 };
 
@@ -93,45 +104,44 @@ const INSTALL_RANGE: u16 = 16;
 /// Kagami's Digital Shekel asset and domain, which live in the Taira-only `is` dataspace.
 const TAIRA_ONLY_MARKERS: [&str; 2] = ["7ZepsJTHCVLKsrFFNZGSRGZgvBhv", "\"boi.is\""];
 
-fn required_binary(variable: &str) -> Result<PathBuf> {
+fn required_binary(variable: &str, kind: BinaryKind) -> Result<ResolvedProgram> {
+    let qualified = resolve_release_prebuilt_binary(kind)?;
     let path = std::env::var_os(variable)
         .map(PathBuf::from)
         .ok_or_else(|| eyre!("{variable} must name the prebuilt executable"))?;
     ensure!(
-        path.is_absolute() && path.is_file(),
-        "{variable} must be an absolute path to an existing executable"
+        path.is_absolute(),
+        "{variable} must name an absolute native executable"
     );
-    Ok(path)
+    if let Some(program) = qualified {
+        ensure!(
+            path.as_os_str() == program.diagnostic_path()?.as_os_str(),
+            "{variable} must preserve the exact manifest-attested native spelling"
+        );
+        return Ok(program);
+    }
+    resolve_development_binary(&path)
 }
 
-/// Owner-only workspace below the canonical temporary directory, whose ancestors are trusted
-/// (no symlink and no group- or world-writable component), as `node_secrets` requires.
-fn workspace() -> Result<tempfile::TempDir> {
-    let base = fs::canonicalize(std::env::temp_dir())?;
-    let dir = tempfile::Builder::new()
-        .prefix("sora-nexus-profile-network-")
-        .permissions(fs::Permissions::from_mode(0o700))
-        .tempdir_in(base)?;
-    Ok(dir)
-}
-
-fn owner_only_dir(path: &Path) -> Result<()> {
-    fs::create_dir_all(path)?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-    Ok(())
-}
-
-fn private_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    use std::io::Write as _;
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-        .wrap_err_with(|| format!("create {}", path.display()))?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    Ok(())
+fn unprivileged_subject() -> Result<String> {
+    #[cfg(unix)]
+    {
+        let uid = nix::unistd::geteuid();
+        ensure!(
+            !uid.is_root(),
+            "the unprivileged start proof must not run as root"
+        );
+        Ok(format!("uid {uid}"))
+    }
+    #[cfg(windows)]
+    {
+        let subject = windows_unprivileged::current()?;
+        subject.require_unprivileged()?;
+        Ok(format!(
+            "SID {} (elevated={})",
+            subject.sid, subject.elevated
+        ))
+    }
 }
 
 /// Four contiguous Torii and four contiguous P2P loopback ports, held until the peers start.
@@ -163,19 +173,15 @@ fn reserve_ports() -> Result<(u16, u16, Vec<std::net::TcpListener>)> {
 }
 
 /// Run a child to completion, keeping its output under `evidence`.
-async fn run(mut command: Command, evidence: &Path, deadline: Instant) -> Result<Vec<u8>> {
-    let output = timeout_at(
-        deadline,
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?
-            .wait_with_output(),
-    )
-    .await
-    .wrap_err("child exceeded its phase deadline")??;
+async fn run(mut command: ResolvedCommand, evidence: &Path, deadline: Instant) -> Result<Vec<u8>> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let output = timeout_at(deadline, command.spawn_async()?.wait_with_output())
+        .await
+        .wrap_err("child exceeded its phase deadline")??;
     fs::write(evidence.with_extension("stdout"), &output.stdout)?;
     fs::write(evidence.with_extension("stderr"), &output.stderr)?;
     ensure!(
@@ -475,6 +481,7 @@ impl Seat {
                     .collect(),
             )
         };
+        configure_lifecycle(&mut node);
         node.insert(
             "network".into(),
             table(vec![
@@ -584,65 +591,6 @@ fn pre_deal(
 
 fn hex_lower(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-/// Running validators.
-struct Peers {
-    children: Vec<Child>,
-}
-
-impl Peers {
-    fn spawn(daemon: &Path, directory: &Path, node_files: &[PathBuf]) -> Result<Self> {
-        let mut children = Vec::new();
-        for (index, node_file) in node_files.iter().enumerate() {
-            let log = |stream: &str| {
-                fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .mode(0o600)
-                    .open(directory.join(format!("peer{index}.{stream}.log")))
-            };
-            let mut command = Command::new(daemon);
-            command
-                .env_clear()
-                .current_dir(directory)
-                .arg("--config")
-                .arg(node_file)
-                .stdin(Stdio::null())
-                .stdout(Stdio::from(log("stdout")?))
-                .stderr(Stdio::from(log("stderr")?))
-                .kill_on_drop(true);
-            children.push(command.spawn()?);
-        }
-        Ok(Self { children })
-    }
-
-    fn exited(&mut self) -> Result<Option<String>> {
-        for (index, child) in self.children.iter_mut().enumerate() {
-            if let Some(status) = child.try_wait()? {
-                return Ok(Some(format!("validator {index} exited: {status}")));
-            }
-        }
-        Ok(None)
-    }
-
-    async fn stop(&mut self, deadline: Instant) -> Result<()> {
-        for child in &self.children {
-            if let Some(pid) = child.id() {
-                nix::sys::signal::kill(
-                    nix::unistd::Pid::from_raw(i32::try_from(pid)?),
-                    nix::sys::signal::Signal::SIGTERM,
-                )?;
-            }
-        }
-        for child in &mut self.children {
-            timeout_at(deadline, child.wait())
-                .await
-                .wrap_err("validator did not stop")??;
-        }
-        self.children.clear();
-        Ok(())
-    }
 }
 
 /// Status code of `GET /readyz`. The public body is a generic envelope without the reason.
@@ -1066,20 +1014,20 @@ fn taira_catalog_content_is_recognized() {
 async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() -> Result<()> {
     init_instruction_registry();
     let started = Instant::now();
-    let daemon = required_binary("TEST_NETWORK_BIN_IROHAD")?;
-    let kagami = required_binary("KAGAMI_BIN")?;
+    let daemon = required_binary("TEST_NETWORK_BIN_IROHAD", BinaryKind::Irohad)?;
+    let kagami = required_binary("KAGAMI_BIN", BinaryKind::Kagami)?;
     let profile = Profile::compiled(PROFILE)?;
     let workspace = workspace()?;
     let root = workspace.path().to_path_buf();
     let outcome = async {
         let deadline = Instant::now() + PHASE;
         let (api, p2p, reservations) = reserve_ports()?;
-        // 1. Today's Kagami Taira localnet with the qual cadence.
+        // 1. Today's Kagami Taira network with the qual cadence.
         let kagami_dir = root.join("kagami");
-        let mut generate = Command::new(&kagami);
+        let mut generate = kagami.command()?;
         generate
-            .args(["localnet", "generate", "--peers", "4", "--chain-id", TAIRA_CHAIN])
-            .args(["--sora-profile", "nexus", "--consensus-mode", "npos"])
+            .args(["sora-network", "generate", "--peers", "4", "--chain-id", TAIRA_CHAIN])
+            .args(["--profile", "nexus"])
             .args(["--seed", "sora-nexus-v1-qual-predeal"])
             .arg("--block-cadence-ms")
             .arg(profile.genesis_recipe().block_cadence_ms.to_string())
@@ -1091,7 +1039,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
             .arg("--out-dir")
             .arg(&kagami_dir);
         run(generate, &root.join("kagami-localnet"), deadline).await?;
-        eprintln!("[{}] Kagami Taira localnet generated", elapsed(started));
+        eprintln!("[{}] Kagami Taira network generated", elapsed(started));
         let seats = (0..PEERS)
             .map(|index| Seat::load(&kagami_dir, index))
             .collect::<Result<Vec<_>>>()?;
@@ -1149,7 +1097,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
         )?;
         let flat = genesis_dir.join("flat-validator0.toml");
         private_file(&flat, toml::to_string(&flat_render(&node_files[0])?)?.as_bytes())?;
-        let mut sign = Command::new(&kagami);
+        let mut sign = kagami.command()?;
         sign.args(["genesis", "sign"])
             .arg(genesis_dir.join("genesis.json"))
             .arg("--out-file")
@@ -1237,7 +1185,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
         )?;
         let mut compatibility = Vec::with_capacity(PEERS);
         for (index, node_file) in node_files.iter().enumerate() {
-            let mut check = Command::new(&daemon);
+            let mut check = daemon.command()?;
             check
                 .env_clear()
                 .current_dir(&root)
@@ -1254,10 +1202,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
             compatibility.push(report);
         }
         // 6. Unprivileged first start with `beacon.cred` already in place.
-        ensure!(
-            !nix::unistd::geteuid().is_root(),
-            "the unprivileged start proof must not run as root"
-        );
+        let subject = unprivileged_subject()?;
         drop(reservations);
         let mut peers = Peers::spawn(&daemon, &root, &node_files)?;
         let network = async {
@@ -1272,9 +1217,9 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
             let deadline = Instant::now() + PHASE;
             let height = wait_for_mesh(&clients, &mut peers, 1, deadline).await?;
             eprintln!(
-                "[{}] four production_mode validators meshed at height {height} as uid {}",
+                "[{}] four production_mode validators meshed at height {height} as {}",
                 elapsed(started),
-                nix::unistd::geteuid()
+                subject
             );
             ensure_compatibility_matches(
                 &compatibility,
@@ -1423,7 +1368,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
         //     retained Kura hash.
         let deadline = Instant::now() + PHASE;
         for (index, node_file) in node_files.iter().enumerate() {
-            let mut check = Command::new(&daemon);
+            let mut check = daemon.command()?;
             check
                 .env_clear()
                 .current_dir(&root)
@@ -1446,6 +1391,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
         Ok::<_, color_eyre::Report>(())
     }
     .await;
+    let outcome = outcome.and(workspace.revalidate());
     if outcome.is_err() {
         eprintln!("evidence retained at {}", workspace.keep().display());
     }

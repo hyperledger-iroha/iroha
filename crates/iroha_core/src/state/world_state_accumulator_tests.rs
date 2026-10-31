@@ -54,7 +54,7 @@ fn accumulator_add_and_remove_are_inverse_and_order_independent() {
         backward.add(element);
     }
     assert_eq!(forward, backward, "the multiset sum ignores entry order");
-    assert_eq!(forward.root(), backward.root());
+    assert_eq!(forward.baseline_root(), backward.baseline_root());
     assert_eq!(forward.entries(), 16);
     let mut interleaved = forward.clone();
     interleaved.remove(&elements[3]);
@@ -66,7 +66,10 @@ fn accumulator_add_and_remove_are_inverse_and_order_independent() {
         backward.remove(element);
     }
     assert_eq!(backward, WorldStateAccumulator::empty());
-    assert_eq!(backward.root(), WorldStateAccumulator::empty().root());
+    assert_eq!(
+        backward.baseline_root(),
+        WorldStateAccumulator::empty().baseline_root()
+    );
     // Removing before adding wraps and still cancels: the value is a function of the multiset.
     let mut wrapped = WorldStateAccumulator::empty();
     wrapped.remove(&elements[0]);
@@ -79,7 +82,7 @@ fn accumulator_add_and_remove_are_inverse_and_order_independent() {
     twice.add(&elements[0]);
     let mut once = WorldStateAccumulator::empty();
     once.add(&elements[0]);
-    assert_ne!(twice.root(), once.root());
+    assert_ne!(twice.baseline_root(), once.baseline_root());
 }
 
 #[test]
@@ -121,18 +124,18 @@ fn accumulator_matches_the_documented_formula_and_known_vectors() {
         KNOWN_FIRST_LANES,
         "element expansion changed"
     );
-    // The root binds the registry schema, the entry count and every lane, little endian.
-    let schema = field_index().as_ref().unwrap().schema;
+    // The root binds the selection schema, the entry count and every lane, little endian.
+    let schema = selection_schema(&baseline_selection()).unwrap();
     let mut preimage = b"iroha:world-state:root:v1\0".to_vec();
     preimage.extend_from_slice(schema.as_ref());
     preimage.extend_from_slice(&3_u64.to_le_bytes());
     for lane in documented_sum(&entries) {
         preimage.extend_from_slice(&lane.to_le_bytes());
     }
-    assert_eq!(accumulator.root(), Ok(Hash::new(preimage)));
+    assert_eq!(accumulator.baseline_root(), Ok(Hash::new(preimage)));
     assert_ne!(
-        WorldStateAccumulator::empty().root(),
-        accumulator.root(),
+        WorldStateAccumulator::empty().baseline_root(),
+        accumulator.baseline_root(),
         "the empty World has its own root"
     );
 }
@@ -230,6 +233,7 @@ fn every_pass_visits_exactly_the_canonical_fields() {
         accumulator: WorldStateAccumulator::empty(),
         direction: Direction::Capture,
         visited: vec![false; index.canonical],
+        installation: vec![Installation::Installed; index.canonical],
         snapshot: None,
         snapshot_field: None,
     };
@@ -261,7 +265,7 @@ fn capture_binds_untouched_and_snapshot_skipped_values_without_undo_history() {
     }
     let block = second.block();
     let initial = WorldStateAccumulator::capture(&block).unwrap();
-    assert_ne!(plain.root(), initial.root());
+    assert_ne!(plain.baseline_root(), initial.baseline_root());
     assert_eq!(
         initial.entries(),
         plain.entries() + 1,
@@ -276,17 +280,22 @@ fn capture_binds_untouched_and_snapshot_skipped_values_without_undo_history() {
         .insert(path("untouched/value"), vec![1]);
     *noop.soradns_last_publish_ms.get_mut() = Some(42);
     assert_eq!(
-        initial.root(),
-        WorldStateAccumulator::capture(&noop).unwrap().root()
+        initial.baseline_root(),
+        WorldStateAccumulator::capture(&noop)
+            .unwrap()
+            .baseline_root()
     );
-    assert_eq!(initial.root(), initial.apply_block(&noop).unwrap().root());
+    assert_eq!(
+        initial.baseline_root(),
+        initial.apply_block(&noop).unwrap().baseline_root()
+    );
 }
 
 #[test]
 fn incremental_versions_match_cold_capture_across_commit_and_replacement() {
     let world = World::default();
     let parent = WorldStateAccumulator::capture(&world.block()).unwrap();
-    let parent_root = parent.root();
+    let parent_root = parent.baseline_root();
     let mut block = world.block();
     block.smart_contract_state.insert(path("app/kept"), vec![1]);
     block
@@ -299,28 +308,32 @@ fn incremental_versions_match_cold_capture_across_commit_and_replacement() {
     }
     let first = parent.apply_block(&block).unwrap();
     assert_eq!(
-        first.root(),
-        WorldStateAccumulator::capture(&block).unwrap().root()
+        first.baseline_root(),
+        WorldStateAccumulator::capture(&block)
+            .unwrap()
+            .baseline_root()
     );
     assert_eq!(
-        parent.root(),
+        parent.baseline_root(),
         WorldStateAccumulator::capture_predecessor(&block)
             .unwrap()
-            .root()
+            .baseline_root()
     );
     block.commit();
     assert_eq!(
-        first.root(),
+        first.baseline_root(),
         WorldStateAccumulator::capture(&world.block())
             .unwrap()
-            .root()
+            .baseline_root()
     );
     // Opening and dropping the intervening read overlay must preserve the undo
     // needed by replacement; the replacement's before cut is the original parent.
     let mut replacement = world.block_and_revert();
     assert_eq!(
         parent_root,
-        WorldStateAccumulator::capture(&replacement).unwrap().root()
+        WorldStateAccumulator::capture(&replacement)
+            .unwrap()
+            .baseline_root()
     );
     replacement
         .smart_contract_state
@@ -328,21 +341,26 @@ fn incremental_versions_match_cold_capture_across_commit_and_replacement() {
     *replacement.soradns_last_publish_ms.get_mut() = Some(8);
     let replaced = parent.apply_block(&replacement).unwrap();
     assert_eq!(
-        replaced.root(),
-        WorldStateAccumulator::capture(&replacement).unwrap().root()
+        replaced.baseline_root(),
+        WorldStateAccumulator::capture(&replacement)
+            .unwrap()
+            .baseline_root()
     );
     assert_eq!(
         parent_root,
         WorldStateAccumulator::capture_predecessor(&replacement)
             .unwrap()
-            .root()
+            .baseline_root()
     );
     replacement.commit();
     let mut next = world.block();
     next.smart_contract_state.remove(path("app/replacement"));
     *next.soradns_last_publish_ms.get_mut() = None;
-    assert_eq!(parent_root, replaced.apply_block(&next).unwrap().root());
-    assert_eq!(parent_root, parent.root());
+    assert_eq!(
+        parent_root,
+        replaced.apply_block(&next).unwrap().baseline_root()
+    );
+    assert_eq!(parent_root, parent.baseline_root());
 }
 
 #[test]
@@ -367,11 +385,11 @@ fn a_foreign_predecessor_yields_a_root_that_differs_from_the_actual_world() {
     // The multiset hash cannot see the missing preimage locally; the certified root does.
     let applied = foreign.apply_block(&block).unwrap();
     let actual = WorldStateAccumulator::capture(&block).unwrap();
-    assert_ne!(applied.root(), actual.root());
+    assert_ne!(applied.baseline_root(), actual.baseline_root());
     let actual_parent = WorldStateAccumulator::capture_predecessor(&block).unwrap();
     assert_eq!(
-        actual_parent.apply_block(&block).unwrap().root(),
-        actual.root()
+        actual_parent.apply_block(&block).unwrap().baseline_root(),
+        actual.baseline_root()
     );
 }
 
@@ -392,6 +410,7 @@ fn incremental_encoding_is_limited_to_touched_values() {
         accumulator,
         direction,
         visited: vec![false; index.canonical],
+        installation: vec![Installation::Installed; index.canonical],
         snapshot: None,
         snapshot_field: None,
     };
@@ -441,13 +460,14 @@ fn field_identity_and_kind_are_bound_into_each_entry() {
             accumulator: WorldStateAccumulator::empty(),
             direction: Direction::Capture,
             visited: vec![false; index.canonical],
+            installation: vec![Installation::Installed; index.canonical],
             snapshot: None,
             snapshot_field: None,
         };
         builder
             .append_storage_with(name, &block, hash_value)
             .unwrap();
-        roots.push(builder.accumulator.root());
+        roots.push(builder.accumulator.baseline_root());
     }
     assert_ne!(
         roots[0], roots[1],
@@ -460,6 +480,7 @@ fn field_identity_and_kind_are_bound_into_each_entry() {
         accumulator: WorldStateAccumulator::empty(),
         direction: Direction::Capture,
         visited: vec![false; index.canonical],
+        installation: vec![Installation::Installed; index.canonical],
         snapshot: None,
         snapshot_field: None,
     };
@@ -506,15 +527,17 @@ fn trigger_stores_share_the_complete_world_visitor() {
     }
     let after = parent.apply_block(&block).unwrap();
     assert_eq!(
-        after.root(),
-        WorldStateAccumulator::capture(&block).unwrap().root()
+        after.baseline_root(),
+        WorldStateAccumulator::capture(&block)
+            .unwrap()
+            .baseline_root()
     );
-    assert_ne!(after.root(), parent.root());
+    assert_ne!(after.baseline_root(), parent.baseline_root());
     assert_eq!(
-        parent.root(),
+        parent.baseline_root(),
         WorldStateAccumulator::capture_predecessor(&block)
             .unwrap()
-            .root()
+            .baseline_root()
     );
     assert_eq!(
         after.entries(),
@@ -538,10 +561,16 @@ fn unwitnessed_role_and_parameter_changes_change_the_root() {
         (),
     );
     let granted = parent.apply_block(&block).unwrap();
-    assert_ne!(granted.root(), parent.root(), "a role grant is committed");
+    assert_ne!(
+        granted.baseline_root(),
+        parent.baseline_root(),
+        "a role grant is committed"
+    );
     assert_eq!(
-        granted.root(),
-        WorldStateAccumulator::capture(&block).unwrap().root()
+        granted.baseline_root(),
+        WorldStateAccumulator::capture(&block)
+            .unwrap()
+            .baseline_root()
     );
     block
         .set_parameter_for_testing(Parameter::Block(BlockParameter::MaxTransactions(
@@ -550,13 +579,15 @@ fn unwitnessed_role_and_parameter_changes_change_the_root() {
         .expect("valid fixture parameters");
     let parameterized = parent.apply_block(&block).unwrap();
     assert_ne!(
-        parameterized.root(),
-        granted.root(),
+        parameterized.baseline_root(),
+        granted.baseline_root(),
         "a parameter is committed"
     );
     assert_eq!(
-        parameterized.root(),
-        WorldStateAccumulator::capture(&block).unwrap().root()
+        parameterized.baseline_root(),
+        WorldStateAccumulator::capture(&block)
+            .unwrap()
+            .baseline_root()
     );
 }
 
@@ -575,21 +606,29 @@ fn derived_index_changes_do_not_create_independent_world_authority() {
         (),
     );
     let current = WorldStateAccumulator::capture(&block).unwrap();
-    assert_eq!(current.root(), parent.root());
-    assert_eq!(parent.apply_block(&block).unwrap().root(), parent.root());
+    assert_eq!(current.baseline_root(), parent.baseline_root());
+    assert_eq!(
+        parent.apply_block(&block).unwrap().baseline_root(),
+        parent.baseline_root()
+    );
     // The stored accumulator is derived too: writing it never changes the root it commits.
     *block.state_accumulator.get_mut() = current.clone();
     assert_eq!(
-        WorldStateAccumulator::capture(&block).unwrap().root(),
-        parent.root()
+        WorldStateAccumulator::capture(&block)
+            .unwrap()
+            .baseline_root(),
+        parent.baseline_root()
     );
 
     block
         .smart_contract_state
         .insert(path("authority/changed"), vec![1]);
     let changed = WorldStateAccumulator::capture(&block).unwrap();
-    assert_ne!(changed.root(), parent.root());
-    assert_eq!(parent.apply_block(&block).unwrap().root(), changed.root());
+    assert_ne!(changed.baseline_root(), parent.baseline_root());
+    assert_eq!(
+        parent.apply_block(&block).unwrap().baseline_root(),
+        changed.baseline_root()
+    );
 }
 
 #[test]
@@ -706,10 +745,10 @@ fn musubi_availability_uses_its_semantic_anchor_while_publication_binds_full_row
         .musubi_archive_availability
         .insert(archive_id, derived_change);
     let after = WorldStateAccumulator::capture(&second).unwrap();
-    assert_eq!(after.root(), accumulator.root());
+    assert_eq!(after.baseline_root(), accumulator.baseline_root());
     assert_eq!(
-        accumulator.apply_block(&second).unwrap().root(),
-        after.root()
+        accumulator.apply_block(&second).unwrap().baseline_root(),
+        after.baseline_root()
     );
     assert_ne!(
         second.publication_state_delta().unwrap(),
@@ -722,8 +761,10 @@ fn musubi_availability_uses_its_semantic_anchor_while_publication_binds_full_row
         .musubi_archive_availability
         .insert(archive_id, new_anchor);
     assert_ne!(
-        WorldStateAccumulator::capture(&second).unwrap().root(),
-        accumulator.root()
+        WorldStateAccumulator::capture(&second)
+            .unwrap()
+            .baseline_root(),
+        accumulator.baseline_root()
     );
 }
 
@@ -757,8 +798,10 @@ fn per_block_cost_is_proportional_to_the_change_set() {
     let incremental = parent.apply_block(&block).unwrap();
     let per_block = started.elapsed();
     assert_eq!(
-        incremental.root(),
-        WorldStateAccumulator::capture(&block).unwrap().root()
+        incremental.baseline_root(),
+        WorldStateAccumulator::capture(&block)
+            .unwrap()
+            .baseline_root()
     );
     println!(
         "world state accumulator: cold capture of {ENTRIES} entries {cold:?}, \
@@ -843,34 +886,45 @@ fn flattened_memberships_and_counts_do_not_change_world_authority() {
     block.proofs_by_tag.insert((*b"TEST", proof), ());
 
     assert_eq!(
-        WorldStateAccumulator::capture(&block).unwrap().root(),
-        parent.root()
+        WorldStateAccumulator::capture(&block)
+            .unwrap()
+            .baseline_root(),
+        parent.baseline_root()
     );
     assert_eq!(
         WorldStateAccumulator::capture_predecessor(&block)
             .unwrap()
-            .root(),
-        parent.root()
+            .baseline_root(),
+        parent.baseline_root()
     );
-    assert_eq!(parent.apply_block(&block).unwrap().root(), parent.root());
+    assert_eq!(
+        parent.apply_block(&block).unwrap().baseline_root(),
+        parent.baseline_root()
+    );
 }
 
-/// Pin the current first-release schema after retiring qualification/activation tables.
-/// A changed canonical owner requires an explicit review of both golden digests.
+/// Pin the schema of the baseline selection and the empty World's root under it. A changed
+/// baseline storage definition requires an explicit review of both golden digests and of
+/// `specs/runtime_baseline_catalog.json`.
 #[test]
 fn current_world_schema_and_empty_predecessor_match_the_canonical_inventory() {
-    let index = field_index().as_ref().unwrap();
+    let schema = selection_schema(&baseline_selection()).unwrap();
     assert_eq!(
         crate::state::State::native_world_schema_hash_v1().unwrap(),
-        index.schema
+        schema
     );
     assert_eq!(
-        hex::encode_upper(index.schema.as_ref()),
-        "BB4845784FE28030C258D91F05CDB15A31B5D4D51F806EEF2D200FC8FF0E8DB3"
+        hex::encode_upper(schema.as_ref()),
+        "BEFAAB6ECA40248A3533BE72147CFF9CA9893B721998610A20BBE77860C2367D"
     );
     assert_eq!(
-        hex::encode_upper(WorldStateAccumulator::empty().root().unwrap().as_ref()),
-        "E6BA7718E8DD3E7366BF2A109EAE464586E991B36EAC8F8F7D199398668E8EA1"
+        hex::encode_upper(
+            WorldStateAccumulator::empty()
+                .baseline_root()
+                .unwrap()
+                .as_ref()
+        ),
+        "487F15449ABB0C28510EDE9FD6767A3A72725CAC00240CDAEA0FAE9BE2F7FA2F"
     );
 }
 
@@ -885,20 +939,25 @@ fn canonical_merge_cell_deltas_preserve_nonempty_history_and_exact_undo() {
         let mut aborted = block.merge_hint_roots.transaction();
         *aborted = hints.clone();
     }
-    assert_eq!(empty.root(), empty.apply_block(&block).unwrap().root());
+    assert_eq!(
+        empty.baseline_root(),
+        empty.apply_block(&block).unwrap().baseline_root()
+    );
     *block.merge_hint_roots.get_mut() = hints.clone();
     *block.merge_global_state_root.get_mut() = root;
     let populated = empty.apply_block(&block).unwrap();
-    assert_ne!(empty.root(), populated.root());
+    assert_ne!(empty.baseline_root(), populated.baseline_root());
     assert_eq!(
-        populated.root(),
-        WorldStateAccumulator::capture(&block).unwrap().root()
+        populated.baseline_root(),
+        WorldStateAccumulator::capture(&block)
+            .unwrap()
+            .baseline_root()
     );
     assert_eq!(
-        empty.root(),
+        empty.baseline_root(),
         WorldStateAccumulator::capture_predecessor(&block)
             .unwrap()
-            .root()
+            .baseline_root()
     );
     block.commit();
     // A later block with no metadata writer retains both canonical values and their roots.
@@ -909,8 +968,8 @@ fn canonical_merge_cell_deltas_preserve_nonempty_history_and_exact_undo() {
         *next.merge_hint_roots.get_mut() = hints.clone();
         *next.merge_global_state_root.get_mut() = root;
         assert_eq!(
-            populated.root(),
-            populated.apply_block(&next).unwrap().root(),
+            populated.baseline_root(),
+            populated.apply_block(&next).unwrap().baseline_root(),
             "same-value touches preserve the canonical semantic root"
         );
     }
@@ -918,8 +977,10 @@ fn canonical_merge_cell_deltas_preserve_nonempty_history_and_exact_undo() {
     assert!(replacement.merge_hint_roots.is_empty());
     assert_eq!(**replacement.merge_global_state_root, None);
     assert_eq!(
-        empty.root(),
-        WorldStateAccumulator::capture(&replacement).unwrap().root()
+        empty.baseline_root(),
+        WorldStateAccumulator::capture(&replacement)
+            .unwrap()
+            .baseline_root()
     );
 }
 
@@ -965,7 +1026,7 @@ fn retired_schema_genesis_does_not_bind_the_current_empty_world() {
     );
     assert_ne!(
         retained.commitment().execution.parent_world_state_root,
-        WorldStateAccumulator::empty().root().unwrap(),
+        WorldStateAccumulator::empty().baseline_root().unwrap(),
         "retired privacy-table layouts cannot establish a current first-release predecessor"
     );
     assert_eq!(
@@ -986,7 +1047,7 @@ fn current_certified_genesis_binds_the_current_empty_world() {
     assert_eq!(genesis.commitment().height, 1);
     assert_eq!(
         genesis.commitment().execution.parent_world_state_root,
-        WorldStateAccumulator::empty().root().unwrap()
+        WorldStateAccumulator::empty().baseline_root().unwrap()
     );
     // Finalization publishes certificate-dependent state after the execution root.
     // The next certified result binds that complete published World as its parent.
@@ -999,5 +1060,147 @@ fn current_certified_genesis_binds_the_current_empty_world() {
             .execution
             .parent_world_state_root,
         finalized
+    );
+}
+
+#[test]
+fn shared_schema_fold_is_the_registry_digest() {
+    // The original single-pass fold over the registry, kept here as the reference.
+    let mut flat = Vec::new();
+    flatten(WORLD_FIELDS, &mut flat);
+    let mut canonical = BTreeMap::new();
+    for field in flat {
+        match field.role {
+            Role::Canonical(Canonical::Table { key, value }) => {
+                canonical.insert(field.id, (TABLE, Some(key), value));
+            }
+            Role::Canonical(Canonical::Cell(value)) => {
+                canonical.insert(field.id, (CELL, None, value));
+            }
+            _ => {}
+        }
+    }
+    let mut schema = Hash::new(SCHEMA_START);
+    for (id, (kind, key, value)) in &canonical {
+        let key = key
+            .map(schema_fingerprint)
+            .transpose()
+            .unwrap()
+            .unwrap_or_else(|| Hash::new(SCHEMA_NO_KEY));
+        schema = Hash::new_from_chunks(&[
+            SCHEMA_FIELD,
+            schema.as_ref(),
+            path_hash(id, *kind).unwrap().as_ref(),
+            key.as_ref(),
+            schema_fingerprint(*value).unwrap().as_ref(),
+        ]);
+    }
+    let reference = Hash::new_from_chunks(&[
+        SCHEMA_START,
+        schema.as_ref(),
+        &u64::try_from(canonical.len()).unwrap().to_le_bytes(),
+    ]);
+    // The registry digest is the predecessor root rule of an upgrade checkpoint.
+    assert_eq!(
+        schema_digest(&field_index().as_ref().unwrap().fingerprints).unwrap(),
+        reference
+    );
+
+    // `S` of a selection binds its commitment profile and installed storage in identity order.
+    let selection = baseline_selection();
+    let mut schema = Hash::new_from_chunks(&[SCHEMA_SELECTION, &selection.commitment_profile.0]);
+    for storage in &selection.installed_storage {
+        schema = Hash::new_from_chunks(&[SCHEMA_FIELD, schema.as_ref(), &storage.0]);
+    }
+    let reference = Hash::new_from_chunks(&[
+        SCHEMA_SELECTION,
+        schema.as_ref(),
+        &u64::try_from(selection.installed_storage.len())
+            .unwrap()
+            .to_le_bytes(),
+    ]);
+    assert_eq!(selection_schema(&selection).unwrap(), reference);
+}
+
+#[test]
+fn predecessor_root_restores_the_retired_registry() {
+    let index = field_index().as_ref().unwrap();
+    // A World imported from the predecessor holds the founded runtime fields.
+    let world = crate::state::World::default();
+    let current = WorldStateAccumulator::capture(&world.block()).unwrap();
+    let founded = u64::try_from(
+        crate::runtime::release_catalog()
+            .unwrap()
+            .baseline_definitions
+            .len(),
+    )
+    .unwrap()
+        + 1;
+    let (predecessor, root) = predecessor_root(&current, &[]).unwrap();
+    // The founded definitions and selection leave; the retired and the added tables are empty.
+    assert_eq!(predecessor.entries(), current.entries() - founded);
+    assert_ne!(root, current.baseline_root().unwrap());
+    // The predecessor (f31b64d8c5) already had the privacy protocol policies.
+    assert!(
+        index
+            .fingerprints
+            .contains_key("world.privacy_protocol_policies")
+    );
+    assert!(index.fingerprints.contains_key("world.runtime_change_sets"));
+    assert!(
+        index
+            .fingerprints
+            .contains_key("world.runtime_containments")
+    );
+    assert!(!index.fingerprints.contains_key("world.runtime_upgrades"));
+}
+
+#[test]
+fn adoption_authorizations_enter_the_predecessor_root_as_entries_of_their_table() {
+    use crate::state::upgrade_checkpoint::adoption::{
+        ADOPTION_MANIFEST_NAME, ADOPTION_SELECTION_DIGEST, PredecessorRecord,
+        PredecessorSbomDigest, PredecessorUpgradeId, PredecessorUpgradeManifest,
+        PredecessorUpgradeRecord, PredecessorUpgradeStatus,
+    };
+    let world = crate::state::World::default();
+    let current = WorldStateAccumulator::capture(&world.block()).unwrap();
+    let (without, root_without) = predecessor_root(&current, &[]).unwrap();
+    let authorization = PredecessorRecord {
+        id: PredecessorUpgradeId([3; 32]),
+        record: PredecessorUpgradeRecord {
+            manifest: PredecessorUpgradeManifest {
+                name: ADOPTION_MANIFEST_NAME.into(),
+                description: String::new(),
+                abi_version: 1,
+                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+                added_syscalls: Vec::new(),
+                added_pointer_types: Vec::new(),
+                start_height: 10,
+                end_height: 20,
+                sbom_digests: vec![PredecessorSbomDigest {
+                    algorithm: ADOPTION_SELECTION_DIGEST.into(),
+                    digest: baseline_selection().id().unwrap().0.to_vec(),
+                }],
+                slsa_attestation: Vec::new(),
+                provenance: Vec::new(),
+            },
+            status: PredecessorUpgradeStatus::ActivatedAt(10),
+            proposer: iroha_test_samples::ALICE_ID.clone(),
+            created_height: 5,
+        },
+    };
+    let (with, root_with) =
+        predecessor_root(&current, std::slice::from_ref(&authorization)).unwrap();
+    assert_eq!(with.entries(), without.entries() + 1);
+    assert_ne!(
+        root_with, root_without,
+        "the certified root binds the authorization"
+    );
+    let mut altered = authorization;
+    altered.record.status = PredecessorUpgradeStatus::Canceled;
+    let (_, root_altered) = predecessor_root(&current, &[altered]).unwrap();
+    assert_ne!(
+        root_altered, root_with,
+        "an altered record is a different root"
     );
 }

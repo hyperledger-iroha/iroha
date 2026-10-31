@@ -1,7 +1,7 @@
 //! Genuine bounded F257/E3 encrypted bootstrap and repeated square/refresh.
 //!
 //! The unselected N256 fixture exercises both coefficient banks under one
-//! honestly generated local key. Independent BigInt CRT/convolution checks
+//! honestly generated local key. Independent `BigInt` CRT/convolution checks
 //! every message coefficient and phase bound. This is not a production profile,
 //! full-size N65536 execution, source authentication or security qualification.
 mod support;
@@ -147,33 +147,33 @@ fn f257_both_banks_preserve_full_ring_phases_through_two_square_refresh_cycles()
     assert_eq!(
         profile.parameters().main_primes.as_slice(),
         &[
-            562967672918017,
-            563019818867713,
-            563202329691649,
-            563619497289217,
-            563758553155073,
-            564140956786177,
-            564488596450817,
-            564610270333441,
-            565027437931009,
-            565218639746561,
-            565270785696257,
-            565349004620801,
-            565418532553729,
-            565653189327361,
-            565740099243521,
-            565757481226753,
-            565766172218369,
-            565844391142913,
-            565939992050689,
-            566105120891393,
-            566261558740481,
-            566417996589569
+            562_967_672_918_017,
+            563_019_818_867_713,
+            563_202_329_691_649,
+            563_619_497_289_217,
+            563_758_553_155_073,
+            564_140_956_786_177,
+            564_488_596_450_817,
+            564_610_270_333_441,
+            565_027_437_931_009,
+            565_218_639_746_561,
+            565_270_785_696_257,
+            565_349_004_620_801,
+            565_418_532_553_729,
+            565_653_189_327_361,
+            565_740_099_243_521,
+            565_757_481_226_753,
+            565_766_172_218_369,
+            565_844_391_142_913,
+            565_939_992_050_689,
+            566_105_120_891_393,
+            566_261_558_740_481,
+            566_417_996_589_569
         ]
     );
     assert_eq!(
         profile.parameters().special_primes.as_slice(),
-        &[576460785041520641, 576460828496478721]
+        &[576_460_785_041_520_641, 576_460_828_496_478_721]
     );
     let precision = profile.plaintext_precision(1).unwrap();
     assert_eq!(SlotEncoding::new(&profile, precision).unwrap().slots(), 128);
@@ -181,18 +181,26 @@ fn f257_both_banks_preserve_full_ring_phases_through_two_square_refresh_cycles()
     let fresh = profile.plan_fresh(precision).unwrap();
     let source = profile.plan_switch_to_level(&fresh, 0).unwrap();
     assert_eq!(source.bound(), &Natural::from_u64(2_181_235_200));
-    let plan = BootstrapPlan::new(&profile, &source, program(), &LEVELS, budget()).unwrap();
+    let plan = BootstrapPlan::new(
+        &profile,
+        &source,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        program(),
+        &LEVELS,
+        budget(),
+    )
+    .unwrap();
     assert_eq!(
         plan.galois_elements(),
         &[5, 25, 113, 257, 385, 449, 481, 511]
     );
     assert_eq!(
         plan.homomorphic_input_shape().bound(),
-        &Natural::from_words_le(&[9961313701462081920_u64, 21_u64])
+        &Natural::from_words_le(&[9_961_313_701_462_081_920_u64, 21_u64])
     );
     assert_eq!(
         plan.output_shape().bound(),
-        &Natural::from_words_le(&[6045943472966474940_u64, 1210605716911226152_u64])
+        &Natural::from_words_le(&[6_045_943_472_966_474_940_u64, 1_210_605_716_911_226_152_u64])
     );
     assert_eq!(plan.output_shape().level(), 3);
     assert_eq!(plan.payload().stream_owned_residue_bytes, 1_622_016);
@@ -201,18 +209,26 @@ fn f257_both_banks_preserve_full_ring_phases_through_two_square_refresh_cycles()
     let at_two = profile.plan_switch_down(plan.output_shape()).unwrap();
     assert_eq!(
         at_two.bound(),
-        &Natural::from_words_le(&[16844221733282439330_u64, 2147_u64])
+        &Natural::from_words_le(&[16_844_221_733_282_439_330_u64, 2147_u64])
     );
     let at_one = profile.plan_switch_down(&at_two).unwrap();
     assert_eq!(at_one.bound(), &Natural::from_u64(2_251_586_478));
     let squared = profile.plan_multiply(&at_one, &at_one).unwrap();
     assert_eq!(
         squared.bound(),
-        &Natural::from_words_le(&[6556181828098453505_u64, 70_u64])
+        &Natural::from_words_le(&[6_556_181_828_098_453_505_u64, 70_u64])
     );
     let repeat_input = profile.plan_switch_down(&squared).unwrap();
     assert_eq!(repeat_input.bound(), &Natural::from_u64(2_183_540_320));
-    let repeat = BootstrapPlan::new(&profile, &repeat_input, program(), &LEVELS, budget()).unwrap();
+    let repeat = BootstrapPlan::new(
+        &profile,
+        &repeat_input,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        program(),
+        &LEVELS,
+        budget(),
+    )
+    .unwrap();
     assert_eq!(repeat.output_shape(), plan.output_shape());
     assert_eq!(
         repeat.homomorphic_input_shape(),

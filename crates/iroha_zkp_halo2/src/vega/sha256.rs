@@ -197,9 +197,9 @@ pub(super) fn sha256_with_trace(
         .map(|word| allocate_constant_word(builder, word))
         .collect::<Result<Vec<_>, _>>()?;
     let mut states_after_blocks = Vec::with_capacity(padded_len / 64);
-    for block in padded.chunks_exact(64) {
+    for block in padded.as_chunks::<64>().0 {
         let mut schedule = Vec::with_capacity(64);
-        for word_bytes in block.chunks_exact(4) {
+        for word_bytes in block.as_chunks::<4>().0 {
             schedule.push(word_from_be_bytes(word_bytes)?);
         }
         for index in 16..64 {
@@ -496,12 +496,10 @@ mod tests {
     use super::*;
     fn expected_words(bytes: [u8; 32]) -> Vec<Scalar> {
         bytes
-            .chunks_exact(4)
-            .map(|word| {
-                Scalar::from_u64(u64::from(u32::from_be_bytes(
-                    word.try_into().expect("word"),
-                )))
-            })
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|word| Scalar::from_u64(u64::from(u32::from_be_bytes(*word))))
             .collect()
     }
     fn synthesize(message: &[u8], expected: [u8; 32]) -> Result<(), CircuitError> {

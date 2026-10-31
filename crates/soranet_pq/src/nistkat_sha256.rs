@@ -85,8 +85,8 @@ const ROUND_CONSTANTS: [u32; 64] = [
 
 fn compress(state: &mut [u32; 8], block: &[u8]) {
     let mut schedule = [0u32; 64];
-    for (word, bytes) in schedule.iter_mut().zip(block.chunks_exact(4)) {
-        *word = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    for (word, bytes) in schedule.iter_mut().zip(block.as_chunks::<4>().0) {
+        *word = u32::from_be_bytes(*bytes);
     }
     for index in 16..64 {
         let s0 = schedule[index - 15].rotate_right(7)
@@ -141,7 +141,7 @@ pub fn sha256_hex(message: &[u8]) -> String {
     let bits = u64::try_from(message.len()).expect("test message length fits u64") * 8;
     padded.extend_from_slice(&bits.to_be_bytes());
     let mut state = INITIAL_STATE;
-    for block in padded.chunks_exact(64) {
+    for block in padded.as_chunks::<64>().0 {
         compress(&mut state, block);
     }
     let mut out = String::with_capacity(64);

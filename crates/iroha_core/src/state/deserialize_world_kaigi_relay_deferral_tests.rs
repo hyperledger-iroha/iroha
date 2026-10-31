@@ -32,7 +32,7 @@ fn restore_refusal(with_allowlist: bool) {
     let registration_key = kaigi_relay_metadata_key(&relay).unwrap();
     let registration = Json::try_new(KaigiRelayRegistration {
         relay_id: relay.clone(),
-        hpke_public_key: vec![1, 2, 3],
+        hpke_public_key: crate::smartcontracts::isi::kaigi::test_relay_hpke_key(1),
         bandwidth_class: 1,
     })
     .unwrap();

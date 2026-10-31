@@ -50,7 +50,9 @@ fn publication_words(output: &CompileOutput) -> usize {
         syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
     );
     output.artifact[start..]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|word| u32::from_le_bytes((*word).try_into().unwrap()) == publication)
         .count()
 }

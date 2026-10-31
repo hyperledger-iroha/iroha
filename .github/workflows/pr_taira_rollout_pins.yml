@@ -1,0 +1,40 @@
+name: Pull Request CI (Taira Rollout Pins)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "Cargo.lock"
+      - "configs/soranexus/taira/privacy_bootstrap_plan.json"
+      - "configs/soranexus/taira/privacy_rollout_plan_v1.json"
+      - "configs/soranexus/taira/config.toml"
+      - "configs/soranexus/taira/genesis.template.json"
+      - "configs/soranexus/taira/nevo_genesis_overlay.template.json"
+      - "crates/iroha_kagami/src/privacy_bootstrap/release.rs"
+      - "crates/iroha_kagami/tests/fixtures/taira_nevo_v2/**"
+      - "scripts/refresh_taira_nevo_fixtures.py"
+      - "scripts/update_taira_privacy_rollout_pins.py"
+      - "scripts/tests/update_taira_privacy_rollout_pins_test.py"
+      - ".github/workflows/pr_taira_rollout_pins.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.11"
+      - name: Check that the rollout plan pins the exact Cargo.lock
+        run: python3 scripts/update_taira_privacy_rollout_pins.py --check
+      - name: Exercise the pin generator
+        run: python3 scripts/tests/update_taira_privacy_rollout_pins_test.py
+      - name: Check that the NEVO review pins the current Taira sources
+        run: python3 scripts/refresh_taira_nevo_fixtures.py

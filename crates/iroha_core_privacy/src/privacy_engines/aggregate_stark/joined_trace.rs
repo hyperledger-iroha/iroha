@@ -385,6 +385,9 @@ mod tests;
 
 #[path = "joined_initial_coalescing.rs"]
 mod initial_coalescing;
+pub(crate) use initial_coalescing::PreflightedInitialColumnsV1;
+#[cfg(test)]
+pub(crate) use initial_coalescing::preflight_test_batch_v1;
 
 /// Extra live output, exact owner metadata and conservative row packing scratch
 /// for initial sixteen-column absorption only. Native/source batches stay eight.
@@ -398,13 +401,7 @@ pub(crate) fn initial_coalescing_extra_payload_v1(
 /// This keeps per-row hashing on plain borrowed slices with no Arc/enum lookup.
 fn absorb_initial_evaluations_v1<C: AsRef<[F]> + Sync>(
     builder: &mut StreamingRowCommitmentV1,
-    columns: &[C],
+    columns: PreflightedInitialColumnsV1<'_, C>,
 ) -> Result<(), AggregateStarkErrorV1> {
-    const MAX: usize = 2 * MASKED_TRACE_LDE_COLUMN_BATCH_V1;
-    if columns.len() > MAX {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    let views: [&[F]; MAX] =
-        core::array::from_fn(|index| columns.get(index).map_or::<&[F], _>(&[], AsRef::as_ref));
-    builder.absorb_initial_columns_v1(&views[..columns.len()])
+    columns.absorb_into_v1(builder)
 }

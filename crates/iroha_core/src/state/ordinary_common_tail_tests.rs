@@ -6,6 +6,25 @@ struct OrdinaryEconomicFixture {
     destination: AssetId,
     _chain: crate::sumeragi::test_chain::CertifiedTestChain,
 }
+
+// These typed-store fixtures bypass registration, so author their deferred
+// consent explicitly from the same World that will execute the action.
+fn capture_fixture_trigger_runtime<F>(
+    trigger: &mut crate::smartcontracts::isi::triggers::specialized::SpecializedTrigger<F>,
+    world: &WorldTransaction<'_, '_>,
+) {
+    let expected =
+        crate::runtime::expectation::capture_executable(&trigger.action.executable, world)
+            .expect("fixture executable has an installed runtime closure");
+    let digest = crate::runtime::expectation::digest_owned(&expected, world)
+        .expect("capture fixture runtime consent");
+    trigger.action.metadata.insert(
+        crate::smartcontracts::isi::triggers::TRIGGER_RUNTIME_EXPECTATION_METADATA_KEY
+            .parse()
+            .unwrap(),
+        Json::new(digest),
+    );
+}
 fn ordinary_economic_fixture() -> Box<OrdinaryEconomicFixture> {
     use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
     let key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519).unwrap();
@@ -76,7 +95,9 @@ fn install_ordinary_tail_repeating_trigger(fixture: &OrdinaryEconomicFixture, pe
         "__registered_at_ms".parse::<Name>().unwrap(),
         Json::new(0u64),
     );
-    let trigger = Trigger::new(
+    let mut trigger: crate::smartcontracts::isi::triggers::specialized::SpecializedTrigger<
+        TimeEventFilter,
+    > = Trigger::new(
         "common_tail_repeat".parse().unwrap(),
         Action::new(
             [InstructionBox::from(ordinary_tail_batch(fixture))],
@@ -89,15 +110,20 @@ fn install_ordinary_tail_repeating_trigger(fixture: &OrdinaryEconomicFixture, pe
         )
         .unwrap()
         .with_metadata(metadata),
-    );
+    )
+    .try_into()
+    .unwrap();
+    {
+        let mut capture_block = fixture.state.block(fixture.parent.header());
+        let capture = capture_block.transaction();
+        capture_fixture_trigger_runtime(&mut trigger, &capture.world);
+    }
     // Register through the same trigger-storage owner used by existing Time
     // execution tests, after the authenticated genesis/admission fixture. This
     // prevents fixture setup blocks from consuming this test's two invocations.
     let mut block = fixture.state.world.triggers.block();
     let mut transaction = block.transaction();
-    transaction
-        .add_time_trigger(trigger.try_into().unwrap())
-        .unwrap();
+    transaction.add_time_trigger(trigger).unwrap();
     transaction.apply();
     block.commit();
 }

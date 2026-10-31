@@ -745,7 +745,9 @@ impl Cells {
             self.value(u128::try_from(raw.len()).map_err(|_| Error::BoundsFailure)?),
         )?;
         let messages = raw
-            .chunks_exact(32)
+            .as_chunks::<32>()
+            .0
+            .iter()
             .map(|chunk| {
                 iroha_plonk_gadgets::bytes::element::LeElement::assign(
                     &mut chip.uint(),
@@ -2262,7 +2264,9 @@ fn assert_native_first_relation(source: &Source, first: &Stage) {
     let (plan, inputs) = native_inputs(source);
     // Every slot of the merged Q1, own receipt first, then the incoming slots.
     let signature_inputs = inputs.q[ReceiveStagePlan::SIGNATURE_Q].instances[0]
-        .chunks_exact(SLOT_WORDS)
+        .as_chunks::<SLOT_WORDS>()
+        .0
+        .iter()
         .map(|slot| {
             let integer = |lo: Fq, hi: Fq| {
                 let mut bytes = [0u8; 32];

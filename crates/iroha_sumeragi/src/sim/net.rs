@@ -352,11 +352,11 @@ impl<T> Nic<T> {
             let Some(packet) = self.pop() else {
                 break;
             };
-            let tx_us = if bandwidth == 0 {
-                0
-            } else {
-                packet.size.saturating_mul(1_000) / bandwidth
-            };
+            let tx_us = packet
+                .size
+                .saturating_mul(1_000)
+                .checked_div(bandwidth)
+                .unwrap_or(0);
             self.free_us = self.free_us.saturating_add(tx_us);
             out.push((self.free_us.div_ceil(1_000), packet.item));
         }

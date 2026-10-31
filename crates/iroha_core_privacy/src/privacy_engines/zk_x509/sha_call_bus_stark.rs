@@ -17,6 +17,7 @@
 //! whole-call-packed physical segment. Separate per-call products can still be replayed for
 //! cross-adapter equality. The canonical local SHA relation and joint original-oracle
 //! quotients consume those products privately; no terminal scalar is serialized.
+use super::sha_residue_output::ShaResidueSinkV1;
 #[cfg(test)]
 use super::sha256_word_air::{ZkX509WordMemoryChallengesV1, ZkX509WordMemoryLaneChallengesV1};
 use super::{
@@ -77,8 +78,8 @@ mod native_aux_cache;
 #[path = "sha_native_base_cache.rs"]
 mod native_base_cache;
 #[path = "sha_projection_bus.rs"]
-pub(crate) mod projection_bus;
-pub(crate) use frame_prefix::{ShaFrameByteV1, sha_frame_byte_v1};
+pub mod projection_bus;
+pub use frame_prefix::{ShaFrameByteV1, sha_frame_byte_v1};
 /// Per-type closed-relation DER admission limit.
 pub const ZK_X509_SHA_CALL_MAX_DER_BYTES_V1: usize = 4_096;
 /// Exact number of canonical SHA calls at maximum shape.
@@ -295,16 +296,14 @@ const ZK_X509_SHA_FIXED_RFC_ROLE_V1: usize = 3;
 const ZK_X509_SHA_FIXED_RFC_CHANNEL_V1: usize = 4;
 const ZK_X509_SHA_FIXED_RFC_OFFSET_V1: usize = 5;
 /// Four message-byte masks for canonical SHA frame constants and raw lengths.
-pub(crate) const ZK_X509_SHA_FIXED_FRAME_MASK_V1: usize =
+pub const ZK_X509_SHA_FIXED_FRAME_MASK_V1: usize =
     ZK_X509_SHA_FIXED_RFC_STREAMS_V1 + 4 * ZK_X509_SHA_FIXED_RFC_STREAM_STRIDE_V1;
 /// Four constant parts of canonical SHA frame bytes, in big-endian word order.
-pub(crate) const ZK_X509_SHA_FIXED_FRAME_CONSTANT_V1: usize = ZK_X509_SHA_FIXED_FRAME_MASK_V1 + 4;
+pub const ZK_X509_SHA_FIXED_FRAME_CONSTANT_V1: usize = ZK_X509_SHA_FIXED_FRAME_MASK_V1 + 4;
 /// Four selectors for the high byte of the private CRL frame length.
-pub(crate) const ZK_X509_SHA_FIXED_FRAME_LENGTH_HIGH_V1: usize =
-    ZK_X509_SHA_FIXED_FRAME_CONSTANT_V1 + 4;
+pub const ZK_X509_SHA_FIXED_FRAME_LENGTH_HIGH_V1: usize = ZK_X509_SHA_FIXED_FRAME_CONSTANT_V1 + 4;
 /// Four selectors for the low byte of the private CRL frame length.
-pub(crate) const ZK_X509_SHA_FIXED_FRAME_LENGTH_LOW_V1: usize =
-    ZK_X509_SHA_FIXED_FRAME_LENGTH_HIGH_V1 + 4;
+pub const ZK_X509_SHA_FIXED_FRAME_LENGTH_LOW_V1: usize = ZK_X509_SHA_FIXED_FRAME_LENGTH_HIGH_V1 + 4;
 const CERTIFICATE_TBS_CALL_START_V1: usize = 0;
 const CRL_TBS_CALL_V1: usize = 3;
 const CRL_COMMITMENT_CALL_V1: usize = 4;
@@ -888,7 +887,68 @@ impl ZkX509ShaBatchCallBaseSourceV1 {
     ) -> Result<[F; ZK_X509_SHA_BATCH_BASE_WIDTH_V1], ZkX509ShaCallBusStarkErrorV1> {
         widened_sha_batch_base_row_v1(&self.word, self.rfc_consumer, index)
     }
+    /// Borrow the canonical word row after the original RFC length admission.
+    /// The returned owner clears its stored private scalar when dropped.
+    fn borrowed_base_row_v1(
+        &self,
+        index: usize,
+    ) -> Result<
+        (
+            &[F; SHA_WORD_CAPACITY_BASE_WIDTH_V1],
+            zeroize::Zeroizing<Option<usize>>,
+        ),
+        ZkX509ShaCallBusStarkErrorV1,
+    > {
+        let raw_length = zeroize::Zeroizing::new(if let Some(consumer) = self.rfc_consumer {
+            Some(
+                self.word
+                    .message_len()
+                    .checked_sub(consumer.message_prefix_bytes)
+                    .filter(|length| *length <= consumer.message_capacity_bytes)
+                    .ok_or(ZkX509ShaCallBusStarkErrorV1::LengthOrPadding)?,
+            )
+        } else {
+            None
+        });
+        let word_base = self.word.base_row(index)?;
+        Ok((word_base, raw_length))
+    }
+    /// Emit an already-admitted adjacent public range after complete row admission.
+    fn emit_base_columns_v1(
+        &self,
+        index: usize,
+        first_column: usize,
+        width: usize,
+        mut emit: impl FnMut(usize, F),
+    ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+        // The segment caller admits this public extent before taking any private
+        // row or output custody. The assertion also protects internal test calls.
+        debug_assert!(
+            width > 0
+                && width
+                    <= crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+                && first_column
+                    .checked_add(width)
+                    .is_some_and(|end| end <= ZK_X509_SHA_BATCH_BASE_WIDTH_V1)
+        );
+        self.validate_fixed_row_shape_v1(index)?;
+        let (word_base, raw_length) = self.borrowed_base_row_v1(index)?;
+        for offset in 0..width {
+            let column = first_column + offset;
+            let value = if column < SHA_WORD_CAPACITY_BASE_WIDTH_V1 {
+                word_base[column]
+            } else if let Some(raw_length) = raw_length.as_ref() {
+                let bit = column - ZK_X509_SHA_LENGTH_BITS_START_V1;
+                F(u64::from(((*raw_length >> bit) & 1) != 0))
+            } else {
+                F::ZERO
+            };
+            emit(offset, value);
+        }
+        Ok(())
+    }
     /// Reconstruct one verifier-fixed call row without any challenge.
+    #[cfg(test)]
     pub(crate) fn fixed_row(
         &self,
         index: usize,
@@ -898,6 +958,20 @@ impl ZkX509ShaBatchCallBaseSourceV1 {
         fixed[ZK_X509_SHA_FIXED_SEGMENT_FIRST_V1] = F(u64::from(index == 0));
         fixed[ZK_X509_SHA_FIXED_SEGMENT_LAST_V1] = F(u64::from(index + 1 == self.logical_rows()));
         Ok(fixed)
+    }
+    /// Admit the original fixed row without constructing discarded fixed output.
+    fn validate_fixed_row_shape_v1(
+        &self,
+        index: usize,
+    ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+        emit_sha_batch_fixed_row_from_word_v1(
+            self.manifest,
+            self.word.fixed_row(index)?,
+            self.word.logical_rows(),
+            self.rfc_consumer,
+            index,
+            |_, _| {},
+        )
     }
     /// Consume this call's base phase using only challenges carried by X5B1.
     #[cfg(test)]
@@ -1094,9 +1168,32 @@ fn widened_sha_batch_fixed_row_v1<Word: ShaWordCapacityBaseRowsV1>(
         index,
     )
 }
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn write_sha_rfc_fixed_event_v1(
     fixed: &mut [F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1],
+    consumer: ZkX509ShaRfcConsumerChannelsV1,
+    stream: usize,
+    message: bool,
+    length_high: bool,
+    length_low: bool,
+    channel: u32,
+    offset: usize,
+) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+    emit_sha_rfc_fixed_event_v1(
+        &mut |column, value| fixed[column] = value,
+        consumer,
+        stream,
+        message,
+        length_high,
+        length_low,
+        channel,
+        offset,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn emit_sha_rfc_fixed_event_v1(
+    emit: &mut impl FnMut(usize, F),
     consumer: ZkX509ShaRfcConsumerChannelsV1,
     stream: usize,
     message: bool,
@@ -1115,13 +1212,30 @@ fn write_sha_rfc_fixed_event_v1(
                 .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?,
         )
         .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
-    fixed[start + ZK_X509_SHA_FIXED_RFC_MESSAGE_EVENT_V1] = F(u64::from(message));
-    fixed[start + ZK_X509_SHA_FIXED_RFC_LENGTH_HIGH_VALUE_V1] = F(u64::from(length_high));
-    fixed[start + ZK_X509_SHA_FIXED_RFC_LENGTH_LOW_VALUE_V1] = F(u64::from(length_low));
-    fixed[start + ZK_X509_SHA_FIXED_RFC_ROLE_V1] = F(consumer.role as u64);
-    fixed[start + ZK_X509_SHA_FIXED_RFC_CHANNEL_V1] = F(u64::from(channel));
-    fixed[start + ZK_X509_SHA_FIXED_RFC_OFFSET_V1] =
-        F(u64::try_from(offset).map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?);
+    emit(
+        start + ZK_X509_SHA_FIXED_RFC_MESSAGE_EVENT_V1,
+        F(u64::from(message)),
+    );
+    emit(
+        start + ZK_X509_SHA_FIXED_RFC_LENGTH_HIGH_VALUE_V1,
+        F(u64::from(length_high)),
+    );
+    emit(
+        start + ZK_X509_SHA_FIXED_RFC_LENGTH_LOW_VALUE_V1,
+        F(u64::from(length_low)),
+    );
+    emit(
+        start + ZK_X509_SHA_FIXED_RFC_ROLE_V1,
+        F(consumer.role as u64),
+    );
+    emit(
+        start + ZK_X509_SHA_FIXED_RFC_CHANNEL_V1,
+        F(u64::from(channel)),
+    );
+    emit(
+        start + ZK_X509_SHA_FIXED_RFC_OFFSET_V1,
+        F(u64::try_from(offset).map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?),
+    );
     Ok(())
 }
 fn widened_sha_batch_fixed_row_from_word_v1(
@@ -1131,19 +1245,46 @@ fn widened_sha_batch_fixed_row_from_word_v1(
     consumer: Option<ZkX509ShaRfcConsumerChannelsV1>,
     index: usize,
 ) -> Result<[F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1], ZkX509ShaCallBusStarkErrorV1> {
+    let mut fixed = [F::ZERO; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1];
+    emit_sha_batch_fixed_row_from_word_v1(
+        manifest,
+        word_fixed,
+        word_logical_rows,
+        consumer,
+        index,
+        |column, value| fixed[column] = value,
+    )?;
+    Ok(fixed)
+}
+/// Check the complete original fixed-row geometry while optionally emitting its public cells.
+fn emit_sha_batch_fixed_row_from_word_v1(
+    manifest: ZkX509ShaCallManifestV1,
+    word_fixed: &[F; SHA_WORD_CAPACITY_FIXED_WIDTH_V1],
+    word_logical_rows: usize,
+    consumer: Option<ZkX509ShaRfcConsumerChannelsV1>,
+    index: usize,
+    mut emit: impl FnMut(usize, F),
+) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
     if index >= word_logical_rows {
         return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
     }
-    let mut fixed = [F::ZERO; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1];
-    fixed[..SHA_WORD_CAPACITY_FIXED_WIDTH_V1].copy_from_slice(word_fixed);
-    fixed[ZK_X509_SHA_FIXED_CALL_V1] = F(u64::from(manifest.call));
-    fixed[ZK_X509_SHA_FIXED_ROLE_V1] = F(u64::from(manifest.role.role_code()));
-    fixed[ZK_X509_SHA_FIXED_SLOT_V1] = F(u64::from(manifest.role.slot()));
+    for (column, value) in word_fixed.iter().copied().enumerate() {
+        emit(column, value);
+    }
+    emit(ZK_X509_SHA_FIXED_CALL_V1, F(u64::from(manifest.call)));
+    emit(
+        ZK_X509_SHA_FIXED_ROLE_V1,
+        F(u64::from(manifest.role.role_code())),
+    );
+    emit(
+        ZK_X509_SHA_FIXED_SLOT_V1,
+        F(u64::from(manifest.role.slot())),
+    );
     if let Some(selector) = usize::from(manifest.call)
         .checked_sub(ZK_X509_SHA_CA_LEAF_CALL_V1)
         .filter(|selector| *selector < ZK_X509_SHA_CA_CALL_COUNT_V1)
     {
-        fixed[ZK_X509_SHA_FIXED_CA_CALL_SELECTORS_V1 + selector] = F::ONE;
+        emit(ZK_X509_SHA_FIXED_CA_CALL_SELECTORS_V1 + selector, F::ONE);
     }
     if word_fixed[SHA_WORD_CAPACITY_INPUT_WORD_V1] == F::ONE {
         let word = usize::try_from(word_fixed[SHA_WORD_CAPACITY_INPUT_WORD_INDEX_V1].0)
@@ -1154,27 +1295,31 @@ fn widened_sha_batch_fixed_row_from_word_v1(
                 .and_then(|start| start.checked_add(byte))
                 .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
             if let Some(expected) = sha_frame_byte_v1(manifest, offset) {
-                fixed[ZK_X509_SHA_FIXED_FRAME_MASK_V1 + byte] = F::ONE;
+                emit(ZK_X509_SHA_FIXED_FRAME_MASK_V1 + byte, F::ONE);
                 match expected {
-                    ShaFrameByteV1::Constant(value) => {
-                        fixed[ZK_X509_SHA_FIXED_FRAME_CONSTANT_V1 + byte] = F(u64::from(value))
-                    }
+                    ShaFrameByteV1::Constant(value) => emit(
+                        ZK_X509_SHA_FIXED_FRAME_CONSTANT_V1 + byte,
+                        F(u64::from(value)),
+                    ),
                     ShaFrameByteV1::RawLengthHigh => {
-                        fixed[ZK_X509_SHA_FIXED_FRAME_LENGTH_HIGH_V1 + byte] = F::ONE
+                        emit(ZK_X509_SHA_FIXED_FRAME_LENGTH_HIGH_V1 + byte, F::ONE)
                     }
                     ShaFrameByteV1::RawLengthLow => {
-                        fixed[ZK_X509_SHA_FIXED_FRAME_LENGTH_LOW_V1 + byte] = F::ONE
+                        emit(ZK_X509_SHA_FIXED_FRAME_LENGTH_LOW_V1 + byte, F::ONE)
                     }
                 }
             }
         }
     }
-    projection_bus::populate_fixed_v1(manifest, word_fixed, &mut fixed);
+    projection_bus::emit_fixed_v1(manifest, word_fixed, &mut emit);
     let Some(consumer) = consumer else {
-        return Ok(fixed);
+        return Ok(());
     };
-    fixed[ZK_X509_SHA_FIXED_RFC_LENGTH_PREFIX_V1] = F(u64::try_from(consumer.message_prefix_bytes)
-        .map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?);
+    emit(
+        ZK_X509_SHA_FIXED_RFC_LENGTH_PREFIX_V1,
+        F(u64::try_from(consumer.message_prefix_bytes)
+            .map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?),
+    );
     if word_fixed[SHA_WORD_CAPACITY_INPUT_WORD_V1] == F::ONE {
         let word = usize::try_from(word_fixed[SHA_WORD_CAPACITY_INPUT_WORD_INDEX_V1].0)
             .map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?;
@@ -1188,8 +1333,8 @@ fn widened_sha_batch_fixed_row_from_word_v1(
                 .and_then(|offset| offset.checked_add(stream))
                 .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
             if (consumer.message_prefix_bytes..raw_end).contains(&sha_offset) {
-                write_sha_rfc_fixed_event_v1(
-                    &mut fixed,
+                emit_sha_rfc_fixed_event_v1(
+                    &mut emit,
                     consumer,
                     stream,
                     true,
@@ -1207,16 +1352,18 @@ fn widened_sha_batch_fixed_row_from_word_v1(
         && index + 4 >= word_logical_rows
     {
         let pair = index + 4 - word_logical_rows;
-        fixed[ZK_X509_SHA_FIXED_RFC_LENGTH_PAIR_V1] = F::ONE;
-        fixed[ZK_X509_SHA_FIXED_RFC_LENGTH_PAIR_INDEX_V1] =
-            F(u64::try_from(pair).map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?);
+        emit(ZK_X509_SHA_FIXED_RFC_LENGTH_PAIR_V1, F::ONE);
+        emit(
+            ZK_X509_SHA_FIXED_RFC_LENGTH_PAIR_INDEX_V1,
+            F(u64::try_from(pair).map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?),
+        );
         for stream in 0..2 {
             let offset = pair
                 .checked_mul(2)
                 .and_then(|offset| offset.checked_add(stream))
                 .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
-            write_sha_rfc_fixed_event_v1(
-                &mut fixed,
+            emit_sha_rfc_fixed_event_v1(
+                &mut emit,
                 consumer,
                 stream,
                 false,
@@ -1227,7 +1374,7 @@ fn widened_sha_batch_fixed_row_from_word_v1(
             )?;
         }
     }
-    Ok(fixed)
+    Ok(())
 }
 impl ZkX509ShaBatchCallTraceV1 {
     #[cfg(test)]
@@ -1959,8 +2106,10 @@ fn padded_words_v1(
         return Err(ZkX509ShaCallBusStarkErrorV1::LengthOrPadding);
     }
     Ok(bytes
-        .chunks_exact(4)
-        .map(|word| u32::from_be_bytes(word.try_into().expect("four-byte SHA word")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| u32::from_be_bytes(*word))
         .collect())
 }
 #[cfg(test)]
@@ -2438,24 +2587,15 @@ impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
                 // The source owns validated, immutable word rows. Project only
                 // requested base cells; fixed AIR rows are independent of this
                 // output and are replayed by the verifier-owned fixed provider.
-                let raw_length = zeroize::Zeroizing::new(
-                    sha_batch_raw_length_v1(call.word.message_len(), call.rfc_consumer)?
-                        .unwrap_or(0),
-                );
                 for call_row in 0..call.logical_rows() {
-                    let word = call.word.base_row(call_row)?;
-                    for (offset, fill) in fills.iter_mut().enumerate() {
-                        let column = first_column + offset;
-                        let value = if column < SHA_WORD_CAPACITY_BASE_WIDTH_V1 {
-                            word[column]
-                        } else {
-                            F(u64::from(
-                                ((*raw_length >> (column - ZK_X509_SHA_LENGTH_BITS_START_V1)) & 1)
-                                    != 0,
-                            ))
-                        };
-                        fill.write_v1(first_row + call_row, value);
-                    }
+                    call.emit_base_columns_v1(
+                        call_row,
+                        first_column,
+                        fills.len(),
+                        |offset, value| {
+                            fills[offset].write_v1(first_row + call_row, value);
+                        },
+                    )?;
                 }
                 Ok(())
             },
@@ -3726,7 +3866,7 @@ fn evaluate_sha_batch_relation_v1<A: PolynomialAirFieldV1>(
         ZK_X509_SHA_BATCH_LOCAL_CONSTRAINT_COUNT_V1
     };
     let mut residues = Vec::with_capacity(expected_count);
-    evaluate_sha_batch_relation_into_v1(
+    emit_sha_batch_relation_v1(
         current,
         next,
         word_challenges,
@@ -3739,31 +3879,7 @@ fn evaluate_sha_batch_relation_v1<A: PolynomialAirFieldV1>(
     Ok(residues)
 }
 
-/// Evaluate every local SHA constraint into the caller's reusable allocation.
-/// The caller retains clearing ownership through errors and unwinding.
-#[allow(clippy::too_many_arguments)]
-pub fn evaluate_zk_x509_sha_batch_local_residues_into_v1<A: PolynomialAirFieldV1>(
-    current: &ZkX509ShaBatchRowV1<A>,
-    next: &ZkX509ShaBatchRowV1<A>,
-    word_challenges: ZkX509ShaWordStarkChallengesV1,
-    call_challenges: ZkX509ShaCallBusChallengesV1,
-    rfc_challenges: &ZkX509Rfc5280StarkChallengesV1,
-    segment: u8,
-    residues: &mut Vec<A>,
-) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
-    evaluate_sha_batch_relation_into_v1(
-        current,
-        next,
-        word_challenges,
-        call_challenges,
-        rfc_challenges,
-        segment,
-        None,
-        residues,
-    )
-}
-
-/// Evaluate the original local relation with the native provider's shared powers.
+/// Emit the local relation with the native provider's shared powers.
 /// The common AIR body validates the family before consuming any base error.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
@@ -3774,7 +3890,7 @@ pub(super) fn evaluate_sha_batch_local_with_powers_into_v1(
     call_challenges: ZkX509ShaCallBusChallengesV1,
     rfc_challenges: &ZkX509Rfc5280StarkChallengesV1,
     segment: u8,
-    residues: &mut Vec<F>,
+    residues: &mut impl ShaResidueSinkV1<F>,
     powers: &super::sha_word_stark::wide_fold::ShaWordFoldPowersV1,
 ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
     evaluate_sha_batch_relation_with_fold_v1(
@@ -3797,7 +3913,7 @@ pub(super) fn evaluate_sha_batch_local_with_bound_context_into_v1(
     next: &ZkX509ShaBatchRowV1,
     capability: super::credential_pre_aux::ValidatedMainCompositionChallengesV1<'_>,
     segment: u8,
-    residues: &mut Vec<F>,
+    residues: &mut impl ShaResidueSinkV1<F>,
     powers: &super::sha_word_stark::wide_fold::ShaWordFoldPowersV1,
 ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
     evaluate_sha_batch_relation_with_context_v1(
@@ -3855,7 +3971,7 @@ impl<'a> ShaBatchEvaluationChallengesV1<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn evaluate_sha_batch_relation_into_v1<A: PolynomialAirFieldV1>(
+pub(super) fn emit_sha_batch_relation_v1<A: PolynomialAirFieldV1>(
     current: &ZkX509ShaBatchRowV1<A>,
     next: &ZkX509ShaBatchRowV1<A>,
     word_challenges: ZkX509ShaWordStarkChallengesV1,
@@ -3863,7 +3979,7 @@ fn evaluate_sha_batch_relation_into_v1<A: PolynomialAirFieldV1>(
     rfc_challenges: &ZkX509Rfc5280StarkChallengesV1,
     segment: u8,
     ca_call_boundaries: Option<&[ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1]>,
-    residues: &mut Vec<A>,
+    residues: &mut impl ShaResidueSinkV1<A>,
 ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
     evaluate_sha_batch_relation_with_fold_v1(
         current,
@@ -3887,7 +4003,7 @@ fn evaluate_sha_batch_relation_with_fold_v1<A: PolynomialAirFieldV1>(
     rfc_challenges: &ZkX509Rfc5280StarkChallengesV1,
     segment: u8,
     ca_call_boundaries: Option<&[ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1]>,
-    residues: &mut Vec<A>,
+    residues: &mut impl ShaResidueSinkV1<A>,
     fold: impl ShaWordBaseErrorFoldV1<A>,
 ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
     evaluate_sha_batch_relation_with_context_v1(
@@ -3912,7 +4028,7 @@ fn evaluate_sha_batch_relation_with_context_v1<A: PolynomialAirFieldV1>(
     challenge_context: ShaBatchEvaluationChallengesV1<'_>,
     segment: u8,
     ca_call_boundaries: Option<&[ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1]>,
-    residues: &mut Vec<A>,
+    residues: &mut impl ShaResidueSinkV1<A>,
     fold: impl ShaWordBaseErrorFoldV1<A>,
 ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
     let (word_context, call_challenges, rfc_challenges) = challenge_context.checked_v1()?;
@@ -4104,8 +4220,8 @@ fn evaluate_sha_batch_relation_with_context_v1<A: PolynomialAirFieldV1>(
             residues.push(segment_first.mul(before.sub(A::ONE)));
         }
     }
-    residues.extend(current.base.map(|value| padding.mul(value)));
-    residues.extend(
+    residues.extend_residues(current.base.map(|value| padding.mul(value)));
+    residues.extend_residues(
         current.aux[..projection_bus::AUX_START_V1]
             .iter()
             .copied()
@@ -4276,6 +4392,8 @@ mod tests {
     include!("sha_wide_fold_tests.rs");
     include!("sha_validated_context_tests.rs");
     include!("sha_native_aux_cache_source_tests.rs");
+    include!("sha_batch_residue_oracle.rs");
+    include!("sha_residue_output_tests.rs");
     include!("sha_native_base_cache_source_tests.rs");
     include!("sha_fixed_schedule_reuse_tests.rs");
     include!("sha_fixed_matrix_reuse_tests.rs");
@@ -4537,6 +4655,7 @@ mod tests {
         }
     }
     include!("sha_private_product_owner_tests.rs");
+    include!("sha_base_borrowed_projection_tests.rs");
     fn standalone_segment_terminal(_call: &ZkX509ShaBatchCallTraceV1) -> u8 {
         0
     }
@@ -6972,4 +7091,651 @@ mod tests {
         );
         assert_eq!(actual, reference);
     }
+
+    // The following four functions preserve the pre-refactor full-row implementation
+    // as a test-only oracle, independent of the new emitter and shared traversal.
+    #[allow(clippy::too_many_arguments)]
+    fn original_write_sha_rfc_fixed_event_v1(
+        fixed: &mut [F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1],
+        consumer: ZkX509ShaRfcConsumerChannelsV1,
+        stream: usize,
+        message: bool,
+        length_high: bool,
+        length_low: bool,
+        channel: u32,
+        offset: usize,
+    ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+        if stream >= ZK_X509_SHA_RFC_PRODUCT_STREAMS_V1 {
+            return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
+        }
+        let start = ZK_X509_SHA_FIXED_RFC_STREAMS_V1
+            .checked_add(
+                stream
+                    .checked_mul(ZK_X509_SHA_FIXED_RFC_STREAM_STRIDE_V1)
+                    .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?,
+            )
+            .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
+        fixed[start + ZK_X509_SHA_FIXED_RFC_MESSAGE_EVENT_V1] = F(u64::from(message));
+        fixed[start + ZK_X509_SHA_FIXED_RFC_LENGTH_HIGH_VALUE_V1] = F(u64::from(length_high));
+        fixed[start + ZK_X509_SHA_FIXED_RFC_LENGTH_LOW_VALUE_V1] = F(u64::from(length_low));
+        fixed[start + ZK_X509_SHA_FIXED_RFC_ROLE_V1] = F(consumer.role as u64);
+        fixed[start + ZK_X509_SHA_FIXED_RFC_CHANNEL_V1] = F(u64::from(channel));
+        fixed[start + ZK_X509_SHA_FIXED_RFC_OFFSET_V1] =
+            F(u64::try_from(offset).map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?);
+        Ok(())
+    }
+    fn original_widened_sha_batch_fixed_row_from_word_v1(
+        manifest: ZkX509ShaCallManifestV1,
+        word_fixed: &[F; SHA_WORD_CAPACITY_FIXED_WIDTH_V1],
+        word_logical_rows: usize,
+        consumer: Option<ZkX509ShaRfcConsumerChannelsV1>,
+        index: usize,
+    ) -> Result<[F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1], ZkX509ShaCallBusStarkErrorV1> {
+        if index >= word_logical_rows {
+            return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
+        }
+        let mut fixed = [F::ZERO; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1];
+        fixed[..SHA_WORD_CAPACITY_FIXED_WIDTH_V1].copy_from_slice(word_fixed);
+        fixed[ZK_X509_SHA_FIXED_CALL_V1] = F(u64::from(manifest.call));
+        fixed[ZK_X509_SHA_FIXED_ROLE_V1] = F(u64::from(manifest.role.role_code()));
+        fixed[ZK_X509_SHA_FIXED_SLOT_V1] = F(u64::from(manifest.role.slot()));
+        if let Some(selector) = usize::from(manifest.call)
+            .checked_sub(ZK_X509_SHA_CA_LEAF_CALL_V1)
+            .filter(|selector| *selector < ZK_X509_SHA_CA_CALL_COUNT_V1)
+        {
+            fixed[ZK_X509_SHA_FIXED_CA_CALL_SELECTORS_V1 + selector] = F::ONE;
+        }
+        if word_fixed[SHA_WORD_CAPACITY_INPUT_WORD_V1] == F::ONE {
+            let word = usize::try_from(word_fixed[SHA_WORD_CAPACITY_INPUT_WORD_INDEX_V1].0)
+                .map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?;
+            for byte in 0..4 {
+                let offset = word
+                    .checked_mul(4)
+                    .and_then(|start| start.checked_add(byte))
+                    .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
+                if let Some(expected) = sha_frame_byte_v1(manifest, offset) {
+                    fixed[ZK_X509_SHA_FIXED_FRAME_MASK_V1 + byte] = F::ONE;
+                    match expected {
+                        ShaFrameByteV1::Constant(value) => {
+                            fixed[ZK_X509_SHA_FIXED_FRAME_CONSTANT_V1 + byte] = F(u64::from(value))
+                        }
+                        ShaFrameByteV1::RawLengthHigh => {
+                            fixed[ZK_X509_SHA_FIXED_FRAME_LENGTH_HIGH_V1 + byte] = F::ONE
+                        }
+                        ShaFrameByteV1::RawLengthLow => {
+                            fixed[ZK_X509_SHA_FIXED_FRAME_LENGTH_LOW_V1 + byte] = F::ONE
+                        }
+                    }
+                }
+            }
+        }
+        projection_bus::emit_fixed_v1(manifest, word_fixed, |column, value| fixed[column] = value);
+        let Some(consumer) = consumer else {
+            return Ok(fixed);
+        };
+        fixed[ZK_X509_SHA_FIXED_RFC_LENGTH_PREFIX_V1] =
+            F(u64::try_from(consumer.message_prefix_bytes)
+                .map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?);
+        if word_fixed[SHA_WORD_CAPACITY_INPUT_WORD_V1] == F::ONE {
+            let word = usize::try_from(word_fixed[SHA_WORD_CAPACITY_INPUT_WORD_INDEX_V1].0)
+                .map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?;
+            let raw_end = consumer
+                .message_prefix_bytes
+                .checked_add(consumer.message_capacity_bytes)
+                .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
+            for stream in 0..ZK_X509_SHA_RFC_PRODUCT_STREAMS_V1 {
+                let sha_offset = word
+                    .checked_mul(4)
+                    .and_then(|offset| offset.checked_add(stream))
+                    .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
+                if (consumer.message_prefix_bytes..raw_end).contains(&sha_offset) {
+                    write_sha_rfc_fixed_event_v1(
+                        &mut fixed,
+                        consumer,
+                        stream,
+                        true,
+                        false,
+                        false,
+                        consumer.message_channel,
+                        sha_offset
+                            .checked_sub(consumer.message_prefix_bytes)
+                            .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?,
+                    )?;
+                }
+            }
+        }
+        if let Some(length_channel) = consumer.length_channel
+            && index + 4 >= word_logical_rows
+        {
+            let pair = index + 4 - word_logical_rows;
+            fixed[ZK_X509_SHA_FIXED_RFC_LENGTH_PAIR_V1] = F::ONE;
+            fixed[ZK_X509_SHA_FIXED_RFC_LENGTH_PAIR_INDEX_V1] =
+                F(u64::try_from(pair).map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?);
+            for stream in 0..2 {
+                let offset = pair
+                    .checked_mul(2)
+                    .and_then(|offset| offset.checked_add(stream))
+                    .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
+                write_sha_rfc_fixed_event_v1(
+                    &mut fixed,
+                    consumer,
+                    stream,
+                    false,
+                    offset == 6,
+                    offset == 7,
+                    length_channel,
+                    offset,
+                )?;
+            }
+        }
+        Ok(fixed)
+    }
+    // Independent pre-optimization constructor joins the retained original fixed emitter.
+    fn original_constructor_sha_batch_source_v1(
+        manifest: ZkX509ShaCallManifestV1,
+        witness: &ZkX509ShaCallWitnessV1,
+        disclosed_attributes: usize,
+    ) -> Result<ZkX509ShaBatchCallBaseSourceV1, ZkX509ShaCallBusStarkErrorV1> {
+        validate_witness_v1(manifest, witness)?;
+        let rfc_consumer =
+            sha_rfc_consumer_channels_v1(manifest.call, manifest.role, disclosed_attributes)?;
+        let word = super::super::sha_word_stark::original_build_sha_word_capacity_base_source_v1(
+            &witness.message,
+            manifest.maximum_message_bytes,
+            role_has_exact_message_length_v1(manifest.role),
+        )?;
+        if word.maximum_blocks() != manifest.maximum_blocks
+            || word.maximum_local_rows() != manifest.maximum_local_rows
+            || word.maximum_memory_rows() != manifest.maximum_memory_rows
+            || word.logical_rows() != manifest.maximum_logical_rows()
+        {
+            return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
+        }
+        Ok(ZkX509ShaBatchCallBaseSourceV1 {
+            manifest,
+            word,
+            rfc_consumer,
+        })
+    }
+    fn original_for_each_base_fixed_row_v1(
+        source: &ZkX509ShaBatchSegmentBaseSourceV1<'_>,
+        mut visitor: impl FnMut(
+            usize,
+            [F; ZK_X509_SHA_BATCH_BASE_WIDTH_V1],
+            [F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1],
+        ),
+    ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+        source.ensure_base_phase_v1()?;
+        validate_sha_segment_replay_plan_v1(source.schedule, source.replay)?;
+        let segment_start = source
+            .segment()
+            .checked_mul(ZK_X509_SHA_SEGMENT_ROWS_V1)
+            .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
+        let active_end = segment_start
+            .checked_add(source.replay.active_rows())
+            .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
+        let mut emitted = 0_usize;
+        for call_index in ZK_X509_SHA_PHYSICAL_CALL_ORDER_V1 {
+            let manifest = source.schedule.call(usize::from(call_index))?;
+            let call_start = manifest.first_logical_row;
+            let call_end = call_start
+                .checked_add(manifest.maximum_logical_rows())
+                .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
+            let overlap_start = call_start.max(segment_start);
+            let overlap_end = call_end.min(active_end);
+            if overlap_start >= overlap_end {
+                continue;
+            }
+            if overlap_start != call_start || overlap_end != call_end {
+                return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
+            }
+            let witness = source
+                .witnesses
+                .get(usize::from(manifest.call))
+                .ok_or(ZkX509ShaCallBusStarkErrorV1::Topology)?;
+            let call = original_constructor_sha_batch_source_v1(
+                manifest,
+                witness,
+                source.schedule.shape().disclosed_attributes,
+            )?;
+            for global_row in call_start..call_end {
+                let call_row = global_row
+                    .checked_sub(call_start)
+                    .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
+                let segment_row = global_row
+                    .checked_sub(segment_start)
+                    .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
+                let mut fixed = original_widened_sha_batch_fixed_row_from_word_v1(
+                    call.manifest,
+                    call.word.fixed_row(call_row)?,
+                    call.logical_rows(),
+                    call.rfc_consumer,
+                    call_row,
+                )?;
+                fixed[ZK_X509_SHA_FIXED_SEGMENT_FIRST_V1] = F(u64::from(segment_row == 0));
+                fixed[ZK_X509_SHA_FIXED_SEGMENT_LAST_V1] =
+                    F(u64::from(segment_row + 1 == source.replay.active_rows()));
+                visitor(segment_row, call.base_row(call_row)?, fixed);
+                emitted = emitted
+                    .checked_add(1)
+                    .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
+            }
+        }
+        for segment_row in source.replay.active_rows()..ZK_X509_SHA_SEGMENT_ROWS_V1 {
+            let padding = physical_padding_row_v1(segment_row);
+            visitor(segment_row, padding.base, padding.fixed);
+            emitted = emitted
+                .checked_add(1)
+                .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
+        }
+        if emitted != ZK_X509_SHA_SEGMENT_ROWS_V1 {
+            return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
+        }
+        Ok(())
+    }
+    fn original_fill_base_columns_v1(
+        source: &ZkX509ShaBatchSegmentBaseSourceV1<'_>,
+        segment: usize,
+        first_column: usize,
+        targets: &mut [&mut [F]],
+    ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+        validate_sha_column_batch_extent_v1(
+            first_column,
+            ZK_X509_SHA_BATCH_BASE_WIDTH_V1,
+            targets,
+        )?;
+        source.validate_column_request_v1(
+            segment,
+            first_column,
+            ZK_X509_SHA_BATCH_BASE_WIDTH_V1,
+            targets[0],
+        )?;
+        let mut fills = sha_column_fill_batch_v1(targets)?;
+        original_for_each_base_fixed_row_v1(source, |row, base, _| {
+            for (offset, fill) in fills.iter_mut().enumerate() {
+                fill.write_v1(row, base[first_column + offset]);
+            }
+        })?;
+        finish_sha_column_fill_batch_v1(fills)
+    }
+    #[test]
+    fn sha_base_only_checked_emitter_preserves_original_refusals() {
+        let schedule = ZkX509ShaCallScheduleV1::new(ZkX509ShaCallPublicShapeV1 {
+            disclosed_attributes: 4,
+        })
+        .unwrap();
+        let manifest = schedule.calls[0];
+        let original_consumer = sha_rfc_consumer_channels_v1(manifest.call, manifest.role, 4)
+            .unwrap()
+            .unwrap();
+        let mut fixed = [F::ZERO; SHA_WORD_CAPACITY_FIXED_WIDTH_V1];
+        fixed[SHA_WORD_CAPACITY_INPUT_WORD_V1] = F::ONE;
+        for mode in 0..5 {
+            let mut consumer = original_consumer;
+            let mut row = fixed;
+            let (rows, index, expected) = match mode {
+                0 => (4, 4, Err(ZkX509ShaCallBusStarkErrorV1::Topology)),
+                1 => {
+                    row[SHA_WORD_CAPACITY_INPUT_WORD_INDEX_V1] = F(u64::MAX);
+                    (4, 0, Err(ZkX509ShaCallBusStarkErrorV1::Resource))
+                }
+                2 => {
+                    consumer.message_prefix_bytes = usize::MAX;
+                    consumer.message_capacity_bytes = 1;
+                    (4, 0, Err(ZkX509ShaCallBusStarkErrorV1::Resource))
+                }
+                3 => (4, 3, Ok(())),
+                _ => (4, 0, Ok(())),
+            };
+            let original = original_widened_sha_batch_fixed_row_from_word_v1(
+                manifest,
+                &row,
+                rows,
+                Some(consumer),
+                index,
+            );
+            assert_eq!(original.as_ref().map(|_| ()).map_err(|e| *e), expected);
+            assert_eq!(
+                emit_sha_batch_fixed_row_from_word_v1(
+                    manifest,
+                    &row,
+                    rows,
+                    Some(consumer),
+                    index,
+                    |_, _| {}
+                ),
+                expected
+            );
+            assert_eq!(
+                widened_sha_batch_fixed_row_from_word_v1(
+                    manifest,
+                    &row,
+                    rows,
+                    Some(consumer),
+                    index
+                ),
+                original
+            );
+        }
+        let mut full = [F::ZERO; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1];
+        let original = original_write_sha_rfc_fixed_event_v1(
+            &mut full,
+            original_consumer,
+            ZK_X509_SHA_RFC_PRODUCT_STREAMS_V1,
+            true,
+            false,
+            false,
+            0,
+            0,
+        );
+        assert_eq!(original, Err(ZkX509ShaCallBusStarkErrorV1::Topology));
+        assert_eq!(
+            emit_sha_rfc_fixed_event_v1(
+                &mut |_, _| {},
+                original_consumer,
+                ZK_X509_SHA_RFC_PRODUCT_STREAMS_V1,
+                true,
+                false,
+                false,
+                0,
+                0
+            ),
+            original
+        );
+        let witness = witness_for(manifest);
+        let mut call = build_zk_x509_sha_batch_call_base_source_v1(manifest, &witness, 4).unwrap();
+        assert_eq!(
+            call.validate_fixed_row_shape_v1(call.logical_rows()),
+            call.fixed_row(call.logical_rows()).map(|_| ())
+        );
+        call.zeroize_private_v1();
+        assert_eq!(
+            call.validate_fixed_row_shape_v1(0),
+            Err(ZkX509ShaCallBusStarkErrorV1::Resource)
+        );
+        assert!(call.private_is_zeroized_v1());
+    }
+
+    #[test]
+    fn sha_base_only_late_witness_failure_clears_every_destination() {
+        let schedule = ZkX509ShaCallScheduleV1::new(ZkX509ShaCallPublicShapeV1 {
+            disclosed_attributes: 4,
+        })
+        .unwrap();
+        let mut witnesses = witnesses(&schedule);
+        let late_call = usize::from(ZK_X509_SHA_PHYSICAL_CALL_ORDER_V1[1]);
+        witnesses[late_call].digest[0] ^= 1;
+        // Deliberately bypass construction only in this negative fixture so the
+        // original per-call revalidation fails after a preceding call wrote rows.
+        let source = ZkX509ShaBatchSegmentBaseSourceV1 {
+            retained_base: None,
+            schedule: &schedule,
+            witnesses: &witnesses,
+            replay: ZkX509ShaSegmentReplayV1::new(0).unwrap(),
+            bound: false,
+        };
+        let mut actual = vec![native_column_v1(F(71)); 8];
+        let result = source.fill_base_columns_v1(
+            0,
+            0,
+            &mut actual.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>(),
+        );
+        assert_eq!(result, Err(ZkX509ShaCallBusStarkErrorV1::Digest));
+        assert!(actual.iter().flatten().all(|value| *value == F::ZERO));
+        let mut reference = vec![native_column_v1(F(19)); 8];
+        assert_eq!(
+            original_fill_base_columns_v1(
+                &source,
+                0,
+                0,
+                &mut reference
+                    .iter_mut()
+                    .map(Vec::as_mut_slice)
+                    .collect::<Vec<_>>()
+            ),
+            result
+        );
+        assert_eq!(reference, actual);
+    }
+
+    #[test]
+    fn sha_base_only_fixed_cells_match_original_every_active_call_row() {
+        for disclosed in 0..=4 {
+            let schedule = ZkX509ShaCallScheduleV1::new(ZkX509ShaCallPublicShapeV1 {
+                disclosed_attributes: disclosed,
+            })
+            .unwrap();
+            let witnesses = witnesses(&schedule);
+            for call_index in ZK_X509_SHA_PHYSICAL_CALL_ORDER_V1 {
+                let manifest = schedule.call(usize::from(call_index)).unwrap();
+                let call = build_zk_x509_sha_batch_call_base_source_v1(
+                    manifest,
+                    &witnesses[usize::from(call_index)],
+                    disclosed,
+                )
+                .unwrap();
+                for row in 0..call.logical_rows() {
+                    let word_fixed = call.word.fixed_row(row).unwrap();
+                    let expected = original_widened_sha_batch_fixed_row_from_word_v1(
+                        manifest,
+                        word_fixed,
+                        call.logical_rows(),
+                        call.rfc_consumer,
+                        row,
+                    )
+                    .unwrap();
+                    let actual = widened_sha_batch_fixed_row_from_word_v1(
+                        manifest,
+                        word_fixed,
+                        call.logical_rows(),
+                        call.rfc_consumer,
+                        row,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        actual, expected,
+                        "disclosed={disclosed} call={call_index} row={row}"
+                    );
+                    assert!(call.validate_fixed_row_shape_v1(row).is_ok());
+                }
+            }
+        }
+    }
+
+    /// Exhaust every adjacent batch and tail without retaining a full segment matrix.
+    #[test]
+    #[ignore = "explicit bounded exhaustive replay gate; reconstructs all four native segments for every column batch"]
+    fn sha_combined_all_columns_match_original_before_and_after_binding() {
+        for disclosed in 0..=4 {
+            let schedule = ZkX509ShaCallScheduleV1::new(ZkX509ShaCallPublicShapeV1 {
+                disclosed_attributes: disclosed,
+            })
+            .unwrap();
+            let witnesses = witnesses(&schedule);
+            for segment in 0..ZK_X509_SHA_SEGMENT_COUNT_V1 {
+                let mut source =
+                    ZkX509ShaBatchSegmentBaseSourceV1::new_v1(&schedule, &witnesses, segment)
+                        .unwrap();
+                let mut actual = vec![native_column_v1(F::ZERO); 8];
+                let mut expected = vec![native_column_v1(F::ZERO); 8];
+                for first in (0..ZK_X509_SHA_BATCH_BASE_WIDTH_V1).step_by(8) {
+                    let width = (ZK_X509_SHA_BATCH_BASE_WIDTH_V1 - first).min(8);
+                    original_fill_base_columns_v1(
+                        &source,
+                        segment,
+                        first,
+                        &mut expected[..width]
+                            .iter_mut()
+                            .map(Vec::as_mut_slice)
+                            .collect::<Vec<_>>(),
+                    )
+                    .unwrap();
+                    source
+                        .fill_base_columns_v1(
+                            segment,
+                            first,
+                            &mut actual[..width]
+                                .iter_mut()
+                                .map(Vec::as_mut_slice)
+                                .collect::<Vec<_>>(),
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        actual[..width],
+                        expected[..width],
+                        "before binding: disclosed={disclosed} segment={segment} first={first}"
+                    );
+                }
+                let fixed = ZkX509ShaBatchFixedProviderV1::new_v1(schedule.shape()).unwrap();
+                let mut bound = source.bind_v1(&credential_binding(0x47)).unwrap();
+                for first in (0..ZK_X509_SHA_BATCH_BASE_WIDTH_V1).step_by(8) {
+                    let width = (ZK_X509_SHA_BATCH_BASE_WIDTH_V1 - first).min(8);
+                    let original_source = ZkX509ShaBatchSegmentBaseSourceV1 {
+                        retained_base: None,
+                        schedule: &schedule,
+                        witnesses: &witnesses,
+                        replay: source.replay,
+                        bound: false,
+                    };
+                    original_fill_base_columns_v1(
+                        &original_source,
+                        segment,
+                        first,
+                        &mut expected[..width]
+                            .iter_mut()
+                            .map(Vec::as_mut_slice)
+                            .collect::<Vec<_>>(),
+                    )
+                    .unwrap();
+                    bound
+                        .replay_base_columns_v1(
+                            &fixed,
+                            segment,
+                            first,
+                            &mut actual[..width]
+                                .iter_mut()
+                                .map(Vec::as_mut_slice)
+                                .collect::<Vec<_>>(),
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        actual[..width],
+                        expected[..width],
+                        "after binding: disclosed={disclosed} segment={segment} first={first}"
+                    );
+                }
+                assert_eq!(
+                    source.fill_base_columns_v1(segment, 0, &mut [&mut actual[0]]),
+                    Err(ZkX509ShaCallBusStarkErrorV1::Phase)
+                );
+                bound.zeroize_private_v1();
+                assert_eq!(
+                    bound.replay_base_columns_v1(
+                        &fixed,
+                        segment,
+                        0,
+                        &mut [actual[0].as_mut_slice()]
+                    ),
+                    Err(ZkX509ShaCallBusStarkErrorV1::Phase)
+                );
+                for column in actual.iter_mut().chain(&mut expected) {
+                    zeroize_fields_v1(column);
+                }
+                eprintln!(
+                    "SHA_COMBINED_EXHAUSTIVE_V1 disclosed={disclosed} segment={segment} columns={ZK_X509_SHA_BATCH_BASE_WIDTH_V1} before_and_after=exact"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sha_base_only_refuses_changed_replay_plan_and_short_destination_before_writes() {
+        let schedule = ZkX509ShaCallScheduleV1::new(ZkX509ShaCallPublicShapeV1 {
+            disclosed_attributes: 4,
+        })
+        .unwrap();
+        let witnesses = witnesses(&schedule);
+        let mut changed = schedule.clone();
+        changed.calls[usize::from(ZK_X509_SHA_PHYSICAL_CALL_ORDER_V1[1])].first_logical_row += 1;
+        let source = ZkX509ShaBatchSegmentBaseSourceV1 {
+            retained_base: None,
+            schedule: &changed,
+            witnesses: &witnesses,
+            replay: ZkX509ShaSegmentReplayV1::new(0).unwrap(),
+            bound: false,
+        };
+        let mut target = native_column_v1(F(23));
+        assert_eq!(
+            source.fill_base_columns_v1(0, 0, &mut [&mut target]),
+            Err(ZkX509ShaCallBusStarkErrorV1::Topology)
+        );
+        assert!(target.iter().all(|value| *value == F(23)));
+        assert_eq!(
+            original_fill_base_columns_v1(&source, 0, 0, &mut [&mut target]),
+            Err(ZkX509ShaCallBusStarkErrorV1::Topology)
+        );
+        assert!(target.iter().all(|value| *value == F(23)));
+        let canonical =
+            ZkX509ShaBatchSegmentBaseSourceV1::new_v1(&schedule, &witnesses, 0).unwrap();
+        let short = &mut target[..ZK_X509_SHA_SEGMENT_ROWS_V1 - 1];
+        assert_eq!(
+            canonical.fill_base_columns_v1(0, 0, &mut [short]),
+            Err(ZkX509ShaCallBusStarkErrorV1::Topology)
+        );
+        assert!(target.iter().all(|value| *value == F(23)));
+        zeroize_fields_v1(&mut target);
+    }
+    /// Compare the complete bounded source operation, including original call construction.
+    #[test]
+    #[ignore = "component timing requires a coordinated compiler-idle window"]
+    fn sha_base_only_complete_source_matches_original_and_reports_timings() {
+        use std::time::Instant;
+        let schedule = ZkX509ShaCallScheduleV1::new(ZkX509ShaCallPublicShapeV1 {
+            disclosed_attributes: 4,
+        })
+        .unwrap();
+        let witnesses = witnesses(&schedule);
+        for segment in 0..ZK_X509_SHA_SEGMENT_COUNT_V1 {
+            let source =
+                ZkX509ShaBatchSegmentBaseSourceV1::new_v1(&schedule, &witnesses, segment).unwrap();
+            for (first, width) in [(0, 1), (3, 8), (ZK_X509_SHA_BATCH_BASE_WIDTH_V1 - 3, 3)] {
+                let mut original = vec![native_column_v1(F::ZERO); width];
+                let mut candidate = vec![native_column_v1(F::ZERO); width];
+                for round in 0..3 {
+                    let candidate_first = (segment + width + round) % 2 == 0;
+                    let run = |old, columns: &mut [Vec<F>]| {
+                        let mut targets = columns
+                            .iter_mut()
+                            .map(Vec::as_mut_slice)
+                            .collect::<Vec<_>>();
+                        let started = Instant::now();
+                        if old {
+                            original_fill_base_columns_v1(&source, segment, first, &mut targets)
+                                .unwrap();
+                        } else {
+                            source
+                                .fill_base_columns_v1(segment, first, &mut targets)
+                                .unwrap();
+                        }
+                        started.elapsed().as_nanos()
+                    };
+                    let (original_ns, candidate_ns) = if candidate_first {
+                        let candidate_ns = run(false, &mut candidate);
+                        (run(true, &mut original), candidate_ns)
+                    } else {
+                        let original_ns = run(true, &mut original);
+                        (original_ns, run(false, &mut candidate))
+                    };
+                    assert_eq!(original, candidate);
+                    eprintln!(
+                        "SHA_BASE_ONLY_SOURCE_DIAGNOSTIC_V1 segment={segment} first={first} width={width} round={round} candidate_first={candidate_first} original_ns={original_ns} candidate_ns={candidate_ns} parity=exact"
+                    );
+                }
+                for column in original.iter_mut().chain(&mut candidate) {
+                    zeroize_fields_v1(column);
+                }
+            }
+        }
+    }
+    include!("sha_base_borrowed_timing_tests.rs");
 }

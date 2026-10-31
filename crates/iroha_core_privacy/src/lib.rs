@@ -3,13 +3,6 @@
 //! Core owns ledger storage and mounts these modules internally. Module names,
 //! explicit `iroha_core::` schema identities and logging targets remain stable.
 //! `iroha_core` `EnvFilter` directives also prefix-match this owner crate's targets.
-#![cfg_attr(
-    test,
-    expect(
-        clippy::large_stack_arrays,
-        reason = "The compiler-generated test harness reference array exceeds 16 KiB; source modules deny this lint below"
-    )
-)]
 
 /// Native transparent execution proofs and bounded deterministic race relations.
 #[cfg_attr(test, deny(clippy::large_stack_arrays))]

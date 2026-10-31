@@ -93,34 +93,34 @@ fn q23_output_lowering_before_square_forms_a_repeatable_current_arithmetic_cycle
     assert_eq!(
         profile.parameters().main_primes.as_slice(),
         &[
-            576494471325024257_u64,
-            576507820688146433_u64,
-            576561218140635137_u64,
-            576599041336147969_u64,
-            576754783905906689_u64,
-            576799281782980609_u64,
-            576814856039956481_u64,
-            576839329872347137_u64,
-            576908301581811713_u64,
-            576932775414202369_u64,
-            576988397760544769_u64,
-            577072943726985217_u64,
-            577206437358206977_u64,
-            577242035659866113_u64,
-            577299882900062209_u64,
-            577306557581623297_u64,
-            577359955034112001_u64,
-            577382203972648961_u64,
-            577400003123478529_u64,
-            577422252062015489_u64,
-            577428926743576577_u64,
-            577433376531283969_u64,
-            577473424620650497_u64
+            576_494_471_325_024_257_u64,
+            576_507_820_688_146_433_u64,
+            576_561_218_140_635_137_u64,
+            576_599_041_336_147_969_u64,
+            576_754_783_905_906_689_u64,
+            576_799_281_782_980_609_u64,
+            576_814_856_039_956_481_u64,
+            576_839_329_872_347_137_u64,
+            576_908_301_581_811_713_u64,
+            576_932_775_414_202_369_u64,
+            576_988_397_760_544_769_u64,
+            577_072_943_726_985_217_u64,
+            577_206_437_358_206_977_u64,
+            577_242_035_659_866_113_u64,
+            577_299_882_900_062_209_u64,
+            577_306_557_581_623_297_u64,
+            577_359_955_034_112_001_u64,
+            577_382_203_972_648_961_u64,
+            577_400_003_123_478_529_u64,
+            577_422_252_062_015_489_u64,
+            577_428_926_743_576_577_u64,
+            577_433_376_531_283_969_u64,
+            577_473_424_620_650_497_u64
         ]
     );
     assert_eq!(
         profile.parameters().special_primes.as_slice(),
-        &[577475649514504193_u64, 577586894207188993_u64]
+        &[577_475_649_514_504_193_u64, 577_586_894_207_188_993_u64]
     );
     let precision = profile.plaintext_precision(1).expect("effective F257");
     let mut source = profile
@@ -134,11 +134,22 @@ fn q23_output_lowering_before_square_forms_a_repeatable_current_arithmetic_cycle
     }
     check_carry(&profile, &source);
     let upper_program = program();
-    let metadata_requirement =
-        BootstrapPlan::metadata_requirement(&profile, precision, &upper_program.plan())
-            .expect("complete public typed metadata bound before preparation");
-    let plan = BootstrapPlan::new(&profile, &source, upper_program, &LEVELS, budget())
-        .expect("all current stage and combined budgets admit q23 schedule");
+    let metadata_requirement = BootstrapPlan::metadata_requirement(
+        &profile,
+        precision,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        &upper_program.plan(),
+    )
+    .expect("complete public typed metadata bound before preparation");
+    let plan = BootstrapPlan::new(
+        &profile,
+        &source,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        upper_program,
+        &LEVELS,
+        budget(),
+    )
+    .expect("all current stage and combined budgets admit q23 schedule");
     let retained_metadata = plan
         .retained_metadata()
         .expect("observe complete prepared N65536 plan metadata");
@@ -157,14 +168,14 @@ fn q23_output_lowering_before_square_forms_a_repeatable_current_arithmetic_cycle
     assert_eq!(plan.galois_elements().len(), 16);
     assert_eq!(
         plan.homomorphic_input_shape().bound(),
-        &Natural::from_words_le(&[10456878399539478912_u64, 1408839_u64])
+        &Natural::from_words_le(&[10_456_878_399_539_478_912_u64, 1_408_839_u64])
     );
     assert_eq!(
         plan.output_shape().bound(),
         &Natural::from_words_le(&[
-            15443042531987239424_u64,
-            3666307800200288600_u64,
-            4937332615020003248_u64
+            15_443_042_531_987_239_424_u64,
+            3_666_307_800_200_288_600_u64,
+            4_937_332_615_020_003_248_u64
         ])
     );
     assert!(
@@ -181,8 +192,15 @@ fn q23_output_lowering_before_square_forms_a_repeatable_current_arithmetic_cycle
     exact.stream_metadata_bytes = payload.stream_metadata_bytes;
     exact.canonical_arithmetic_units = payload.canonical_arithmetic_units;
     exact.scalar_word_operations = payload.scalar_word_operations;
-    let exact_plan = BootstrapPlan::new(&profile, &source, program(), &LEVELS, exact)
-        .expect("four exact resource ceilings");
+    let exact_plan = BootstrapPlan::new(
+        &profile,
+        &source,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        program(),
+        &LEVELS,
+        exact,
+    )
+    .expect("four exact resource ceilings");
     assert_eq!(exact_plan.payload(), payload);
     for resource in 0..4 {
         let mut short = exact;
@@ -193,7 +211,14 @@ fn q23_output_lowering_before_square_forms_a_repeatable_current_arithmetic_cycle
             _ => short.scalar_word_operations -= 1,
         }
         assert!(matches!(
-            BootstrapPlan::new(&profile, &source, program(), &LEVELS, short),
+            BootstrapPlan::new(
+                &profile,
+                &source,
+                iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+                program(),
+                &LEVELS,
+                short
+            ),
             Err(BootstrapError::Budget { .. })
         ));
     }
@@ -203,11 +228,15 @@ fn q23_output_lowering_before_square_forms_a_repeatable_current_arithmetic_cycle
     for (from_level, expected) in [
         (
             4,
-            Natural::from_words_le(&[11244268267255934702_u64, 10340144870002028706_u64, 8_u64]),
+            Natural::from_words_le(&[
+                11_244_268_267_255_934_702_u64,
+                10_340_144_870_002_028_706_u64,
+                8_u64,
+            ]),
         ),
         (
             3,
-            Natural::from_words_le(&[16078037141200283143_u64, 273_u64]),
+            Natural::from_words_le(&[16_078_037_141_200_283_143_u64, 273_u64]),
         ),
     ] {
         assert_eq!(lower.level(), from_level);
@@ -224,21 +253,28 @@ fn q23_output_lowering_before_square_forms_a_repeatable_current_arithmetic_cycle
     assert_eq!(
         square.bound(),
         &Natural::from_words_le(&[
-            3517145997904658796_u64,
-            11702910996898082204_u64,
-            4915570211_u64
+            3_517_145_997_904_658_796_u64,
+            11_702_910_996_898_082_204_u64,
+            4_915_570_211_u64
         ])
     );
     check_carry(&profile, &square);
-    let direct = BootstrapPlan::new(&profile, &square, program(), &LEVELS, budget())
-        .expect("actual squared source directly satisfies carry");
+    let direct = BootstrapPlan::new(
+        &profile,
+        &square,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        program(),
+        &LEVELS,
+        budget(),
+    )
+    .expect("actual squared source directly satisfies carry");
     assert_eq!(direct.output_shape(), plan.output_shape());
     for (from_level, expected) in [
         (
             2,
-            Natural::from_words_le(&[9919605623255712960_u64, 157270837540_u64]),
+            Natural::from_words_le(&[9_919_605_623_255_712_960_u64, 157_270_837_540_u64]),
         ),
-        (1, Natural::from_words_le(&[5588487865142_u64])),
+        (1, Natural::from_words_le(&[5_588_487_865_142_u64])),
     ] {
         assert_eq!(square.level(), from_level);
         extra_work += model.switch_down_units(from_level).unwrap();
@@ -254,8 +290,15 @@ fn q23_output_lowering_before_square_forms_a_repeatable_current_arithmetic_cycle
         payload.canonical_arithmetic_units + extra_work,
         11_423_296_061_440
     );
-    let repeated = BootstrapPlan::new(&profile, &square, program(), &LEVELS, budget())
-        .expect("same complete schedule repeats from the actual lowered square");
+    let repeated = BootstrapPlan::new(
+        &profile,
+        &square,
+        iroha_fhe::bgv::BootstrapMessageSpace::Ring,
+        program(),
+        &LEVELS,
+        budget(),
+    )
+    .expect("same complete schedule repeats from the actual lowered square");
     assert_eq!(repeated.output_shape(), plan.output_shape());
     assert_eq!(
         repeated.homomorphic_input_shape(),

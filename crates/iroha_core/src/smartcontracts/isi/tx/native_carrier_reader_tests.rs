@@ -84,7 +84,7 @@ fn cold_checkpoint_reader_uses_original_frame_pool_and_refunds_after_last_block(
         .read_executed_carrier_from_checkpoints(height, 1_000, 1 << 40, &budget)
         .unwrap();
     assert!(carrier.block().belongs_to(&frames));
-    assert!(context.consumed_allocated_bytes() > carrier.wire_bytes() as u64);
+    assert!(context.consumed_allocated_bytes() > carrier.wire_bytes());
     let held = carrier.block().clone();
     let charge = frames.reserved_bytes();
     assert!(charge > 0);

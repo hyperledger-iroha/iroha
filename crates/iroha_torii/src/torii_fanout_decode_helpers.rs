@@ -139,7 +139,14 @@ fn query_fanout_fixed_overhead_bytes() -> Option<usize> {
         query_fanout_candidate_snapshot_overhead_bytes()?,
     ])
 }
-/// Deterministic phase geometry for one signed-query fanout.
+/// Original admission geometry selected before acquiring a request's byte permit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueryMemoryProfile {
+    Fanout,
+    NativeFinality,
+}
+
+/// Deterministic phase geometry for one admitted query.
 ///
 /// This is logical admission accounting, not an estimate of allocator internals. The request and
 /// fixed allowance remain live for the operation. The remaining bytes are divided into seven equal
@@ -156,12 +163,15 @@ fn query_fanout_fixed_overhead_bytes() -> Option<usize> {
 ///
 /// Application collection reads also use these phase ceilings for retained rows and merge
 /// scratch, with their own admission accounting. Signed iterable queries never fan out.
+/// Native finality selects its separate closed frame/graph profile only on original GET
+/// admission; it never reinterprets an inherited signed-query envelope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(
     clippy::struct_field_names,
     reason = "Byte units are explicit for every independently admitted allocation phase."
 )]
 struct QueryFanoutMemoryEnvelope {
+    profile: QueryMemoryProfile,
     working_set_bytes: usize,
     request_bytes: usize,
     request_decode_allocated_bytes: usize,
@@ -231,10 +241,10 @@ impl QueryFanoutMemoryEnvelope {
         let phase_bytes = Self::body_admission_unit(working_set_bytes)?;
         Self::with_phase_bytes(working_set_bytes, 0, phase_bytes)
     }
-    /// Original admission for local finality GETs, which decode no request body
-    /// and retain no signed-query representations. Cold source and response caps
-    /// stay unchanged; only genuinely absent request phases are released to the
-    /// producer. This must never reinterpret an already admitted outer request.
+    /// Bodyless native reads using the ordinary query geometry retain no signed
+    /// request representations. Cold source and response caps stay unchanged;
+    /// only genuinely absent request phases are released to the producer. The
+    /// full-native proof GETs select their explicit profile below instead.
     #[expect(
         clippy::result_large_err,
         reason = "Capacity rejections retain the complete Axum response inline without adding a box allocation."
@@ -243,6 +253,58 @@ impl QueryFanoutMemoryEnvelope {
         let mut envelope = Self::for_body_admission(working_set_bytes)?;
         envelope.request_decode_allocated_bytes = 0;
         Ok(envelope)
+    }
+
+    /// Original finite admission for the full-native single/interval GETs.
+    /// The same pool funds accumulated proofs, held payload, one source frame
+    /// and final encoding; this factory never changes an inherited envelope.
+    /// Prepared native children still charge this pool; the selected profile
+    /// does not guarantee that every legal native block shape will fit.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Original HTTP capacity refusal stays inline."
+    )]
+    fn for_native_finality(
+        working_set_bytes: usize,
+        response_bytes: usize,
+    ) -> Result<Self, Response> {
+        let refuse = || crate::native_projection_response::capacity().into_response();
+        let maximum_wire = iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES;
+        let frames = iroha_core::sumeragi::finality::native_finality_frame_budget_bytes(
+            response_bytes,
+            maximum_wire,
+            64,
+        )
+        .ok_or_else(refuse)?;
+        let metadata = crate::history_producer::ProducerBudget::native_finality_metadata_bytes()
+            .ok_or_else(refuse)?;
+        let graph_floor = iroha_core::sumeragi::finality::native_finality_graph_floor_bytes()
+            .ok_or_else(refuse)?;
+        let available_graphs = working_set_bytes
+            .checked_sub(query_fanout_fixed_overhead_bytes().ok_or_else(refuse)?)
+            .and_then(|bytes| bytes.checked_sub(metadata))
+            .and_then(|bytes| bytes.checked_sub(frames))
+            .filter(|bytes| *bytes >= graph_floor)
+            .ok_or_else(refuse)?;
+        let envelope = Self {
+            profile: QueryMemoryProfile::NativeFinality,
+            working_set_bytes,
+            request_bytes: 0,
+            request_decode_allocated_bytes: 0,
+            accumulator_retained_bytes: 0,
+            route_body_bytes: frames,
+            // Element count is independently finite; the complete graph corridor
+            // is derived from the remaining original reservation below.
+            decode_allocated_bytes: maximum_wire.min(available_graphs),
+            candidate_allocation_bytes: 0,
+            candidate_encoded_bytes: metadata,
+            final_body_bytes: response_bytes,
+        };
+        if envelope.phases_fit() {
+            Ok(envelope)
+        } else {
+            Err(refuse())
+        }
     }
     #[expect(
         clippy::result_large_err,
@@ -327,6 +389,7 @@ impl QueryFanoutMemoryEnvelope {
             )
         })?;
         let envelope = Self {
+            profile: QueryMemoryProfile::Fanout,
             working_set_bytes,
             request_bytes,
             request_decode_allocated_bytes: phase_bytes,
@@ -348,6 +411,43 @@ impl QueryFanoutMemoryEnvelope {
         }
     }
     fn phases_fit(self) -> bool {
+        if self.profile == QueryMemoryProfile::NativeFinality {
+            let Some(fixed) = query_fanout_fixed_overhead_bytes() else {
+                return false;
+            };
+            let Some(metadata) =
+                crate::history_producer::ProducerBudget::native_finality_metadata_bytes()
+            else {
+                return false;
+            };
+            let maximum_wire = iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES;
+            let Some(frames) = iroha_core::sumeragi::finality::native_finality_frame_budget_bytes(
+                self.final_body_bytes,
+                maximum_wire,
+                64,
+            ) else {
+                return false;
+            };
+            let Some(graph_floor) =
+                iroha_core::sumeragi::finality::native_finality_graph_floor_bytes()
+            else {
+                return false;
+            };
+            let graph = self
+                .working_set_bytes
+                .checked_sub(fixed)
+                .and_then(|bytes| bytes.checked_sub(metadata))
+                .and_then(|bytes| bytes.checked_sub(frames));
+            return self.request_bytes == 0
+                && self.request_decode_allocated_bytes == 0
+                && self.accumulator_retained_bytes == 0
+                && self.candidate_allocation_bytes == 0
+                && self.route_body_bytes == frames
+                && self.candidate_encoded_bytes == metadata
+                && graph.is_some_and(|bytes| {
+                    bytes >= graph_floor && self.decode_allocated_bytes == maximum_wire.min(bytes)
+                });
+        }
         let Some(fixed_overhead) = query_fanout_fixed_overhead_bytes() else {
             return false;
         };
@@ -1212,6 +1312,20 @@ fn try_acquire_bodyless_finality_memory(
 ) -> Result<QueryFanoutMemoryReservation, Response> {
     let envelope =
         QueryFanoutMemoryEnvelope::for_bodyless_finality(app.query_fanout_working_set_bytes)?;
+    try_acquire_query_memory_envelope(app, envelope)
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "Original HTTP capacity refusal stays inline."
+)]
+fn try_acquire_native_finality_memory(
+    app: &SharedAppState,
+) -> Result<QueryFanoutMemoryReservation, Response> {
+    let envelope = QueryFanoutMemoryEnvelope::for_native_finality(
+        app.finality_working_set_bytes,
+        app.torii_proxy_max_response_bytes,
+    )?;
     try_acquire_query_memory_envelope(app, envelope)
 }
 #[expect(

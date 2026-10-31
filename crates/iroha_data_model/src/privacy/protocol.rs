@@ -3768,7 +3768,8 @@ pub enum PrivacyCompiledProfileCatalogArchiveValidationStatusV1 {
     Empty = 2,
     /// The archive exceeds the fixed byte ceiling.
     ArchiveTooLarge = 3,
-    /// Norito rejected a declared sequence, field, allocation, or nesting budget.
+    /// Norito rejected an enclosing allowance or a field, allocation, or nesting budget.
+    /// Exceeding the fixed twelve-row catalog is instead [`Self::InvalidManifest`].
     DecodeResourceLimit = 4,
     /// The archive schema is not exactly [`PrivacyCompiledProfileCatalogV1`].
     SchemaMismatch = 5,
@@ -3920,18 +3921,32 @@ pub fn validate_privacy_capability_archive_v1(
         PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1,
         PRIVACY_CAPABILITY_ARCHIVE_MAX_NESTING_DEPTH_V1,
     );
-    let manifest = match norito::decode_canonical_with_limits::<PrivacyExact12CapabilityManifestV1>(
-        archive, limits,
-    ) {
+    let manifest = match norito::core::classify_decode_attempt(|| {
+        norito::decode_canonical_with_limits::<PrivacyExact12CapabilityManifestV1>(archive, limits)
+    }) {
         Ok(manifest) => manifest,
-        Err(error) if error.is_decode_resource_limit() => return Status::DecodeResourceLimit,
-        Err(norito::Error::SchemaMismatch) => return Status::SchemaMismatch,
-        Err(
-            norito::Error::NonCanonicalEncoding
-            | norito::Error::DecodeFlagsMismatch { .. }
-            | norito::Error::UnsupportedCompression { .. },
-        ) => return Status::NonCanonical,
-        Err(_) => return Status::MalformedArchive,
+        Err(error) => {
+            // The early row ceiling enforces the same intrinsic cardinality as
+            // manifest validation. An enclosing allowance is still a local refusal,
+            // even when its diagnostic fields resemble this protocol-owned limit.
+            if error.kind() == norito::core::DecodeAttemptErrorKind::Invalid
+                && matches!(
+                    error.error().decode_resource_error(),
+                    Some(norito::core::DecodeResourceError::SequenceLengthExceeded { limit, .. })
+                        if limit == PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1 as u64
+                )
+            {
+                return Status::InvalidManifest;
+            }
+            return match error.into_error() {
+                error if error.is_decode_resource_limit() => Status::DecodeResourceLimit,
+                norito::Error::SchemaMismatch => Status::SchemaMismatch,
+                norito::Error::NonCanonicalEncoding
+                | norito::Error::DecodeFlagsMismatch { .. }
+                | norito::Error::UnsupportedCompression { .. } => Status::NonCanonical,
+                _ => Status::MalformedArchive,
+            };
+        }
     };
     if manifest.validate().is_err() {
         return Status::InvalidManifest;

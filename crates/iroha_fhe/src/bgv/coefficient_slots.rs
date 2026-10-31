@@ -5,7 +5,9 @@
 //! A shared inverse Vandermonde with coefficient `N^-1*beta_j^-k` places
 //! original coefficient `a[r+d*k]` in slot `k` of bank `r`. The forward map
 //! and existing normalized recomposition reverse this. No noise bound is divided.
-//! Every bank is processed and every public matrix coordinate is evaluated.
+//! Public transforms process every bank and public matrix coordinate. The private
+//! scalar-source bootstrap selection processes only bank zero, retaining the same
+//! geometric stride, inverse-N matrix and arithmetic executor.
 //!
 //! The private bank owner records this actual transform origin, conditional on
 //! ordinary ciphertext/key correctness. It authenticates no input, does not
@@ -24,7 +26,9 @@ use super::{
     RelativeTraceError, RelativeTraceRecompositionPlan, SlotEncoding, SlotLinearBudget,
     SlotLinearError, SlotLinearMap, SlotLinearPlan, SwitchingKeyKind,
     cost::CostModel,
-    relative_trace::{self, BankRetention, CoefficientTraceCursor, CoefficientTracePlan},
+    relative_trace::{
+        self, BankRetention, CoefficientBankSelection, CoefficientTraceCursor, CoefficientTracePlan,
+    },
 };
 
 /// Explicit payload ceilings for one prepared transform direction.
@@ -65,7 +69,7 @@ pub struct CoefficientSlotOperations {
     pub ciphertext_additions: usize,
     /// Key-switched Galois applications.
     pub galois_applications: usize,
-    /// Shared CostModel units; excludes additions, clearing and allocation.
+    /// Shared `CostModel` units; excludes additions, clearing and allocation.
     pub arithmetic_units: u64,
 }
 
@@ -113,8 +117,8 @@ pub enum CoefficientSlotError {
 /// Decomposition initializes bank `r`, slot `j` with original coefficient
 /// `a[r+(N/S)*j]`. The concrete upper-digit executor preserves that coordinate
 /// order while replacing each value and its effective precision. Only the actual
-/// complete decomposition and its concrete upper-digit executor construct this
-/// non-Clone owner; no ciphertext-vector,
+/// decomposition with its fixed bank selection and concrete upper-digit executor
+/// construct this non-Clone owner; no ciphertext-vector,
 /// byte-frame or claimed-shape constructor exists. Borrowed ciphertext access
 /// does not provide a way to construct another owner. Residues clear on drop.
 /// This structural origin is conditional on ordinary ciphertext/key correctness,
@@ -123,6 +127,8 @@ pub struct CoefficientSlotBanks {
     values: Vec<Ciphertext>,
     shape: CiphertextShape,
     slots: usize,
+    banks: usize,
+    selection: CoefficientBankSelection,
 }
 
 impl fmt::Debug for CoefficientSlotBanks {
@@ -148,7 +154,8 @@ impl CoefficientSlotBanks {
                 value: input,
                 ordinal,
                 slots: self.slots,
-                banks,
+                banks: self.banks,
+                selection: self.selection,
             };
             values.push(bank.upper(profile, plan, key)?.value);
         }
@@ -156,10 +163,20 @@ impl CoefficientSlotBanks {
             values,
             shape: plan.output_shape().clone(),
             slots: self.slots,
+            banks: self.banks,
+            selection: self.selection,
         })
     }
 
-    /// Borrow every bank in fixed original residue-class order.
+    pub(super) const fn geometry_banks(&self) -> usize {
+        self.banks
+    }
+
+    pub(super) const fn selection(&self) -> CoefficientBankSelection {
+        self.selection
+    }
+
+    /// Borrow every selected bank in fixed original residue-class order.
     #[must_use]
     pub fn banks(&self) -> &[Ciphertext] {
         &self.values
@@ -225,7 +242,7 @@ impl Matrix {
                     (1, fixed.power(encoding.root(), 2 * row as u64 + 1))
                 };
             for to in &mut values[..slots] {
-                *to = coefficient as u32; // Validated p^k < 2^31.
+                *to = u32::try_from(coefficient).map_err(|_| SlotLinearError::GeometryOverflow)?; // Validated p^k < 2^31.
                 coefficient = fixed.multiply(coefficient, factor);
             }
             // The final bias remains the initializer's canonical zero.
@@ -276,6 +293,7 @@ fn trace_budget(
     banks: usize,
     budget: CoefficientSlotBudget,
     retention: BankRetention,
+    selection: CoefficientBankSelection,
 ) -> Result<RelativeTraceBudget, CoefficientSlotError> {
     let one = usize::try_from(CostModel::new(profile).ciphertext_residue_bytes(shape.level(), 2)?)
         .map_err(|_| CoefficientSlotError::SizeOverflow)?;
@@ -286,11 +304,12 @@ fn trace_budget(
             budget: budget.trace_plaintext_bytes,
         });
     }
-    // Streaming admits the bounded DFS frontier rather than an unallocated d bank set.
-    let retained = if retention == BankRetention::Collected {
-        banks
-    } else {
-        banks.ilog2() as usize
+    // All-mode streaming admits the bounded DFS frontier. Zero has no pending
+    // siblings; current/image/even are its complete three-ciphertext trace peak.
+    let retained = match (selection, retention) {
+        (CoefficientBankSelection::Zero, _) => 0,
+        (CoefficientBankSelection::All, BankRetention::Collected) => banks,
+        (CoefficientBankSelection::All, BankRetention::Streaming) => banks.ilog2() as usize,
     };
     let trace_peak = checked_mul(
         retained
@@ -307,14 +326,15 @@ fn trace_budget(
     Ok(RelativeTraceBudget {
         output_residue_bytes: checked_mul(
             if retention == BankRetention::Collected {
-                banks
+                selection.count(banks)
             } else {
                 1
             },
             one,
         )?,
         scratch_residue_bytes: checked_mul(
-            if retention == BankRetention::Collected {
+            if selection == CoefficientBankSelection::Zero || retention == BankRetention::Collected
+            {
                 2
             } else {
                 banks.ilog2() as usize + 2
@@ -331,15 +351,16 @@ fn payload(
     banks: usize,
     budget: CoefficientSlotBudget,
     retention: BankRetention,
+    selection: CoefficientBankSelection,
 ) -> Result<CoefficientSlotPayload, CoefficientSlotError> {
     let one = usize::try_from(
         CostModel::new(profile).ciphertext_residue_bytes(route.output_shapes()[0].level(), 2)?,
     )
     .map_err(|_| CoefficientSlotError::SizeOverflow)?;
-    let retained = if retention == BankRetention::Collected {
-        banks
-    } else {
-        banks.ilog2() as usize
+    let retained = match (selection, retention) {
+        (CoefficientBankSelection::Zero, _) => 0,
+        (CoefficientBankSelection::All, BankRetention::Collected) => banks,
+        (CoefficientBankSelection::All, BankRetention::Streaming) => banks.ilog2() as usize,
     };
     let trace = checked_mul(
         retained
@@ -349,11 +370,15 @@ fn payload(
     )?;
     let routing = checked_mul(
         retained
-            .checked_add(if retention == BankRetention::Collected {
-                1
-            } else {
-                2
-            })
+            .checked_add(
+                if selection == CoefficientBankSelection::All
+                    && retention == BankRetention::Collected
+                {
+                    1
+                } else {
+                    2
+                },
+            )
             .ok_or(CoefficientSlotError::SizeOverflow)?,
         one,
     )?
@@ -467,7 +492,13 @@ impl CoefficientSlotDecomposition {
         input: &CiphertextShape,
         budget: CoefficientSlotBudget,
     ) -> Result<Self, CoefficientSlotError> {
-        Self::prepare(profile, input, budget, BankRetention::Collected)
+        Self::prepare(
+            profile,
+            input,
+            budget,
+            BankRetention::Collected,
+            CoefficientBankSelection::All,
+        )
     }
 
     pub(super) fn prepare(
@@ -475,6 +506,7 @@ impl CoefficientSlotDecomposition {
         input: &CiphertextShape,
         budget: CoefficientSlotBudget,
         retention: BankRetention,
+        selection: CoefficientBankSelection,
     ) -> Result<Self, CoefficientSlotError> {
         input.check_profile(profile)?;
         let encoding = SlotEncoding::new(profile, input.plaintext_precision())?;
@@ -482,12 +514,13 @@ impl CoefficientSlotDecomposition {
         let trace = CoefficientTracePlan::new(
             profile,
             input,
-            trace_budget(profile, input, banks, budget, retention)?,
+            trace_budget(profile, input, banks, budget, retention, selection)?,
             retention,
+            selection,
         )?;
         let route = SlotLinearPlan::new(profile, &[trace.output_shape().clone()], budget.routing)?;
-        let payload = payload(profile, &route, banks, budget, retention)?;
-        let operations = operations(profile, &route, banks, trace.operations())?;
+        let payload = payload(profile, &route, banks, budget, retention, selection)?;
+        let operations = operations(profile, &route, selection.count(banks), trace.operations())?;
         let keys = key_union(trace.galois_elements(), route.galois_elements())?;
         let matrix = Matrix::prepare(
             profile,
@@ -516,7 +549,13 @@ impl CoefficientSlotDecomposition {
     pub fn galois_elements(&self) -> &[u32] {
         &self.keys
     }
-    /// Number of returned banks; every original coefficient is represented.
+    pub(super) const fn selection(&self) -> CoefficientBankSelection {
+        self.trace.selection()
+    }
+    pub(super) const fn selected_banks(&self) -> usize {
+        self.trace.selected_banks()
+    }
+    /// Geometric bank count `N/S`; the public constructor selects every bank.
     #[must_use]
     pub fn banks(&self) -> usize {
         self.trace.banks()
@@ -562,7 +601,7 @@ impl CoefficientSlotDecomposition {
         check_keys(profile, keys, &self.keys)?;
         let mut values = Vec::new();
         values
-            .try_reserve_exact(self.banks())
+            .try_reserve_exact(self.selected_banks())
             .map_err(|_| CoefficientSlotError::Allocation)?;
         let mut cursor = self.start(profile, input, keys)?;
         while let Some((bank, rest)) = cursor.advance(profile, keys)? {
@@ -574,6 +613,8 @@ impl CoefficientSlotDecomposition {
             values,
             shape: self.output_shape().clone(),
             slots: self.slots(),
+            banks: self.banks(),
+            selection: self.selection(),
         })
     }
 }
@@ -584,6 +625,7 @@ pub struct CoefficientSlotRecomposition {
     input: CiphertextShape,
     slots: usize,
     banks: usize,
+    selection: CoefficientBankSelection,
     matrix: Matrix,
     trace: RelativeTraceRecompositionPlan,
     payload: CoefficientSlotPayload,
@@ -612,7 +654,13 @@ impl CoefficientSlotRecomposition {
         input: &CiphertextShape,
         budget: CoefficientSlotBudget,
     ) -> Result<Self, CoefficientSlotError> {
-        Self::prepare(profile, input, budget, BankRetention::Collected)
+        Self::prepare(
+            profile,
+            input,
+            budget,
+            BankRetention::Collected,
+            CoefficientBankSelection::All,
+        )
     }
 
     pub(super) fn prepare(
@@ -620,21 +668,23 @@ impl CoefficientSlotRecomposition {
         input: &CiphertextShape,
         budget: CoefficientSlotBudget,
         retention: BankRetention,
+        selection: CoefficientBankSelection,
     ) -> Result<Self, CoefficientSlotError> {
         input.check_profile(profile)?;
         let encoding = SlotEncoding::new(profile, input.plaintext_precision())?;
         let slots = encoding.slots();
         let banks = profile.degree() / slots;
-        let trace_budget = trace_budget(profile, input, banks, budget, retention)?;
-        let route = SlotLinearPlan::new(profile, &[input.clone()], budget.routing)?;
-        let payload = payload(profile, &route, banks, budget, retention)?;
+        let trace_budget = trace_budget(profile, input, banks, budget, retention, selection)?;
+        let route = SlotLinearPlan::new(profile, core::array::from_ref(input), budget.routing)?;
+        let payload = payload(profile, &route, banks, budget, retention, selection)?;
         let mut shapes = Vec::new();
         shapes
-            .try_reserve_exact(banks)
+            .try_reserve_exact(selection.count(banks))
             .map_err(|_| CoefficientSlotError::Allocation)?;
-        shapes.resize(banks, route.output_shapes()[0].clone());
-        let trace = RelativeTraceRecompositionPlan::new(profile, &shapes, trace_budget)?;
-        let operations = operations(profile, &route, banks, trace.operations())?;
+        shapes.resize(selection.count(banks), route.output_shapes()[0].clone());
+        let trace =
+            RelativeTraceRecompositionPlan::prepare(profile, &shapes, trace_budget, selection)?;
+        let operations = operations(profile, &route, selection.count(banks), trace.operations())?;
         let matrix = Matrix::prepare(
             profile,
             route,
@@ -645,6 +695,7 @@ impl CoefficientSlotRecomposition {
             input: input.clone(),
             slots,
             banks,
+            selection,
             matrix,
             trace,
             payload,
@@ -653,6 +704,12 @@ impl CoefficientSlotRecomposition {
         })
     }
 
+    pub(super) const fn selection(&self) -> CoefficientBankSelection {
+        self.selection
+    }
+    pub(super) const fn selected_banks(&self) -> usize {
+        self.selection.count(self.banks)
+    }
     /// Exact public shape of the recomposed full-ring ciphertext.
     #[must_use]
     pub fn output_shape(&self) -> &CiphertextShape {
@@ -692,7 +749,9 @@ impl CoefficientSlotRecomposition {
         }
         self.input.check_profile(profile)?;
         if input.slots != self.slots
-            || input.values.len() != self.banks
+            || input.banks != self.banks
+            || input.selection != self.selection
+            || input.values.len() != self.selected_banks()
             || input.shape != self.input
         {
             return Err(CoefficientSlotError::InputShape);
@@ -717,6 +776,7 @@ pub(super) struct CoefficientSlotBank {
     ordinal: usize,
     slots: usize,
     banks: usize,
+    selection: CoefficientBankSelection,
 }
 impl CoefficientSlotBank {
     #[cfg(test)]
@@ -737,13 +797,21 @@ impl CoefficientSlotBank {
         plan: &super::upper_digits::EncryptedUpperDigitsPlan,
         key: &super::SwitchingKey,
     ) -> Result<Self, super::upper_digits::UpperDigitsError> {
-        plan.preflight_bank(profile, &self.value.shape(), self.slots, self.banks, key)?;
+        plan.preflight_bank(
+            profile,
+            &self.value.shape(),
+            self.slots,
+            self.banks,
+            self.selection,
+            key,
+        )?;
         let value = plan.execute_bank(profile, self.value, key)?;
         Ok(Self {
             value,
             ordinal: self.ordinal,
             slots: self.slots,
             banks: self.banks,
+            selection: self.selection,
         })
     }
 }
@@ -784,6 +852,7 @@ impl CoefficientSlotCursor<'_> {
                     plan.trace.output_shape(),
                     plan.slots(),
                     plan.banks(),
+                    plan.selection(),
                 )?;
                 let value = plan.matrix.move_one(profile, input, keys)?;
                 if value.shape() != *plan.output_shape() {
@@ -795,6 +864,7 @@ impl CoefficientSlotCursor<'_> {
                         ordinal,
                         slots: plan.slots(),
                         banks: plan.banks(),
+                        selection: plan.selection(),
                     },
                     Self { plan, trace },
                 )))
@@ -830,14 +900,13 @@ impl CoefficientSlotAccumulator<'_> {
         bank: CoefficientSlotBank,
         keys: &EvaluationKeys,
     ) -> Result<Self, CoefficientSlotError> {
-        let bits = self.plan.banks.ilog2();
-        let ordinal = if bits == 0 {
-            0
-        } else {
-            self.completed.reverse_bits() >> (usize::BITS - bits)
-        };
+        let ordinal = self
+            .plan
+            .selection
+            .expected_ordinal(self.completed, self.plan.banks)
+            .ok_or(CoefficientSlotError::InputShape)?;
         bank.value.check_profile(profile)?;
-        if self.completed >= self.plan.banks
+        if bank.selection != self.plan.selection
             || bank.ordinal != ordinal
             || bank.slots != self.plan.slots
             || bank.banks != self.plan.banks
@@ -857,7 +926,7 @@ impl CoefficientSlotAccumulator<'_> {
         Ok(self)
     }
     pub(super) fn finish(self) -> Result<Ciphertext, CoefficientSlotError> {
-        if self.completed != self.plan.banks {
+        if self.completed != self.plan.selected_banks() {
             return Err(CoefficientSlotError::InputShape);
         }
         let value = self.value.ok_or(CoefficientSlotError::InputShape)?;
@@ -873,6 +942,7 @@ impl CoefficientSlotAccumulator<'_> {
 pub(super) fn stream_metadata_bytes(
     profile: &BgvProfile,
     banks: usize,
+    selection: CoefficientBankSelection,
 ) -> Result<usize, CoefficientSlotError> {
     if banks == 0 || !banks.is_power_of_two() {
         return Err(CoefficientSlotError::InputShape);
@@ -898,7 +968,7 @@ pub(super) fn stream_metadata_bytes(
         )?,
     )?;
     add(
-        relative_trace::cursor_metadata_bytes(profile, banks)?,
+        relative_trace::cursor_metadata_bytes(profile, banks, selection)?,
         add(temporaries, wrappers)?,
     )
 }
@@ -938,9 +1008,7 @@ mod tests {
         }
         FAULT.with(|x| x.set((usize::MAX, 0)));
         CLEAR_AT_FAULT.with(|x| x.set(poly::tests::cleared_words()));
-        if mode == 2 {
-            panic!("coefficient bank unwind control");
-        }
+        assert_ne!(mode, 2, "coefficient bank unwind control");
         Err(BgvError::Kernel.into())
     }
 
@@ -993,20 +1061,20 @@ mod tests {
         let x = x % m;
         if x.sign() == Sign::Minus { x + m } else { x }
     }
-    fn inverse(x: &BigInt, m: &BigInt) -> BigInt {
-        let (mut a, mut b) = (x.clone(), m.clone());
-        let (mut u, mut v) = (BigInt::from(1), BigInt::from(0));
-        while b != BigInt::from(0) {
-            let q = &a / &b;
-            let r = &a - &q * &b;
-            a = b;
-            b = r;
-            let w = &u - &q * &v;
-            u = v;
-            v = w;
+    fn inverse(value: &BigInt, modulus: &BigInt) -> BigInt {
+        let (mut old_remainder, mut remainder) = (value.clone(), modulus.clone());
+        let (mut old_weight, mut weight) = (BigInt::from(1), BigInt::from(0));
+        while remainder != BigInt::from(0) {
+            let quotient = &old_remainder / &remainder;
+            let reduced = &old_remainder - &quotient * &remainder;
+            old_remainder = remainder;
+            remainder = reduced;
+            let updated_weight = &old_weight - &quotient * &weight;
+            old_weight = weight;
+            weight = updated_weight;
         }
-        assert_eq!(a, BigInt::from(1));
-        rem(u, m)
+        assert_eq!(old_remainder, BigInt::from(1));
+        rem(old_weight, modulus)
     }
     fn integer(v: &Natural) -> BigInt {
         v.words_le()
@@ -1018,9 +1086,11 @@ mod tests {
         let mut out = 1;
         while exponent > 0 {
             if exponent & 1 != 0 {
-                out = (u128::from(out) * u128::from(base) % u128::from(modulus)) as u64;
+                out = u64::try_from(u128::from(out) * u128::from(base) % u128::from(modulus))
+                    .expect("residue below u64 modulus");
             }
-            base = (u128::from(base) * u128::from(base) % u128::from(modulus)) as u64;
+            base = u64::try_from(u128::from(base) * u128::from(base) % u128::from(modulus))
+                .expect("residue below u64 modulus");
             exponent >>= 1;
         }
         out
@@ -1047,7 +1117,8 @@ mod tests {
                     % u128::from(modulus);
             }
             out[k * encoding.stride()] =
-                (coefficient * u128::from(inverse_slots) % u128::from(modulus)) as u64;
+                u64::try_from(coefficient * u128::from(inverse_slots) % u128::from(modulus))
+                    .expect("residue below u64 modulus");
         }
         out
     }
@@ -1185,6 +1256,7 @@ mod tests {
                             d,
                             budget(),
                             BankRetention::Collected,
+                            CoefficientBankSelection::All,
                         )
                         .unwrap(),
                     )
@@ -1251,22 +1323,22 @@ mod tests {
         let recomposition =
             CoefficientSlotRecomposition::new(&profile, decomposition.output_shape(), budget())
                 .unwrap();
-        let n = profile.degree();
-        let s = decomposition.slots();
-        let d = decomposition.banks();
-        let t = precision.modulus();
+        let degree = profile.degree();
+        let slots = decomposition.slots();
+        let banks = decomposition.banks();
+        let modulus = precision.modulus();
         let key = profile.key_switch_noise(input.level()).unwrap();
         let trace = input
             .bound()
-            .mul_u64(d as u64)
-            .add(&key.mul_u64((d - 1) as u64));
+            .mul_u64(banks as u64)
+            .add(&key.mul_u64((banks - 1) as u64));
         assert_eq!(decomposition.trace.output_shape().bound(), &trace);
-        let expected_route = |v: &Natural, route: &SlotLinearPlan<1, 1>| {
-            let l = (s as u64) * (t - 1) / 2;
-            Natural::from_u64((t - 1) / 2)
-                .add(&v.mul_u64((s as u64) * l))
+        let expected_route = |input_bound: &Natural, route: &SlotLinearPlan<1, 1>| {
+            let mask_norm = (slots as u64) * (modulus - 1) / 2;
+            Natural::from_u64((modulus - 1) / 2)
+                .add(&input_bound.mul_u64((slots as u64) * mask_norm))
                 .add(&key.mul_u64(
-                    (s as u64) * u64::from(route.baby_count().ilog2()) / 2 * l
+                    (slots as u64) * u64::from(route.baby_count().ilog2()) / 2 * mask_norm
                         + (route.giant_count() - 1) as u64,
                 ))
         };
@@ -1275,7 +1347,7 @@ mod tests {
         let restored = expected_route(&coefficient, &recomposition.matrix.plan);
         assert_eq!(
             recomposition.output_shape().bound(),
-            &restored.mul_u64(d as u64)
+            &restored.mul_u64(banks as u64)
         );
         for (extract, route, payload, ops) in [
             (
@@ -1291,22 +1363,28 @@ mod tests {
                 recomposition.operations(),
             ),
         ] {
-            let b = route.baby_count();
-            let g = route.giant_count();
-            let c = 16 * n * (input.level() + 1);
-            let r = b + g.ilog2() as usize + 3;
-            assert_eq!(payload.owned_residue_bytes, (d + 3).max(d + 1 + r) * c);
-            assert_eq!(payload.routing.coefficient_bytes, 4 * (s * s + s));
-            assert_eq!(payload.routing.preparation_scratch_bytes, 4 * (s + 1));
-            assert_eq!(payload.trace_plaintext_bytes, 8 * n);
-            assert_eq!(ops.plaintext_products, d * (s + 1));
+            let babies = route.baby_count();
+            let giants = route.giant_count();
+            let ciphertext_bytes = 16 * degree * (input.level() + 1);
+            let route_live = babies + giants.ilog2() as usize + 3;
+            assert_eq!(
+                payload.owned_residue_bytes,
+                (banks + 3).max(banks + 1 + route_live) * ciphertext_bytes
+            );
+            assert_eq!(
+                payload.routing.coefficient_bytes,
+                4 * (slots * slots + slots)
+            );
+            assert_eq!(payload.routing.preparation_scratch_bytes, 4 * (slots + 1));
+            assert_eq!(payload.trace_plaintext_bytes, 8 * degree);
+            assert_eq!(ops.plaintext_products, banks * (slots + 1));
             assert_eq!(
                 ops.ciphertext_additions,
-                d * s + (d - 1) * if extract { 2 } else { 1 }
+                banks * slots + (banks - 1) * if extract { 2 } else { 1 }
             );
             assert_eq!(
                 ops.galois_applications,
-                d * (b + g - 2) + if extract { d - 1 } else { 0 }
+                banks * (babies + giants - 2) + if extract { banks - 1 } else { 0 }
             );
             assert!(ops.arithmetic_units > 0);
         }
@@ -1572,6 +1650,7 @@ mod tests {
             &shape,
             budget(),
             BankRetention::Streaming,
+            CoefficientBankSelection::All,
         )
         .unwrap();
         let reverse = CoefficientSlotRecomposition::prepare(
@@ -1579,6 +1658,7 @@ mod tests {
             plan.output_shape(),
             budget(),
             BankRetention::Streaming,
+            CoefficientBankSelection::All,
         )
         .unwrap();
         let keys = keys(&profile, plan.galois_elements());
@@ -1648,6 +1728,420 @@ mod tests {
                     owners * 2 * profile.degree() * (profile.top_level() + 1)
                 );
             }
+        }
+        reset();
+    }
+
+    #[test]
+    fn selected_coefficient_bank_preserves_geometry_and_exact_projected_plaintext() {
+        for (log_n, p, e) in [(4, 257, 3), (8, 257, 3), (4, 5, 3)] {
+            let profile = make_profile(log_n, p, e);
+            let precision = profile.master_plaintext();
+            let shape = profile.plan_fresh(precision).unwrap();
+            let full = CoefficientSlotDecomposition::new(&profile, &shape, budget()).unwrap();
+            let keys = keys(&profile, full.galois_elements());
+            for retention in [BankRetention::Collected, BankRetention::Streaming] {
+                let selected = CoefficientSlotDecomposition::prepare(
+                    &profile,
+                    &shape,
+                    budget(),
+                    retention,
+                    CoefficientBankSelection::Zero,
+                )
+                .unwrap();
+                let reverse = CoefficientSlotRecomposition::prepare(
+                    &profile,
+                    selected.output_shape(),
+                    budget(),
+                    retention,
+                    CoefficientBankSelection::Zero,
+                )
+                .unwrap();
+                let d = full.banks();
+                assert_eq!(selected.banks(), d);
+                assert_eq!(reverse.banks, d);
+                assert_eq!(selected.selected_banks(), 1);
+                assert_eq!(reverse.selected_banks(), 1);
+                assert_eq!(selected.selection(), CoefficientBankSelection::Zero);
+                assert_eq!(reverse.selection(), CoefficientBankSelection::Zero);
+                assert_eq!(selected.slots() * d, profile.degree());
+                assert_eq!(
+                    selected.operations(),
+                    operations(
+                        &profile,
+                        &selected.matrix.plan,
+                        1,
+                        selected.trace.operations()
+                    )
+                    .unwrap()
+                );
+                assert_eq!(
+                    reverse.operations(),
+                    operations(
+                        &profile,
+                        &reverse.matrix.plan,
+                        1,
+                        reverse.trace.operations()
+                    )
+                    .unwrap()
+                );
+                assert_eq!(reverse.trace.operations().plaintext_products, 1);
+                assert_eq!(reverse.trace.operations().ciphertext_additions, 0);
+                let encoding = SlotEncoding::new(&profile, precision).unwrap();
+                let one = 2 * profile.degree() * (shape.level() + 1) * size_of::<u64>();
+                let minimum_scratch = (encoding.slots().ilog2() as usize + 4) * one;
+                // A fresh public planner may select a different BSGS split when
+                // its ceiling shrinks. Admit the true minimum, then retain both
+                // schedules' complete encrypted phase assertions below.
+                let mut compact_budget = exact_budget(selected.payload());
+                compact_budget.routing.scratch_residue_bytes = minimum_scratch;
+                let compact = CoefficientSlotDecomposition::prepare(
+                    &profile,
+                    &shape,
+                    compact_budget,
+                    retention,
+                    CoefficientBankSelection::Zero,
+                )
+                .unwrap();
+                let mut compact_reverse_budget = budget();
+                compact_reverse_budget.routing.scratch_residue_bytes = minimum_scratch;
+                let compact_reverse = CoefficientSlotRecomposition::prepare(
+                    &profile,
+                    compact.output_shape(),
+                    compact_reverse_budget,
+                    retention,
+                    CoefficientBankSelection::Zero,
+                )
+                .unwrap();
+                let expected_babies = if encoding.slots() > 2 { 2 } else { 1 };
+                for (normal, compact) in [
+                    (&selected.matrix.plan, &compact.matrix.plan),
+                    (&reverse.matrix.plan, &compact_reverse.matrix.plan),
+                ] {
+                    assert_eq!(compact.scratch_residue_bytes(), minimum_scratch);
+                    assert_eq!(compact.baby_count(), expected_babies);
+                    assert_eq!(compact.giant_count(), encoding.slots() / expected_babies);
+                    assert_eq!(
+                        compact.galois_applications(),
+                        expected_babies + encoding.slots() / expected_babies - 2
+                    );
+                    if encoding.slots() > 2 {
+                        assert!(compact.scratch_residue_bytes() < normal.scratch_residue_bytes());
+                        assert!(compact.galois_applications() > normal.galois_applications());
+                    }
+                }
+                for (selected, reverse) in [(&selected, &reverse), (&compact, &compact_reverse)] {
+                    for sparse in [false, true] {
+                        let values: Vec<_> = (0..profile.degree())
+                            .map(|i| {
+                                if sparse && i % d != 0 {
+                                    0
+                                } else {
+                                    (i as u64 * 137 + 3) % precision.modulus()
+                                }
+                            })
+                            .collect();
+                        let expected: Vec<_> = values
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &v)| if i % d == 0 { v } else { 0 })
+                            .collect();
+                        let input = encrypt(&profile, precision, &keys, values.clone());
+                        let full_banks = full
+                            .evaluate(&profile, input.clone(), &keys.evaluation)
+                            .unwrap();
+                        let coefficient_values: Vec<_> =
+                            values.iter().step_by(d).copied().collect();
+                        let expected_coefficients =
+                            expected_encoded(&encoding, &coefficient_values, profile.degree());
+                        let result = if retention == BankRetention::Collected {
+                            let banks = selected
+                                .evaluate(&profile, input, &keys.evaluation)
+                                .unwrap();
+                            assert_eq!(banks.banks().len(), 1);
+                            assert_eq!(banks.geometry_banks(), d);
+                            assert_eq!(banks.selection(), CoefficientBankSelection::Zero);
+                            check_phase(
+                                &profile,
+                                &keys.secret,
+                                &banks.banks()[0],
+                                &expected_coefficients,
+                            );
+                            assert_eq!(
+                                keys.secret.decrypt(&profile, &banks.banks()[0]).unwrap(),
+                                keys.secret
+                                    .decrypt(&profile, &full_banks.banks()[0])
+                                    .unwrap()
+                            );
+                            reverse.evaluate(&profile, banks, &keys.evaluation).unwrap()
+                        } else {
+                            let (bank, rest) = selected
+                                .start(&profile, input, &keys.evaluation)
+                                .unwrap()
+                                .advance(&profile, &keys.evaluation)
+                                .unwrap()
+                                .unwrap();
+                            check_phase(
+                                &profile,
+                                &keys.secret,
+                                &bank.value,
+                                &expected_coefficients,
+                            );
+                            assert_eq!(bank.ordinal(), 0);
+                            assert_eq!(bank.banks(), d);
+                            assert!(rest.advance(&profile, &keys.evaluation).unwrap().is_none());
+                            reverse
+                                .start_accumulator(&profile, &keys.evaluation)
+                                .unwrap()
+                                .push(&profile, bank, &keys.evaluation)
+                                .unwrap()
+                                .finish()
+                                .unwrap()
+                        };
+                        check_phase(&profile, &keys.secret, &result, &expected);
+                        if sparse {
+                            assert_eq!(expected, values);
+                        } else if d > 1 {
+                            assert_ne!(expected, values);
+                        }
+                    }
+                }
+                let exact = exact_budget(selected.payload());
+                CoefficientSlotDecomposition::prepare(
+                    &profile,
+                    &shape,
+                    exact,
+                    retention,
+                    CoefficientBankSelection::Zero,
+                )
+                .unwrap();
+                for resource in 0..7 {
+                    let mut low = exact;
+                    let cap = match resource {
+                        0 => &mut low.routing.coefficient_bytes,
+                        1 => &mut low.routing.layout_metadata_bytes,
+                        2 => &mut low.routing.preparation_scratch_bytes,
+                        3 => &mut low.routing.output_residue_bytes,
+                        4 => {
+                            // One below the chosen layout can admit a different
+                            // split; one below the proven global minimum cannot.
+                            low.routing.scratch_residue_bytes = minimum_scratch;
+                            &mut low.routing.scratch_residue_bytes
+                        }
+                        5 => &mut low.owned_residue_bytes,
+                        _ => &mut low.trace_plaintext_bytes,
+                    };
+                    assert!(*cap > 0);
+                    *cap -= 1;
+                    assert!(
+                        CoefficientSlotDecomposition::prepare(
+                            &profile,
+                            &shape,
+                            low,
+                            retention,
+                            CoefficientBankSelection::Zero
+                        )
+                        .is_err(),
+                        "N={}, resource={resource}, minimum_scratch={minimum_scratch}",
+                        profile.degree()
+                    );
+                }
+                let exact = exact_budget(reverse.payload());
+                CoefficientSlotRecomposition::prepare(
+                    &profile,
+                    selected.output_shape(),
+                    exact,
+                    retention,
+                    CoefficientBankSelection::Zero,
+                )
+                .unwrap();
+                for resource in 0..7 {
+                    let mut low = exact;
+                    let cap = match resource {
+                        0 => &mut low.routing.coefficient_bytes,
+                        1 => &mut low.routing.layout_metadata_bytes,
+                        2 => &mut low.routing.preparation_scratch_bytes,
+                        3 => &mut low.routing.output_residue_bytes,
+                        4 => {
+                            // One below the chosen layout can admit a different
+                            // split; one below the proven global minimum cannot.
+                            low.routing.scratch_residue_bytes = minimum_scratch;
+                            &mut low.routing.scratch_residue_bytes
+                        }
+                        5 => &mut low.owned_residue_bytes,
+                        _ => &mut low.trace_plaintext_bytes,
+                    };
+                    assert!(*cap > 0);
+                    *cap -= 1;
+                    assert!(
+                        CoefficientSlotRecomposition::prepare(
+                            &profile,
+                            selected.output_shape(),
+                            low,
+                            retention,
+                            CoefficientBankSelection::Zero
+                        )
+                        .is_err(),
+                        "N={}, resource={resource}, minimum_scratch={minimum_scratch}",
+                        profile.degree()
+                    );
+                }
+            }
+        }
+        reset();
+    }
+
+    #[test]
+    fn selected_bank_accumulator_requires_matching_origin_and_exact_completion() {
+        let profile = make_profile(4, 5, 3);
+        let precision = profile.master_plaintext();
+        let shape = profile.plan_fresh(precision).unwrap();
+        let selected = CoefficientSlotDecomposition::prepare(
+            &profile,
+            &shape,
+            budget(),
+            BankRetention::Streaming,
+            CoefficientBankSelection::Zero,
+        )
+        .unwrap();
+        let reverse = CoefficientSlotRecomposition::prepare(
+            &profile,
+            selected.output_shape(),
+            budget(),
+            BankRetention::Streaming,
+            CoefficientBankSelection::Zero,
+        )
+        .unwrap();
+        let keys = keys(&profile, selected.galois_elements());
+        assert!(
+            reverse
+                .start_accumulator(&profile, &keys.evaluation)
+                .unwrap()
+                .finish()
+                .is_err()
+        );
+        for defect in 0..5 {
+            let input = encrypt(&profile, precision, &keys, vec![3; profile.degree()]);
+            let (mut bank, rest) = selected
+                .start(&profile, input, &keys.evaluation)
+                .unwrap()
+                .advance(&profile, &keys.evaluation)
+                .unwrap()
+                .unwrap();
+            match defect {
+                0 => bank.ordinal = 1,
+                1 => bank.selection = CoefficientBankSelection::All,
+                2 => bank.banks = 1,
+                3 => bank.slots += 1,
+                _ => bank.value = profile.switch_down(&bank.value).unwrap(),
+            }
+            let accumulator = reverse
+                .start_accumulator(&profile, &keys.evaluation)
+                .unwrap();
+            reset();
+            assert!(matches!(
+                accumulator.push(&profile, bank, &keys.evaluation),
+                Err(CoefficientSlotError::InputShape)
+            ));
+            assert_eq!(BANK_CALLS.get(), 0);
+            drop(rest);
+        }
+        let input = encrypt(&profile, precision, &keys, vec![3; profile.degree()]);
+        let take = || {
+            selected
+                .start(&profile, input.clone(), &keys.evaluation)
+                .unwrap()
+                .advance(&profile, &keys.evaluation)
+                .unwrap()
+                .unwrap()
+        };
+        let (bank, rest) = take();
+        drop(rest);
+        let accumulator = reverse
+            .start_accumulator(&profile, &keys.evaluation)
+            .unwrap()
+            .push(&profile, bank, &keys.evaluation)
+            .unwrap();
+        let (extra, rest) = take();
+        drop(rest);
+        reset();
+        assert!(matches!(
+            accumulator.push(&profile, extra, &keys.evaluation),
+            Err(CoefficientSlotError::InputShape)
+        ));
+        assert_eq!(BANK_CALLS.get(), 0);
+        for at in [1, 2] {
+            for mode in [1, 2] {
+                reset();
+                FAULT.set((at, mode));
+                let result = catch_unwind(AssertUnwindSafe(
+                    || -> Result<Ciphertext, CoefficientSlotError> {
+                        let (bank, rest) = selected
+                            .start(&profile, input.clone(), &keys.evaluation)?
+                            .advance(&profile, &keys.evaluation)?
+                            .ok_or(CoefficientSlotError::InputShape)?;
+                        drop(rest);
+                        reverse
+                            .start_accumulator(&profile, &keys.evaluation)?
+                            .push(&profile, bank, &keys.evaluation)?
+                            .finish()
+                    },
+                ));
+                assert!(if mode == 2 {
+                    result.is_err()
+                } else {
+                    matches!(result, Ok(Err(CoefficientSlotError::Bgv(BgvError::Kernel))))
+                });
+                assert_eq!(
+                    poly::tests::cleared_words() - CLEAR_AT_FAULT.get(),
+                    2 * profile.degree() * (shape.level() + 1)
+                );
+            }
+        }
+        reset();
+    }
+
+    #[test]
+    fn equal_single_bank_geometry_does_not_authorize_selection_conversion() {
+        let profile = make_profile(4, 257, 3);
+        let precision = profile.master_plaintext();
+        let shape = profile.plan_fresh(precision).unwrap();
+        let full = CoefficientSlotDecomposition::new(&profile, &shape, budget()).unwrap();
+        let zero = CoefficientSlotDecomposition::prepare(
+            &profile,
+            &shape,
+            budget(),
+            BankRetention::Collected,
+            CoefficientBankSelection::Zero,
+        )
+        .unwrap();
+        assert_eq!(full.banks(), 1);
+        assert_eq!(full.output_shape(), zero.output_shape());
+        let all_reverse =
+            CoefficientSlotRecomposition::new(&profile, full.output_shape(), budget()).unwrap();
+        let zero_reverse = CoefficientSlotRecomposition::prepare(
+            &profile,
+            zero.output_shape(),
+            budget(),
+            BankRetention::Collected,
+            CoefficientBankSelection::Zero,
+        )
+        .unwrap();
+        let keys = keys(&profile, full.galois_elements());
+        for (source, inverse) in [(&full, &zero_reverse), (&zero, &all_reverse)] {
+            let input = encrypt(&profile, precision, &keys, vec![3; profile.degree()]);
+            let banks = source.evaluate(&profile, input, &keys.evaluation).unwrap();
+            let before = poly::tests::cleared_words();
+            reset();
+            assert!(matches!(
+                inverse.evaluate(&profile, banks, &keys.evaluation),
+                Err(CoefficientSlotError::InputShape)
+            ));
+            assert_eq!(BANK_CALLS.get(), 0);
+            assert_eq!(
+                poly::tests::cleared_words() - before,
+                2 * profile.degree() * (shape.level() + 1)
+            );
         }
         reset();
     }

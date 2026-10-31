@@ -38,11 +38,13 @@ impl<'a> ValidatedInstructions<'a> {
     /// Read the immutable admitted words in executable-relative address order.
     pub fn iter(self) -> impl ExactSizeIterator<Item = DecodedOp> + 'a {
         self.code
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
             .map(|(index, bytes)| DecodedOp {
                 pc: (index as u64) * 4,
-                inst: u32::from_le_bytes(bytes.try_into().expect("validated complete word")),
+                inst: u32::from_le_bytes(*bytes),
             })
     }
 }

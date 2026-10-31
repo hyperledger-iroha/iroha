@@ -1,0 +1,19 @@
+name: Format
+
+# Work lands on the integration branch by push, so pull request CI alone cannot keep it formatted.
+on:
+  push:
+    branches: [optimizations]
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
+        with:
+          cache: "false"
+          toolchain: 1.99.1
+          components: "rustfmt"
+      - name: Format
+        run: cargo fmt --all -- --check

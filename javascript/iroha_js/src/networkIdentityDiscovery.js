@@ -37,7 +37,7 @@ export async function discoverNetworkIdentity(torii, options = {}) {
   }
   const { signal } = options;
   const capabilities = await torii.getAccountCapabilities({ signal });
-  // The capabilities reader already enforces the exact V1 shape and u16 prefix.
+  // The capabilities reader already validates the required V1 fields and u16 prefix.
   const advertised = NetworkId.parse(capabilities.network_id);
   const networkPrefix = capabilities.network_prefix;
   const genesis = await torii.getBlock(1, { signal });

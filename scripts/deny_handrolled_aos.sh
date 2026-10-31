@@ -14,8 +14,8 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 
 if ! command -v rg >/dev/null 2>&1; then
-  echo "ripgrep (rg) not found; skipping AoS hand-rolled deny check" >&2
-  exit 0
+  echo "error: ripgrep (rg) is required; install it with brew install ripgrep, apt install ripgrep or cargo install ripgrep" >&2
+  exit 2
 fi
 
 # Build ripgrep exclude list

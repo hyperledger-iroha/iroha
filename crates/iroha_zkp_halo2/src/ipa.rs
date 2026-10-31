@@ -816,7 +816,9 @@ impl<B: IpaBackend> IpaProver<B> {
                 g_tmp.push(g_r[i].pow(x));
             }
             let g_new = g_tmp
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| pair[0].mul(pair[1]))
                 .collect::<Vec<_>>();
             for i in 0..half {
@@ -824,7 +826,9 @@ impl<B: IpaBackend> IpaProver<B> {
                 h_tmp.push(h_r[i].pow(x_inv));
             }
             let h_new = h_tmp
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| pair[0].mul(pair[1]))
                 .collect::<Vec<_>>();
             // Update Q: Q' = L^{x^2} · Q · R^{x^{-2}}

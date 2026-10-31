@@ -6,7 +6,7 @@ use iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1;
 
 fn commit_policy(world: &World, algorithm: Algorithm) {
     let policy = CryptoAdmissionPolicyV1::new(vec![algorithm]).unwrap();
-    let mut original = crate::state::parameter_cell_block_for_testing(&world)
+    let mut original = crate::state::parameter_cell_block_for_testing(world)
         .expect("funded original parameter-only fixture block");
     crate::state::set_parameter_cell_for_testing(
         &mut original,

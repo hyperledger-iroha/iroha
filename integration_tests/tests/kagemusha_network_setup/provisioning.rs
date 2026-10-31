@@ -17,21 +17,26 @@ use iroha_data_model::{
     transaction::FeePaymentIntent,
 };
 use iroha_model_base::peer::PeerId;
+#[cfg(unix)]
 use iroha_test_network::{
     DisposableBeaconProviderBinding, DisposableGenesisDkgOutput, Network, read_on_dedicated_thread,
     run_disposable_genesis_dkg,
 };
+#[cfg(unix)]
 use irohad::{
     IrohaRuntimeProviderBindingsV1,
     external_software_signer::encode_consensus_threshold_credential_bundle_v1,
 };
 use sha2::{Digest as _, Sha256};
+// Native DKG/private signer provisioning retains its existing Unix host boundary.
+// Exact-height and other source-only checks remain compiled on every host.
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
     num::NonZeroU64,
-    os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _},
     path::Path,
     time::{Duration, Instant},
 };
@@ -64,6 +69,7 @@ fn limits() -> NativeFinalityLimits {
     }
 }
 
+#[cfg(unix)]
 fn publish(root: &Path, name: &str, bytes: &[u8]) -> Result<()> {
     ensure!(
         !bytes.is_empty() && bytes.len() <= 64 << 20,
@@ -172,6 +178,7 @@ fn prefix(client: &Client, height: u64, deadline: Instant) -> Result<NativeFinal
     Ok(journal)
 }
 
+#[cfg(unix)]
 fn require_provider(
     provider: &NativeProviderManifest,
     validator: &PeerId,
@@ -211,6 +218,7 @@ pub(super) fn require_genesis_owner(expected: &PublicKey, owner: &KeyPair) -> Re
 
 /// Provision an already started exact-H1 network and retain its native private seat owners.
 /// No unrelated transaction may be submitted until this function returns at H5.
+#[cfg(unix)]
 pub(crate) fn provision(
     network: &Network,
     runtime: &Runtime,
@@ -420,6 +428,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn provider_binding_refuses_foreign_seat_or_inventory() {
         let validator = PeerId::new(key(1).public_key().clone());
         let handle = "software://iroha/global-beacon/disposable-validator-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";

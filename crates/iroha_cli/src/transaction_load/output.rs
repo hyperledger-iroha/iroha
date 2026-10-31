@@ -475,14 +475,23 @@ mod supported {
     include!("output/tests.rs");
 }
 
-#[cfg(not(all(
-    unix,
-    any(target_vendor = "apple", target_os = "linux", target_os = "android")
+#[cfg(any(windows, test))]
+#[path = "output/windows.rs"]
+mod native_windows;
+#[cfg(windows)]
+pub(super) use native_windows::{JournalOutput, RetainedLoadFile, TraceOutput, canonical_inputs};
+
+#[cfg(not(any(
+    windows,
+    all(
+        unix,
+        any(target_vendor = "apple", target_os = "linux", target_os = "android")
+    )
 )))]
 mod unsupported {
     use eyre::{Result, eyre};
     use std::{fs::File, path::Path};
-    // TODO: implement retained parent handles and atomic no-replace publication on Windows/other targets.
+    // TODO: implement retained parent handles and atomic no-replace publication on other targets.
     // No pathname reopen, overwrite, hard-link fallback or unsafe compatibility route is accepted.
     /// Raw file identities carried by the fail-closed retained load outputs.
     pub mod canonical_inputs {
@@ -539,8 +548,11 @@ mod unsupported {
         }
     }
 }
-#[cfg(not(all(
-    unix,
-    any(target_vendor = "apple", target_os = "linux", target_os = "android")
+#[cfg(not(any(
+    windows,
+    all(
+        unix,
+        any(target_vendor = "apple", target_os = "linux", target_os = "android")
+    )
 )))]
 pub(super) use unsupported::{JournalOutput, RetainedLoadFile, TraceOutput, canonical_inputs};

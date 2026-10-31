@@ -611,21 +611,21 @@ fn cbor_write_len(buffer: &mut Vec<u8>, major: u8, len: usize) {
     match value {
         0..=23 => buffer.push(base | u8::try_from(value).expect("length fits u8")),
         24..=0xFF => {
-            buffer.push(base | 24);
+            buffer.push(base | 0x18);
             buffer.push(u8::try_from(value).expect("length fits u8"));
         }
         0x100..=0xFFFF => {
-            buffer.push(base | 25);
+            buffer.push(base | 0x19);
             let truncated = u16::try_from(value).expect("length fits u16");
             buffer.extend_from_slice(&truncated.to_be_bytes());
         }
         0x1_0000..=0xFFFF_FFFF => {
-            buffer.push(base | 26);
+            buffer.push(base | 0x1a);
             let truncated = u32::try_from(value).expect("length fits u32");
             buffer.extend_from_slice(&truncated.to_be_bytes());
         }
         _ => {
-            buffer.push(base | 27);
+            buffer.push(base | 0x1b);
             buffer.extend_from_slice(&value.to_be_bytes());
         }
     }

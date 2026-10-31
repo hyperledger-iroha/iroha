@@ -34,6 +34,7 @@ fn validated_sha_context_preserves_all_residues_segments_and_row_refusals() {
                 .unwrap();
                 let mut residues = vec![F(91); expected.len()];
                 let allocation = (residues.as_ptr(), residues.capacity());
+                residues.clear();
                 evaluate_sha_batch_relation_with_context_v1(
                     &current,
                     &next,
@@ -46,7 +47,21 @@ fn validated_sha_context_preserves_all_residues_segments_and_row_refusals() {
                 .unwrap();
                 assert_eq!(residues, expected);
                 assert_eq!((residues.as_ptr(), residues.capacity()), allocation);
+                let mut streamed = FixedResidues::new();
+                evaluate_sha_batch_relation_with_context_v1(
+                    &current,
+                    &next,
+                    ShaBatchEvaluationChallengesV1::Bound(capability),
+                    segment,
+                    boundaries,
+                    &mut streamed,
+                    powers.row_v1(),
+                )
+                .unwrap();
+                assert_eq!(streamed.values(), expected);
+                assert_eq!(streamed.reserves, [155]);
                 if !full {
+                    residues.clear();
                     evaluate_sha_batch_local_with_bound_context_into_v1(
                         &current,
                         &next,
@@ -57,6 +72,17 @@ fn validated_sha_context_preserves_all_residues_segments_and_row_refusals() {
                     )
                     .unwrap();
                     assert_eq!(residues, expected);
+                    let mut streamed = FixedResidues::new();
+                    evaluate_sha_batch_local_with_bound_context_into_v1(
+                        &current,
+                        &next,
+                        capability,
+                        segment,
+                        &mut streamed,
+                        &powers,
+                    )
+                    .unwrap();
+                    assert_eq!(streamed.values(), expected);
                 }
             }
         }
@@ -267,6 +293,7 @@ fn validated_composition_context_cost_preserves_complete_air_outputs() {
                                         ));
                                     } else {
                                         if bound {
+                                            residues.clear();
                                             evaluate_sha_batch_local_with_bound_context_into_v1(
                                                 black_box(&sha),
                                                 &sha,
@@ -277,6 +304,7 @@ fn validated_composition_context_cost_preserves_complete_air_outputs() {
                                             )
                                             .unwrap();
                                         } else {
+                                            residues.clear();
                                             evaluate_sha_batch_local_with_powers_into_v1(
                                                 black_box(&sha),
                                                 &sha,

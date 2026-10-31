@@ -2,7 +2,7 @@
 #![cfg(target_family = "unix")]
 use eyre::{Result, WrapErr, ensure};
 use integration_tests::process::{process_timeout, status_with_timeout};
-use std::{path::PathBuf, process::Command};
+use std::path::PathBuf;
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -24,11 +24,11 @@ fn cbdc_rollout_fixture_passes_validator() -> Result<()> {
         "fixture bundle directory missing at {}",
         bundle_root.display()
     );
-    let mut command = Command::new(&script);
+    let mut command = iroha_test_network::development_process_command(&script)?;
     command
         .env("CBDC_ROLLOUT_BUNDLE", &bundle_root)
         .current_dir(&root);
-    let status = status_with_timeout(&mut command, process_timeout())
+    let status = status_with_timeout(command, process_timeout())
         .wrap_err("failed to execute ci/check_cbdc_rollout.sh")?;
     ensure!(
         status.success(),

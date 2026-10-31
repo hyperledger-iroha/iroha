@@ -1292,12 +1292,8 @@ pub(super) fn derive_cks_sparse_challenge(
     let mask = u64::try_from(ring_degree - 1).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
     let mut challenge = vec![0_i8; ring_degree];
     let mut selected = 0;
-    for chunk in stream.chunks_exact(8) {
-        let word = u64::from_le_bytes(
-            chunk
-                .try_into()
-                .map_err(|_| ZkAmsMkheErrorV1::InvalidCksProof)?,
-        );
+    for chunk in stream.as_chunks::<8>().0 {
+        let word = u64::from_le_bytes(*chunk);
         let position =
             usize::try_from(word & mask).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
         if challenge[position] != 0 {

@@ -85,7 +85,7 @@ fn hex_to_bytes(input: &str) -> Vec<u8> {
         "hex string must have even length"
     );
     let mut out = Vec::with_capacity(input.len() / 2);
-    for pair in input.as_bytes().chunks_exact(2) {
+    for pair in input.as_bytes().as_chunks::<2>().0 {
         let hi = nybble(pair[0]);
         let lo = nybble(pair[1]);
         out.push((hi << 4) | lo);

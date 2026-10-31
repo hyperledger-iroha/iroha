@@ -743,7 +743,7 @@ impl GovernanceDagSealedCheckpointStore for TestSealedStore {
                 | GovernanceDagSealedStateSlot::SignedHeadRequestReplay
         ) && self
             .replay_initial_loads_remaining
-            .fetch_update(
+            .try_update(
                 AtomicOrdering::SeqCst,
                 AtomicOrdering::SeqCst,
                 |remaining| remaining.checked_sub(1),
@@ -2360,6 +2360,13 @@ async fn assert_kubo_has_no_swarm_peers(endpoint: &PinnedEndpoint) {
         "isolated Kubo must have no swarm peers: {value:?}"
     );
 }
+/// Quote a UTF-8 fixture path using the escapes shared by JSON and TOML.
+fn fixture_toml_path(path: &Path) -> String {
+    // TOML additionally forbids a literal DEL, which is valid in a Unix filename.
+    json::to_json(path.to_str().expect("fixture path must be UTF-8"))
+        .expect("quote fixture path")
+        .replace('\u{7f}', "\\u007f")
+}
 fn real_kubo_service_view(
     source: &SourceSnapshot,
     source_dir: &Path,
@@ -2367,14 +2374,9 @@ fn real_kubo_service_view(
     api_url: &str,
     signed_head_url: &str,
 ) -> SorafsGovernanceDagServiceView {
-    let paths = [source_dir, state_dir];
-    assert!(paths.iter().all(|path| {
-        let path = path.to_string_lossy();
-        !path.contains(['"', '\\', '\n', '\r'])
-    }));
     let config = format!(
         r#"[sorafs.storage]
-governance_dag_dir = "{}"
+governance_dag_dir = {}
 governance_dag_publisher_peer_id = "{TEST_PRODUCER_PEER_ID}"
 governance_dag_signer_handle = "{TEST_PRODUCER_SIGNER_HANDLE}"
 governance_dag_signer_revision = 1
@@ -2383,7 +2385,7 @@ governance_dag_publisher_public_key_hex = "{}"
 
 [sorafs.storage.governance_dag_service]
 enabled = true
-state_dir = "{}"
+state_dir = {}
 ipfs_api_url = "{}"
 signed_head_url = "{}"
 ipfs_authenticator_handle = "{TEST_IPFS_AUTH_HANDLE}"
@@ -2410,10 +2412,10 @@ allow_private_head_endpoint = true
 allow_head_bootstrap = true
 listen_addr = "127.0.0.1:0"
 "#,
-        source_dir.display(),
+        fixture_toml_path(source_dir),
         "83".repeat(32),
         hex::encode(&source.head.head_signature.public_key),
-        state_dir.display(),
+        fixture_toml_path(state_dir),
         api_url,
         signed_head_url,
         "81".repeat(32),
@@ -2430,6 +2432,42 @@ listen_addr = "127.0.0.1:0"
         .join("governance-dag-service.toml");
     fs::write(&config_path, config).expect("write standalone G-DAG service config");
     load_service_config(&config_path).expect("parse standalone G-DAG service config")
+}
+#[test]
+fn standalone_service_fixture_configs_preserve_native_paths() {
+    let root = secure_temp_dir();
+    let source = signed_source(1, 0x75, current_unix_timestamp_seconds().saturating_sub(5));
+    #[cfg(unix)]
+    let suffixes = [
+        "native path ☃",
+        "quotes\" slash\\ newline\n tab\t del\u{7f}",
+    ];
+    #[cfg(not(unix))]
+    let suffixes = ["native path ☃"];
+    for suffix in suffixes {
+        let source_dir = root.path().join(format!("source-{suffix}"));
+        let state_dir = root.path().join(format!("state-{suffix}"));
+        let views = [
+            real_kubo_service_view(
+                &source,
+                &source_dir,
+                &state_dir,
+                "http://127.0.0.1:5001",
+                "http://127.0.0.1:5002/head",
+            ),
+            real_kubo_ipns_service_view(
+                &source,
+                &source_dir,
+                &state_dir,
+                "http://127.0.0.1:5001",
+                "k51qzi5uqu5dl-governance",
+            ),
+        ];
+        for view in views {
+            assert_eq!(view.source_dir.as_deref(), Some(source_dir.as_path()));
+            assert_eq!(view.service.state_dir.as_deref(), Some(state_dir.as_path()));
+        }
+    }
 }
 async fn spawn_router_with_authenticator<T>(
     router: Router,

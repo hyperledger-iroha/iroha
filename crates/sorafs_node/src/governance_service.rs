@@ -1,5 +1,4 @@
 //! Injectable SoraFS Governance DAG publisher and bounded public mirror service.
-use crate::fs_flags::set_no_follow_flag;
 pub use crate::governance::{
     GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1,
     GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1,
@@ -89,10 +88,9 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     ffi::{OsStr, OsString},
-    fmt,
-    fs::{self, OpenOptions},
+    fmt, fs,
     future::{Future, IntoFuture},
-    io::{self, Read},
+    io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::Deref,
     path::{Component, Path, PathBuf},
@@ -1262,7 +1260,7 @@ impl GovernanceDagMirrorReadinessV1 {
         let desired_parity = u64::from(!ready);
         let _ = self
             .epoch
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 let increment = if current & 1 == desired_parity { 2 } else { 1 };
                 current.checked_add(increment)
             });
@@ -2580,66 +2578,19 @@ fn read_unrooted_regular_file(
     max_bytes: u64,
     secret: bool,
 ) -> Result<Vec<u8>, GovernanceDagServiceError> {
-    let before = fs::symlink_metadata(path).map_err(|err| {
-        GovernanceDagServiceError::Filesystem(format!("cannot inspect `{}`: {err}", path.display()))
-    })?;
-    validate_regular_metadata(path, &before, max_bytes, secret)?;
-    let mut options = OpenOptions::new();
-    options.read(true);
-    set_no_follow_flag(&mut options);
-    let mut file = options.open(path).map_err(|err| {
-        GovernanceDagServiceError::Filesystem(format!("cannot open `{}`: {err}", path.display()))
-    })?;
-    let opened = file.metadata().map_err(|err| {
+    let maximum = rooted_byte_limit(max_bytes, "governance input")?;
+    let bytes = if secret {
+        iroha_fs::read_private(path, maximum)
+    } else {
+        iroha_fs::read_regular(path, maximum)
+    }
+    .map_err(|error| {
         GovernanceDagServiceError::Filesystem(format!(
-            "cannot inspect open `{}`: {err}",
+            "cannot read retained governance input `{}`: {error}",
             path.display()
         ))
     })?;
-    validate_regular_metadata(path, &opened, max_bytes, secret)?;
-    if !same_file(&before, &opened) {
-        return Err(GovernanceDagServiceError::Filesystem(format!(
-            "`{}` changed while being opened",
-            path.display()
-        )));
-    }
-    let capacity = usize::try_from(opened.len()).map_err(|_| {
-        GovernanceDagServiceError::Filesystem(format!(
-            "`{}` exceeds host size limits",
-            path.display()
-        ))
-    })?;
-    let mut bytes = Vec::with_capacity(capacity);
-    Read::by_ref(&mut file)
-        .take(max_bytes.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|err| {
-            GovernanceDagServiceError::Filesystem(format!(
-                "cannot read `{}`: {err}",
-                path.display()
-            ))
-        })?;
-    if bytes.len() as u64 > max_bytes || bytes.len() as u64 != opened.len() {
-        return Err(GovernanceDagServiceError::Filesystem(format!(
-            "`{}` grew, shrank, or exceeds its {} byte limit",
-            path.display(),
-            max_bytes
-        )));
-    }
-    let after = fs::symlink_metadata(path).map_err(|err| {
-        GovernanceDagServiceError::Filesystem(format!(
-            "cannot re-inspect `{}`: {err}",
-            path.display()
-        ))
-    })?;
-    validate_regular_metadata(path, &after, max_bytes, secret)?;
-    if !same_file(&opened, &after) || after.len() != opened.len() {
-        return Err(GovernanceDagServiceError::Filesystem(format!(
-            "`{}` changed while being read",
-            path.display()
-        )));
-    }
-    Ok(bytes)
+    Ok(bytes.to_vec())
 }
 fn rooted_byte_limit(max_bytes: u64, label: &str) -> Result<usize, GovernanceDagServiceError> {
     usize::try_from(max_bytes).map_err(|_| {
@@ -2709,53 +2660,6 @@ fn verify_rooted_file_binding(
             "root identity changed after verifying a retained source file: {error}"
         ))
     })
-}
-fn validate_regular_metadata(
-    path: &Path,
-    metadata: &fs::Metadata,
-    max_bytes: u64,
-    secret: bool,
-) -> Result<(), GovernanceDagServiceError> {
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(GovernanceDagServiceError::Filesystem(format!(
-            "`{}` must be a regular file",
-            path.display()
-        )));
-    }
-    if metadata.len() > max_bytes {
-        return Err(GovernanceDagServiceError::Filesystem(format!(
-            "`{}` exceeds its {} byte limit",
-            path.display(),
-            max_bytes
-        )));
-    }
-    #[cfg(unix)]
-    {
-        if metadata.nlink() != 1 {
-            return Err(GovernanceDagServiceError::Filesystem(format!(
-                "`{}` must have exactly one hard link",
-                path.display()
-            )));
-        }
-        if secret
-            && (metadata.uid() != unsafe { geteuid() }
-                || metadata.permissions().mode() & 0o077 != 0)
-        {
-            return Err(GovernanceDagServiceError::Filesystem(format!(
-                "secret file `{}` must be owned by the service user and mode 0600 or stricter",
-                path.display()
-            )));
-        }
-    }
-    Ok(())
-}
-#[cfg(unix)]
-fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-#[cfg(not(unix))]
-fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.len() == right.len()
 }
 fn acquire_service_lock(
     state_root_guard: &GovernanceFilesystemRootGuard,

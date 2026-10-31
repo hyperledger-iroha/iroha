@@ -9,7 +9,7 @@
 //! division by `p`; a lift alone would return only the lowest digit.
 //!
 //! This is the public arithmetic preparation used in the Halevi--Shoup lifting
-//! construction (Bootstrapping for HElib, section 5.3), with the upper-digit
+//! construction (Bootstrapping for `HElib`, section 5.3), with the upper-digit
 //! tableau described in Geelen--Vercauteren, Bootstrapping for BGV and BFV
 //! Revisited, section 6.1. Polynomial coefficients and program instructions are
 //! public. All modular polynomial arithmetic reuses [`FixedModulus`]. There is
@@ -140,7 +140,7 @@ fn checked_bytes(words: usize) -> Result<usize, PrimePowerError> {
 }
 
 fn power_operations(exponent: u64) -> u64 {
-    u64::from(u64::BITS - exponent.leading_zeros() + exponent.count_ones())
+    u64::from(exponent.bit_width() + exponent.count_ones())
 }
 
 /// Explicit ceilings for one public lifting-polynomial preparation.
@@ -267,6 +267,13 @@ impl Drop for Coefficients {
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "the same fallible checkpoint propagates injected allocation failures in unit tests"
+    )
+)]
 fn allocation_checkpoint() -> Result<(), PrimePowerError> {
     #[cfg(test)]
     tests::allocation_checkpoint()?;
@@ -527,7 +534,7 @@ impl UpperDigitsPlan {
     /// Non-owning scalar/plan stack values, allocator headers and RSS are outside
     /// this typed owner scope; coefficient scratch remains a separate geometry field.
     #[must_use]
-    pub const fn preparation_owner_bytes(&self) -> usize {
+    pub const fn preparation_owner_bytes() -> usize {
         size_of::<UpperDigitsProgram>() + 2 * size_of::<Coefficients>()
     }
 
@@ -565,9 +572,9 @@ impl UpperDigitsPlan {
         let mut preparation_operations = 0_u64;
         let mut preparation_scratch_bytes = 0_usize;
         for offset in 0..count {
-            let polynomial = LiftingPolynomialPlan::required(
-                context.at_precision(context.precision - offset as u32)?,
-            )?;
+            let offset = u32::try_from(offset).map_err(|_| PrimePowerError::GeometryOverflow)?;
+            let polynomial =
+                LiftingPolynomialPlan::required(context.at_precision(context.precision - offset)?)?;
             coefficient_bytes = coefficient_bytes
                 .checked_add(polynomial.coefficient_bytes)
                 .ok_or(PrimePowerError::GeometryOverflow)?;
@@ -683,9 +690,11 @@ impl UpperDigitsProgram {
             .try_reserve_exact(plan.geometry.instructions)
             .map_err(|_| PrimePowerError::Allocation)?;
         for offset in 0..count {
+            let precision_offset =
+                u32::try_from(offset).map_err(|_| PrimePowerError::GeometryOverflow)?;
             let context = plan
                 .context
-                .at_precision(plan.context.precision - offset as u32)?;
+                .at_precision(plan.context.precision - precision_offset)?;
             let geometry = LiftingPolynomialPlan::required(context)?;
             let polynomial_plan = LiftingPolynomialPlan::new(
                 context,
@@ -833,7 +842,8 @@ mod tests {
     // Independent ordinary-integer test arithmetic. No production FixedModulus
     // kernel is used to generate the Newton-basis reference coefficients.
     fn oracle_mul(lhs: u64, rhs: u64, modulus: u64) -> u64 {
-        (u128::from(lhs) * u128::from(rhs) % u128::from(modulus)) as u64
+        u64::try_from(u128::from(lhs) * u128::from(rhs) % u128::from(modulus))
+            .expect("canonical residue fits u64")
     }
 
     fn oracle_pow(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
@@ -857,7 +867,7 @@ mod tests {
             (old_t, t) = (t, old_t - quotient * t);
         }
         assert_eq!(old_r, 1);
-        old_t.rem_euclid(i128::from(modulus)) as u64
+        u64::try_from(old_t.rem_euclid(i128::from(modulus))).expect("canonical residue fits u64")
     }
 
     fn oracle_evaluate(coefficients: &[u64], input: u64, modulus: u64) -> u64 {
@@ -865,8 +875,11 @@ mod tests {
             .iter()
             .rev()
             .fold(0, |accumulator, &coefficient| {
-                ((u128::from(accumulator) * u128::from(input) + u128::from(coefficient))
-                    % u128::from(modulus)) as u64
+                u64::try_from(
+                    (u128::from(accumulator) * u128::from(input) + u128::from(coefficient))
+                        % u128::from(modulus),
+                )
+                .expect("canonical residue fits u64")
             })
     }
 
@@ -876,15 +889,18 @@ mod tests {
         let origin = -(i128::from(prime) / 2);
         let mut differences: Vec<_> = (0..prime)
             .map(|index| {
-                let node = (origin + i128::from(index)).rem_euclid(i128::from(modulus)) as u64;
+                let node =
+                    u64::try_from((origin + i128::from(index)).rem_euclid(i128::from(modulus)))
+                        .expect("canonical residue fits u64");
                 (node + modulus - oracle_pow(node, prime, modulus)) % modulus
             })
             .collect();
-        let mut result = vec![0; prime as usize + 1];
-        result[prime as usize] = 1;
+        let prime_count = usize::try_from(prime).expect("fixture prime fits usize");
+        let mut result = vec![0; prime_count + 1];
+        result[prime_count] = 1;
         let mut basis = vec![1];
         let mut factorial = 1;
-        for order in 0..prime as usize {
+        for order in 0..prime_count {
             let multiplier =
                 oracle_mul(differences[0], oracle_inverse(factorial, modulus), modulus);
             for (power, &coefficient) in basis.iter().enumerate() {
@@ -895,7 +911,8 @@ mod tests {
                 .windows(2)
                 .map(|pair| (pair[1] + modulus - pair[0]) % modulus)
                 .collect();
-            let node = (origin + order as i128).rem_euclid(i128::from(modulus)) as u64;
+            let node = u64::try_from((origin + order as i128).rem_euclid(i128::from(modulus)))
+                .expect("canonical residue fits u64");
             let mut following = vec![0; basis.len() + 1];
             for (power, &coefficient) in basis.iter().enumerate() {
                 following[power] =
@@ -976,7 +993,7 @@ mod tests {
             }
             value = (value - low) / p;
         }
-        value.rem_euclid(p.pow(retained)) as u64
+        u64::try_from(value.rem_euclid(p.pow(retained))).expect("retained residue fits u64")
     }
 
     fn boundary_values(context: PrimePowerContext) -> Vec<u64> {
@@ -992,7 +1009,10 @@ mod tests {
             let power = i128::from(context.prime()).pow(precision);
             for sign in [-1, 1] {
                 for offset in -1..=1 {
-                    values.push((sign * power + offset).rem_euclid(modulus) as u64);
+                    values.push(
+                        u64::try_from((sign * power + offset).rem_euclid(modulus))
+                            .expect("canonical residue fits u64"),
+                    );
                 }
             }
         }
@@ -1091,13 +1111,16 @@ mod tests {
             for starting_precision in 1..precision {
                 let modulus = 257_u64.pow(starting_precision + 1);
                 for digit in -128_i128..=128 {
-                    let input = (digit + i128::from(257_u64.pow(starting_precision)) * 113)
-                        .rem_euclid(i128::from(context.modulus()))
-                        as u64;
+                    let input = u64::try_from(
+                        (digit + i128::from(257_u64.pow(starting_precision)) * 113)
+                            .rem_euclid(i128::from(context.modulus())),
+                    )
+                    .expect("canonical residue fits u64");
                     assert_eq!(
                         oracle_evaluate(polynomial.coefficients(), input, context.modulus())
                             % modulus,
-                        digit.rem_euclid(i128::from(modulus)) as u64
+                        u64::try_from(digit.rem_euclid(i128::from(modulus)))
+                            .expect("canonical residue fits u64")
                     );
                 }
             }

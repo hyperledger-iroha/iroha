@@ -64,16 +64,15 @@ pub const fn squeeze_permutations(buffered: usize) -> usize {
 fn padded_blocks<'w, F: PoseidonField>(
     elements: &[AbsorbInput<'w, F>],
 ) -> Vec<[AbsorbInput<'w, F>; 2]> {
-    let chunks = elements.chunks_exact(2);
-    let tail = match chunks.remainder() {
+    let (chunks, remainder) = elements.as_chunks::<2>();
+    let tail = match remainder {
         [last] => [*last, AbsorbInput::Constant(F::ONE)],
         _ => [
             AbsorbInput::Constant(F::ONE),
             AbsorbInput::Constant(F::ZERO),
         ],
     };
-    let mut blocks: Vec<[AbsorbInput<'w, F>; 2]> =
-        chunks.map(|chunk| [chunk[0], chunk[1]]).collect();
+    let mut blocks: Vec<[AbsorbInput<'w, F>; 2]> = chunks.to_vec();
     blocks.push(tail);
     blocks
 }

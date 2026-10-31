@@ -27,7 +27,8 @@ fn reusable_sha_residues_preserve_all_segments_fields_terminals_and_capacities()
                         boundaries,
                     )
                     .unwrap();
-                    evaluate_sha_batch_relation_into_v1(
+                    reused.clear();
+                    emit_sha_batch_relation_v1(
                         &current,
                         &next,
                         word_challenges(),
@@ -50,13 +51,15 @@ fn reusable_sha_residues_preserve_all_segments_fields_terminals_and_capacities()
                     segment,
                 )
                 .unwrap();
-                evaluate_zk_x509_sha_batch_local_residues_into_v1(
+                reused.clear();
+                emit_sha_batch_relation_v1(
                     &current,
                     &next,
                     word_challenges(),
                     challenges(),
                     &rfc_challenges(),
                     segment,
+                    None,
                     &mut reused,
                 )
                 .unwrap();
@@ -121,7 +124,7 @@ fn reusable_sha_residues_keep_original_refusal_order_and_destination() {
             Some(&terminals),
         )
         .unwrap_err();
-        let actual = evaluate_sha_batch_relation_into_v1(
+        let actual = emit_sha_batch_relation_v1(
             &current,
             &next,
             word,
@@ -168,13 +171,15 @@ fn reusable_sha_residues_cost_preserves_full_outputs() {
             let start = Instant::now();
             for _ in 0..ROWS {
                 if reuse {
-                    evaluate_zk_x509_sha_batch_local_residues_into_v1(
+                    reused.clear();
+                    emit_sha_batch_relation_v1(
                         black_box(&current),
                         black_box(&next),
                         word_challenges(),
                         challenges(),
                         &rfc_challenges(),
                         0,
+                        None,
                         &mut reused,
                     )
                     .unwrap();

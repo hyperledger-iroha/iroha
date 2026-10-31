@@ -956,8 +956,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
             let present = state_block
                 .world
                 .account_permissions_iter(&acc)
-                .ok()
-                .is_some_and(|mut it| it.any(|p| p.name() == perm_s));
+                .is_ok_and(|mut it| it.any(|p| p.name() == perm_s));
             let canonical_account = acc.to_string();
             let k = enc_key_prefix(
                 ExecutionWitnessKeyTagV1::AccountPermission,
@@ -979,8 +978,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
             let present = state_block
                 .world
                 .role(&role_id)
-                .ok()
-                .is_some_and(|r| r.permissions().any(|p| p.name() == perm_s));
+                .is_ok_and(|r| r.permissions().any(|p| p.name() == perm_s));
             let k = enc_key_prefix(ExecutionWitnessKeyTagV1::RolePermission, role_s, perm_s);
             let v = Json::new(present).get().as_bytes().to_vec();
             with_active_slot(|g| {

@@ -1982,7 +1982,7 @@ mod tests {
     #[test]
     fn revocation_store_durably_observes_rejected_insert_time() {
         let initial = UNIX_EPOCH + Duration::from_secs(1_000);
-        let observed = UNIX_EPOCH + Duration::from_secs(1_200);
+        let observed = UNIX_EPOCH + Duration::from_mins(20);
         let rollback = UNIX_EPOCH + Duration::from_secs(1_050);
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("rejected-clock-high-water.norito");
@@ -2378,7 +2378,7 @@ mod tests {
     }
     #[test]
     fn revocation_store_handles_canonical_ticket_payload() {
-        let now = UNIX_EPOCH + Duration::from_secs(12_000);
+        let now = UNIX_EPOCH + Duration::from_mins(200);
         let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(600)).expect("limits");
         let mut store = TicketRevocationStore::in_memory(limits).expect("store");
         let ticket = Ticket {
@@ -2481,7 +2481,7 @@ mod tests {
     fn signed_ticket_replay_rejected_after_reload() {
         use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
-        let now = UNIX_EPOCH + Duration::from_secs(42_000);
+        let now = UNIX_EPOCH + Duration::from_mins(700);
         let limits = TicketRevocationStoreLimits::new(8, Duration::from_secs(600)).expect("limits");
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("replay_store.norito");
@@ -2524,7 +2524,7 @@ mod tests {
     }
     #[test]
     fn revocation_store_rejects_concurrent_ledger_owner() {
-        let now = UNIX_EPOCH + Duration::from_secs(60_000);
+        let now = UNIX_EPOCH + Duration::from_mins(1000);
         let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(120)).expect("limits");
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("single_owner.norito");

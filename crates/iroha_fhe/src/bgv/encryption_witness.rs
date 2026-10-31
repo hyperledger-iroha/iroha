@@ -201,6 +201,10 @@ use reference::working_buffer_bytes;
 #[cfg(test)]
 mod tests {
     //! Independent small-ring oracle and adversarial witness checks.
+    #![expect(
+        clippy::many_single_char_names,
+        reason = "tests follow BGV notation: profile p, key k, message m, witness w, ciphertext c, prime q"
+    )]
     use super::*;
     use crate::{
         bgv::{

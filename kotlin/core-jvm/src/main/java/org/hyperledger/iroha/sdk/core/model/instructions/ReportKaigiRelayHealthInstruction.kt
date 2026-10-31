@@ -20,7 +20,7 @@ class ReportKaigiRelayHealthInstruction(
     @JvmField val reportedAtMs: Long,
     @JvmField val notes: String? = null,
     arguments: Map<String, String>? = null,
-) : InstructionTemplate {
+) : KaigiWireInstructionV1 {
 
     /** Relay health variants accepted by the Rust data model. */
     enum class Status(@JvmField val wireName: String) {

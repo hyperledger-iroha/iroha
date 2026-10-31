@@ -328,7 +328,7 @@ pub(super) fn apply_test_module_diagnostics(
         .iter()
         .filter(|(uri, source)| is_test_module(uri, source))
         .collect::<Vec<_>>();
-    tests.sort_by(|(left, _), (right, _)| left.cmp(right));
+    tests.sort_by_key(|(left, _)| *left);
     for (uri, source) in tests {
         diagnostics.insert(
             uri.clone(),

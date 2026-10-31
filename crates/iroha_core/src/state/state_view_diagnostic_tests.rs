@@ -90,7 +90,7 @@ fn state_view_diagnostic_releases_retired_snapshot_before_backtrace() {
     });
     // Exercise the real one-second warning without wall-clock sleeps. Into is
     // also the identity conversion for the original Instant representation.
-    view.created_at = Instant::now()
+    view._lifetime_diagnostic = Instant::now()
         .checked_sub(Duration::from_secs(2))
         .unwrap()
         .into();

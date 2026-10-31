@@ -3,15 +3,19 @@
 //! Each binary includes this file with `#[path]`; `autobins = false` keeps it from becoming a
 //! target of its own, and the library API stays unchanged.
 
+#[cfg(not(windows))]
 use std::{
     fs::{self, File},
-    io,
     path::Path,
 };
 
+#[cfg(not(windows))]
+use super::output_path::{ensure_parent_dir, validate_output_path};
+#[cfg(not(windows))]
 use sorafs_car::set_no_follow_flag;
 
 /// Open `path` for truncating writes after symlink-safe path checks.
+#[cfg(not(windows))]
 pub(crate) fn open_output_file(path: &Path, label: &str) -> Result<File, String> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -32,52 +36,27 @@ pub(crate) fn open_output_file(path: &Path, label: &str) -> Result<File, String>
     }
     Ok(file)
 }
-/// Create the missing parent directories of `path`.
-pub(crate) fn ensure_parent_dir(path: &Path) -> Result<(), String> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent).map_err(|err| format!("failed to create {parent:?}: {err}"))?;
-    }
-    Ok(())
+
+/// Retain a native mutable output after admitting its original before truncation.
+#[cfg(windows)]
+pub(crate) fn open_output_file(
+    path: &std::path::Path,
+    label: &str,
+) -> Result<iroha_fs::RetainedOutputFile, String> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| format!("output {path:?} has no file name"))?;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let parent = iroha_fs::OwnerDirectory::open_or_create(parent)
+        .map_err(|error| format!("failed to admit {label} parent {parent:?}: {error}"))?;
+    parent
+        .open_truncating_output(name)
+        .map_err(|error| format!("failed to open {label} {path:?}: {error}"))
 }
-/// Reject symlinked or directory outputs and symlinked or non-directory ancestors.
-pub(crate) fn validate_output_path(path: &Path) -> Result<(), String> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() {
-                return Err(format!("output {path:?} must not be a symlink"));
-            }
-            if metadata.is_dir() {
-                return Err(format!("output {path:?} must not be a directory"));
-            }
-        }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => return Err(format!("failed to inspect output {path:?}: {err}")),
-    }
-    if let Some(parent) = path.parent() {
-        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
-            if ancestor.as_os_str().is_empty() {
-                continue;
-            }
-            match fs::symlink_metadata(ancestor) {
-                Ok(metadata) => {
-                    if metadata.file_type().is_symlink() {
-                        return Err(format!("output parent {ancestor:?} must not be a symlink"));
-                    }
-                    if !metadata.is_dir() {
-                        return Err(format!("output parent {ancestor:?} must be a directory"));
-                    }
-                }
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    return Err(format!(
-                        "failed to inspect output parent {ancestor:?}: {err}"
-                    ));
-                }
-            }
-        }
-    }
-    Ok(())
-}
+
+#[cfg(all(test, windows))]
+#[path = "output_fs_windows_tests.rs"]
+mod windows_tests;

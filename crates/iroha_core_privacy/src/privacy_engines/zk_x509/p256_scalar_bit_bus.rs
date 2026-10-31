@@ -293,7 +293,10 @@ pub fn build_zk_x509_p256_scalar_bit_bus_trace_v1(
         .map_err(|_| P256ScalarBitBusErrorV1::Resource)?;
     let mut arithmetic_running = [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1];
     let mut window_running = [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1];
-    for chunk in expected.chunks_exact(P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1) {
+    for chunk in expected
+        .as_chunks::<P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1>()
+        .0
+    {
         let mut fixed =
             [P256ScalarBitBusFixedAccessV1::Inactive; P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1];
         let mut arithmetic_bits = [F::ZERO; P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1];

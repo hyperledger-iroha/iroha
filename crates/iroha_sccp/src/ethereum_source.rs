@@ -1291,7 +1291,7 @@ fn compact_path(nibbles: &[u8], leaf: bool) -> Vec<u8> {
         out.push(flag << 4);
         nibbles
     };
-    for pair in rest.chunks_exact(2) {
+    for pair in rest.as_chunks::<2>().0 {
         out.push((pair[0] << 4) | pair[1]);
     }
     out

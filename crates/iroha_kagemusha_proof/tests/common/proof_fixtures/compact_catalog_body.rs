@@ -684,8 +684,10 @@ fn terminal_digest(
         iroha_plonk_recursion::accumulation::context(params, FoldPurpose::WrapperVesta, 4).to_vec();
     words.extend(
         descriptor
-            .chunks_exact(16)
-            .map(|part| Fq::from_u128(u128::from_le_bytes(part.try_into().unwrap()))),
+            .as_chunks::<16>()
+            .0
+            .iter()
+            .map(|part| Fq::from_u128(u128::from_le_bytes(*part))),
     );
     words.push(raw);
     let (x, y) = iroha_plonk::transcript::generator_coordinates::<iroha_pasta::Eq>(own.g());

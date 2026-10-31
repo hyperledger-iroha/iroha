@@ -1,8 +1,12 @@
 # Confidential Gas Calibration Baselines
 
-This ledger tracks the validated outputs of the confidential gas calibration
-benchmarks. Each row documents a release-quality measurement set captured with
-the procedure described in `specs/confidential_assets.md#calibration-baselines--acceptance-gates`.
+This ledger retains historical confidential gas calibration measurements.
+They do not qualify the current combined source or substitute for the named
+reference platforms in `specs/confidential_assets.md#calibration-baselines--acceptance-gates`.
+An Intel i7-11800H is now available for engineering instruction checks, but the
+required Xeon Gold 6430 neutral/AVX2 baselines remain open. The Parliament Xeon
+Silver 4310 baseline is a separate requirement. See
+[Windows and Intel completion goals](windows_intel_completion_goals.md).
 
 | Date (UTC) | Commit | Profile | `ns/op` | `gas/op` | `ns/gas` | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -16,13 +20,15 @@ the procedure described in `specs/confidential_assets.md#calibration-baselines--
 `iroha_core::gas::meter_instruction`; `ns/gas` divides the summed nanoseconds by
 the summed gas across the nine-instruction sample set.
 
-*Note.* The current arm64 host does not emit Criterion `raw.csv` summaries out of
-the box; rerun with `CRITERION_OUTPUT_TO=csv` or an upstream fix before tagging a
-release so the artefacts required by the acceptance checklist are attached.
-If `target/criterion/` is still missing after `--save-baseline`, collect the run
-on a Linux host or serialize the console output into the release bundle as a
-temporary stop-gap. For reference, the arm64 console log from the latest run
-lives at `specs/confidential_assets_calibration_neon_20251018.log`.
+The historical runs above did not retain the required Criterion `raw.csv`
+artifacts. Current benchmark builds enable the workspace `csv_output` feature;
+it is a compile-time reporter selection, not a `CRITERION_OUTPUT_TO` switch.
+Fresh named-host runs must retain the original CSV samples under
+`target/criterion/**/raw.csv` and follow the current [calibration
+procedure](confidential_assets.md#calibration-baselines--acceptance-gates).
+Console logs do not replace those samples or qualify a historical run. The
+retained arm64 console log is
+`specs/confidential_assets_calibration_neon_20251018.log`.
 
 Per-instruction medians from the same run (`cargo bench -p iroha_core --features bench --bench isi_gas_calibration`):
 
@@ -102,7 +108,8 @@ SDK Council granted a temporary waiver for the Phase C gate requiring
   → “Bad CPU type in executable”; see
   `specs/confidential_assets_calibration_avx2_attempt_20260428.log`).
 
-Until CI hosts `bench-x86-neon0` and `bench-x86-avx2a` are online, the NEON run
-above plus the telemetry evidence satisfy the Phase C acceptance criteria.
-The waiver is recorded in `status.md` and will be revisited once x86 hardware is
-available.
+The waiver records the earlier Apple-host limitation. Current release
+qualification still requires the named neutral/AVX2 measurements, canonical
+Criterion artifacts and the other reference-platform/telemetry evidence above.
+The available i7 instruction checks do not complete these timing baselines or
+change committed gas costs.

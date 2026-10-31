@@ -21,7 +21,7 @@ fn directory(prepared: &PreparedLocalnet) -> PrivateDirectory {
             .client_config
             .parent()
             .unwrap()
-            .join(LOCALNET_RUNTIME_DIRECTORY)
+            .join(RUNTIME_DIRECTORY)
             .join(DIRECTORY),
     )
     .unwrap()
@@ -37,7 +37,7 @@ fn publish(directory: &PrivateDirectory, manifest: &StreamTokenAuthorityManifest
 #[test]
 fn generated_provider_plan_recovers_exact_original_economics_and_interval() {
     let _resources = crate::managed::native_test_guard();
-    let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+    let temporary = crate::custody::test_support::private_tempdir().unwrap();
     let prepared = prepared(&temporary.path().join("generation"));
     let manifest = prepared.stream_token_authorities().unwrap().unwrap();
     let original = prepared
@@ -134,7 +134,7 @@ fn generated_provider_plan_recovers_exact_original_economics_and_interval() {
 #[test]
 fn original_genesis_refuses_rewritten_plan_even_when_structurally_valid() {
     let _resources = crate::managed::native_test_guard();
-    let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+    let temporary = crate::custody::test_support::private_tempdir().unwrap();
     let prepared = prepared(&temporary.path().join("generation"));
     let original = prepared.stream_token_authorities().unwrap().unwrap();
     let directory = directory(&prepared);
@@ -229,7 +229,7 @@ fn original_genesis_refuses_rewritten_plan_even_when_structurally_valid() {
 #[test]
 fn retained_provider_private_material_rejects_cross_purpose_and_certificate_substitution() {
     let _resources = crate::managed::native_test_guard();
-    let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+    let temporary = crate::custody::test_support::private_tempdir().unwrap();
     let prepared = prepared(&temporary.path().join("generation"));
     let root = directory(&prepared);
     let directory = open_provider_directory(&root, 0).unwrap();
@@ -294,7 +294,7 @@ fn retained_provider_private_material_rejects_cross_purpose_and_certificate_subs
 
 #[test]
 fn real_generated_tls_accepts_exact_root_name_key_and_refuses_other_identities() {
-    let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+    let temporary = crate::custody::test_support::private_tempdir().unwrap();
     let root = PrivateDirectory::open_exact(temporary.path()).unwrap();
     let first = root.ensure_child("first").unwrap();
     let second = root.ensure_child("second").unwrap();

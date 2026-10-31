@@ -2081,7 +2081,7 @@ fn validate_ipv4_packet(
 }
 fn ipv4_header_checksum_valid(header: &[u8]) -> bool {
     let mut sum = 0u32;
-    for word in header.chunks_exact(2) {
+    for word in header.as_chunks::<2>().0 {
         sum = sum.saturating_add(u32::from(u16::from_be_bytes([word[0], word[1]])));
     }
     while sum >> 16 != 0 {
@@ -3324,7 +3324,7 @@ mod tests {
     fn set_test_ipv4_checksum(packet: &mut [u8]) {
         packet[10..12].fill(0);
         let mut sum = 0u32;
-        for word in packet[..20].chunks_exact(2) {
+        for word in packet[..20].as_chunks::<2>().0 {
             sum += u32::from(u16::from_be_bytes([word[0], word[1]]));
         }
         while sum >> 16 != 0 {

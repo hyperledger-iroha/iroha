@@ -549,7 +549,7 @@ fn present_census_rechecks_complete_profile_and_native_parent_then_restores_orig
             "genesis.signed.nrt",
             iroha_genesis::SIGNED_GENESIS_MAX_BYTES_V1,
         ),
-        (&runtime, "onboarding-signer.key", 4096),
+        (&generation, "client.toml", 1024 * 1024),
         (&authorities, "authorities.json", 512 * 1024),
     ] {
         let original = directory.read(name, maximum).unwrap();

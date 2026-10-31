@@ -1291,7 +1291,9 @@ fn verify_evaluation_relation(
     let mut expected =
         encode_coefficient_slots_v1(proof.mask_split_evaluation).expect("fixed slots");
     for (split, challenge) in split_evaluations
-        .chunks_exact(JINDO_ENCODING_SLOTS_V1)
+        .as_chunks::<JINDO_ENCODING_SLOTS_V1>()
+        .0
+        .iter()
         .zip(alpha)
     {
         let encoded = encode_coefficient_slots_v1(split).expect("fixed slots");

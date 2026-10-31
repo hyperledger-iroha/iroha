@@ -5190,6 +5190,7 @@
       }
     ]
   },
+  "ChangeSetId": "Array<u8, 32>",
   "CheckMusubiPinOutboxV1": {
     "Struct": [
       {
@@ -7235,6 +7236,7 @@
       }
     ]
   },
+  "DefinitionId": "Array<u8, 32>",
   "DiagnosticTraceStatus": {
     "Struct": [
       {
@@ -13512,6 +13514,11 @@
         "discriminant": 10,
         "tag": "InvariantViolation",
         "type": "String"
+      },
+      {
+        "discriminant": 11,
+        "tag": "Runtime",
+        "type": "RuntimeRejectionV1"
       }
     ]
   },
@@ -19429,6 +19436,9 @@
   "Option<BridgeProofRecord>": {
     "Option": "BridgeProofRecord"
   },
+  "Option<ChangeSetId>": {
+    "Option": "ChangeSetId"
+  },
   "Option<CommitCertificate>": {
     "Option": "CommitCertificate"
   },
@@ -19752,9 +19762,6 @@
   },
   "Option<RoleId>": {
     "Option": "RoleId"
-  },
-  "Option<RuntimeUpgradeId>": {
-    "Option": "RuntimeUpgradeId"
   },
   "Option<RwaId>": {
     "Option": "RwaId"
@@ -26688,6 +26695,30 @@
     ]
   },
   "ResolvedSettlementMovements": "Vec<ResolvedSettlementMovement>",
+  "RestrictionV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Deprecated",
+        "type": "u64"
+      },
+      {
+        "discriminant": 1,
+        "tag": "AdmissionClosed",
+        "type": "u64"
+      },
+      {
+        "discriminant": 2,
+        "tag": "CompletionOnly",
+        "type": "u64"
+      },
+      {
+        "discriminant": 3,
+        "tag": "Disabled",
+        "type": "u64"
+      }
+    ]
+  },
   "Result<Vec<DataTriggerStep>, TransactionRejectionReason>": {
     "Result": {
       "err": "TransactionRejectionReason",
@@ -26898,19 +26929,91 @@
       }
     ]
   },
+  "RuntimeRejectionV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "DefinitionInactive",
+        "type": "RuntimeRejectionV1::DefinitionInactive"
+      },
+      {
+        "discriminant": 1,
+        "tag": "DefinitionRestricted",
+        "type": "RuntimeRejectionV1::DefinitionRestricted"
+      },
+      {
+        "discriminant": 2,
+        "tag": "ExpectationMismatch",
+        "type": "RuntimeRejectionV1::ExpectationMismatch"
+      },
+      {
+        "discriminant": 3,
+        "tag": "MalformedPayload",
+        "type": "RuntimeRejectionV1::MalformedPayload"
+      }
+    ]
+  },
+  "RuntimeRejectionV1::DefinitionInactive": {
+    "Struct": [
+      {
+        "name": "wire_id",
+        "type": "String"
+      }
+    ]
+  },
+  "RuntimeRejectionV1::DefinitionRestricted": {
+    "Struct": [
+      {
+        "name": "definition",
+        "type": "DefinitionId"
+      },
+      {
+        "name": "restriction",
+        "type": "RestrictionV1"
+      }
+    ]
+  },
+  "RuntimeRejectionV1::ExpectationMismatch": {
+    "Struct": [
+      {
+        "name": "wire_id",
+        "type": "Option<String>"
+      }
+    ]
+  },
+  "RuntimeRejectionV1::MalformedPayload": {
+    "Struct": [
+      {
+        "name": "wire_id",
+        "type": "String"
+      }
+    ]
+  },
   "RuntimeUpgradeActivated": {
     "Struct": [
       {
         "name": "id",
-        "type": "RuntimeUpgradeId"
+        "type": "ChangeSetId"
       },
       {
-        "name": "abi_version",
-        "type": "u16"
-      },
-      {
-        "name": "at_height",
+        "name": "height",
         "type": "u64"
+      },
+      {
+        "name": "successor",
+        "type": "SelectionId"
+      }
+    ]
+  },
+  "RuntimeUpgradeAttested": {
+    "Struct": [
+      {
+        "name": "id",
+        "type": "ChangeSetId"
+      },
+      {
+        "name": "validator",
+        "type": "PublicKey"
       }
     ]
   },
@@ -26918,7 +27021,39 @@
     "Struct": [
       {
         "name": "id",
-        "type": "RuntimeUpgradeId"
+        "type": "ChangeSetId"
+      },
+      {
+        "name": "height",
+        "type": "u64"
+      }
+    ]
+  },
+  "RuntimeUpgradeContained": {
+    "Struct": [
+      {
+        "name": "containment",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "incident",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "effective_height",
+        "type": "u64"
+      }
+    ]
+  },
+  "RuntimeUpgradeContainmentExpired": {
+    "Struct": [
+      {
+        "name": "containment",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "height",
+        "type": "u64"
       }
     ]
   },
@@ -26926,18 +27061,38 @@
     "Enum": [
       {
         "discriminant": 0,
-        "tag": "Proposed",
-        "type": "RuntimeUpgradeProposed"
+        "tag": "Scheduled",
+        "type": "RuntimeUpgradeScheduled"
       },
       {
         "discriminant": 1,
+        "tag": "Attested",
+        "type": "RuntimeUpgradeAttested"
+      },
+      {
+        "discriminant": 2,
         "tag": "Activated",
         "type": "RuntimeUpgradeActivated"
       },
       {
-        "discriminant": 2,
+        "discriminant": 3,
+        "tag": "Lapsed",
+        "type": "RuntimeUpgradeLapsed"
+      },
+      {
+        "discriminant": 4,
         "tag": "Canceled",
         "type": "RuntimeUpgradeCanceled"
+      },
+      {
+        "discriminant": 5,
+        "tag": "Contained",
+        "type": "RuntimeUpgradeContained"
+      },
+      {
+        "discriminant": 6,
+        "tag": "ContainmentExpired",
+        "type": "RuntimeUpgradeContainmentExpired"
       }
     ]
   },
@@ -26945,7 +27100,7 @@
     "Struct": [
       {
         "name": "id_matcher",
-        "type": "Option<RuntimeUpgradeId>"
+        "type": "Option<ChangeSetId>"
       },
       {
         "name": "event_set",
@@ -26958,37 +27113,56 @@
       "masks": [
         {
           "mask": 1,
-          "name": "Proposed"
+          "name": "Scheduled"
         },
         {
           "mask": 2,
-          "name": "Activated"
+          "name": "Attested"
         },
         {
           "mask": 4,
+          "name": "Activated"
+        },
+        {
+          "mask": 8,
+          "name": "Lapsed"
+        },
+        {
+          "mask": 16,
           "name": "Canceled"
+        },
+        {
+          "mask": 32,
+          "name": "Contained"
+        },
+        {
+          "mask": 64,
+          "name": "ContainmentExpired"
         }
       ],
       "repr": "u32"
     }
   },
-  "RuntimeUpgradeId": "Array<u8, 32>",
-  "RuntimeUpgradeProposed": {
+  "RuntimeUpgradeLapsed": {
     "Struct": [
       {
         "name": "id",
-        "type": "RuntimeUpgradeId"
+        "type": "ChangeSetId"
       },
       {
-        "name": "abi_version",
-        "type": "u16"
-      },
-      {
-        "name": "start_height",
+        "name": "height",
         "type": "u64"
+      }
+    ]
+  },
+  "RuntimeUpgradeScheduled": {
+    "Struct": [
+      {
+        "name": "id",
+        "type": "ChangeSetId"
       },
       {
-        "name": "end_height",
+        "name": "effective_height",
         "type": "u64"
       }
     ]
@@ -29102,6 +29276,7 @@
       }
     ]
   },
+  "SelectionId": "Array<u8, 32>",
   "SetAssetFiLinkAttestationV1": {
     "Struct": [
       {

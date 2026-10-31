@@ -143,7 +143,7 @@ fn read_bounded(
     if input.is_null() {
         return None;
     }
-    let length = usize::try_from(env.get_array_length(input).ok()?).ok()?;
+    let length = input.len(env).ok()?;
     if length == 0 || length > maximum {
         return None;
     }
@@ -191,7 +191,7 @@ pub(super) fn java_inspect_request(
         let result = env.new_object_array(9, jni::jni_str!("[B"), jni::objects::JObject::null())?;
         for (index, bytes) in fields.iter().enumerate() {
             let value = env.byte_array_from_slice(bytes)?;
-            env.set_object_array_element(&result, index, &value)?;
+            result.set_element(env, index, &value)?;
         }
         Ok(result.into_raw())
     })()

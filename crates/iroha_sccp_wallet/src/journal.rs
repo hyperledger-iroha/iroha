@@ -3,11 +3,11 @@
 //! Every flow journals its raw evidence and state transitions before it submits anything, so a
 //! crashed flow resumes where it stopped and never blindly resubmits. The journal reuses
 //! `iroha_operation_journal::Journal` for every step: one owner-private directory whose
-//! records are written once, atomically (temporary file, `fsync`, hard link) and owner-only,
+//! records are written once through retained native atomic publication and owner-only custody,
 //! under an exclusive lock.
 //!
-//! Layout below the configured `journal_dir` (every directory mode `0700`, every file `0600`,
-//! no symlinks):
+//! Layout below the configured `journal_dir` (Unix directories `0700` and files `0600`;
+//! Windows protected current-owner ACLs; no symlinks or reparse points):
 //!
 //! ```text
 //! <journal_dir>/<network-id-hex>/<kind>-<flow-id-hex>/step-000000/operation.json
@@ -25,7 +25,8 @@
 //!   is the pre-dispatch marker ([`SccpJournalStep::begin_submission`] returns `true` to exactly
 //!   one caller). `applied.json` is the [`SccpJournalOutcomeV1`].
 //! - Every record repeats the network id, the flow and the step index, and reading checks them
-//!   against the directory it came from.
+//!   against the directory it came from. Submission and completion also verify the exact
+//!   stored operation before and after the journal action, including failed actions.
 //!
 //! A step that is prepared or submitted but has no outcome is the resume point
 //! ([`SccpFlowJournal::resume_point`]): a submitted step is reconciled against the chain, never
@@ -42,9 +43,8 @@
 
 use core::fmt;
 use std::{
-    fs::{self, File},
-    io::Read as _,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use iroha_data_model::{NetworkId, bridge::SccpNetworkV1};
@@ -321,8 +321,6 @@ pub enum JournalError {
     Malformed(PathBuf),
     /// The underlying shared operation journal refused an operation.
     Storage(String),
-    /// Owner-only journals require Unix permissions.
-    Unsupported,
 }
 
 impl fmt::Display for JournalError {
@@ -342,9 +340,6 @@ impl fmt::Display for JournalError {
                 "SCCP journal record `{}` is not a canonical record",
                 path.display()
             ),
-            Self::Unsupported => {
-                formatter.write_str("SCCP journals require Unix owner-only permissions")
-            }
         }
     }
 }
@@ -362,82 +357,115 @@ fn storage(error: impl fmt::Display) -> JournalError {
     JournalError::Storage(format!("{error:#}"))
 }
 
-#[cfg(unix)]
-fn check_private(
-    path: &Path,
-    metadata: &fs::Metadata,
-    directory: bool,
-) -> Result<(), JournalError> {
-    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-    let kind_ok = if directory {
-        metadata.is_dir()
+/// Original native directory authority shared by cloned journal selectors.
+#[derive(Debug, Clone)]
+struct RetainedDirectory {
+    owner: Arc<iroha_fs::PrivateDirectory>,
+    identity: iroha_fs::FileIdentity,
+}
+
+impl RetainedDirectory {
+    fn new(owner: iroha_fs::PrivateDirectory) -> Result<Self, JournalError> {
+        let identity = owner
+            .identity()
+            .map_err(|error| custody(owner.path(), error))?;
+        Ok(Self {
+            owner: Arc::new(owner),
+            identity,
+        })
+    }
+}
+
+impl std::ops::Deref for RetainedDirectory {
+    type Target = iroha_fs::PrivateDirectory;
+    fn deref(&self) -> &Self::Target {
+        &self.owner
+    }
+}
+
+impl PartialEq for RetainedDirectory {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity == other.identity && self.path() == other.path()
+    }
+}
+impl Eq for RetainedDirectory {}
+
+fn custody(path: &Path, error: std::io::Error) -> JournalError {
+    if matches!(
+        error.kind(),
+        std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::InvalidInput
+            | std::io::ErrorKind::InvalidData
+            | std::io::ErrorKind::IsADirectory
+            | std::io::ErrorKind::NotADirectory
+    ) {
+        JournalError::Unsafe(path.to_owned())
     } else {
-        metadata.is_file() && metadata.nlink() == 1
-    };
-    if metadata.file_type().is_symlink()
-        || !kind_ok
-        || metadata.permissions().mode() & 0o077 != 0
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-    {
-        return Err(JournalError::Unsafe(path.to_path_buf()));
+        io("retain private journal custody")(error)
     }
-    Ok(())
 }
 
-#[cfg(not(unix))]
-fn check_private(_: &Path, _: &fs::Metadata, _: bool) -> Result<(), JournalError> {
-    Err(JournalError::Unsupported)
-}
+/// Read one record through the original private step directory.
+fn read_private_file(
+    directory: &iroha_fs::PrivateDirectory,
+    name: &str,
+) -> Result<Option<Vec<u8>>, JournalError> {
+    use std::io::Read as _;
 
-/// Create `path` as an owner-only directory if missing, then require it to be one.
-fn ensure_private_dir(path: &Path) -> Result<(), JournalError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => check_private(path, &metadata, true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            create_private_dir(path)?;
-            let metadata = fs::symlink_metadata(path).map_err(io("inspect a directory"))?;
-            check_private(path, &metadata, true)
+    let path = directory.path().join(name);
+    let Some(mut original) = directory
+        .open_retained_private_optional(name)
+        .map_err(|error| custody(&path, error))?
+    else {
+        return Ok(None);
+    };
+    let result = (|| {
+        #[cfg(windows)]
+        original
+            .require_current_owner()
+            .map_err(|error| custody(&path, error))?;
+        let length = original
+            .file()
+            .metadata()
+            .map_err(io("inspect original record"))?
+            .len();
+        if length > MAX_RECORD_BYTES {
+            return Err(JournalError::Malformed(path.clone()));
         }
-        Err(error) => Err(io("inspect a directory")(error)),
-    }
+        let before = original.snapshot().map_err(|error| custody(&path, error))?;
+        let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or(0));
+        original
+            .file_mut()
+            .take(MAX_RECORD_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(io("read original record"))?;
+        if bytes.len() as u64 > MAX_RECORD_BYTES {
+            return Err(JournalError::Malformed(path.clone()));
+        }
+        if bytes.len() as u64 != length
+            || original.snapshot().map_err(|error| custody(&path, error))? != before
+        {
+            return Err(JournalError::Unsafe(path.clone()));
+        }
+        Ok(Some(bytes))
+    })();
+    original
+        .revalidate()
+        .map_err(|error| custody(&path, error))?;
+    directory
+        .revalidate()
+        .map_err(|error| custody(directory.path(), error))?;
+    result
 }
 
-#[cfg(unix)]
+#[cfg(test)]
 fn create_private_dir(path: &Path) -> Result<(), JournalError> {
-    use std::os::unix::fs::DirBuilderExt as _;
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .create(path)
-        .map_err(io("create a directory"))
-}
-
-#[cfg(not(unix))]
-fn create_private_dir(_: &Path) -> Result<(), JournalError> {
-    Err(JournalError::Unsupported)
-}
-
-/// Read an owner-only record file; `None` if it does not exist.
-fn read_private_file(path: &Path) -> Result<Option<Vec<u8>>, JournalError> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(io("inspect a record")(error)),
-    };
-    check_private(path, &metadata, false)?;
-    let file = File::open(path).map_err(io("open a record"))?;
-    check_private(
-        path,
-        &file.metadata().map_err(io("inspect a record"))?,
-        false,
-    )?;
-    let mut bytes = Vec::new();
-    file.take(MAX_RECORD_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(io("read a record"))?;
-    if bytes.len() as u64 > MAX_RECORD_BYTES {
-        return Err(JournalError::Malformed(path.to_path_buf()));
-    }
-    Ok(Some(bytes))
+    let parent = iroha_fs::PrivateDirectory::open(path.parent().expect("step parent"))
+        .map_err(|error| custody(path, error))?;
+    parent
+        .create_child(path.file_name().expect("step name"))
+        .map(drop)
+        .map_err(|error| custody(path, error))
 }
 
 /// Decode `bytes` as canonical Norito JSON of `T` (re-encoding must reproduce them).
@@ -459,6 +487,7 @@ fn decode_canonical<T: json::JsonDeserialize + json::JsonSerialize>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SccpJournalRoot {
     root: PathBuf,
+    directory: RetainedDirectory,
 }
 
 impl SccpJournalRoot {
@@ -469,13 +498,33 @@ impl SccpJournalRoot {
     /// Returns [`JournalError::Unsafe`] for a symlink or a directory with group or other
     /// permissions, or an I/O error.
     pub fn open(root: &Path) -> Result<Self, JournalError> {
-        ensure_private_dir(root)?;
+        let directory = match iroha_fs::PrivateDirectory::open(root) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // Preserve the parent-exists contract. No missing ancestor is created,
+                // and an existing directory's custody is never repaired implicitly.
+                let parent = root
+                    .parent()
+                    .filter(|path| !path.as_os_str().is_empty())
+                    .unwrap_or(Path::new("."));
+                let name = root
+                    .file_name()
+                    .ok_or_else(|| JournalError::Unsafe(root.to_owned()))?;
+                let parent =
+                    iroha_fs::OwnerDirectory::open(parent).map_err(|error| custody(root, error))?;
+                parent
+                    .create_private_child(name)
+                    .map_err(|error| custody(root, error))?
+            }
+            Err(error) => return Err(custody(root, error)),
+        };
         Ok(Self {
-            root: root.to_path_buf(),
+            root: directory.path().to_owned(),
+            directory: RetainedDirectory::new(directory)?,
         })
     }
 
-    /// The root directory.
+    /// The retained absolute root directory, including when opened through a relative path.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.root
@@ -488,9 +537,16 @@ impl SccpJournalRoot {
     /// See [`Self::open`].
     pub fn network(&self, network_id: &NetworkId) -> Result<SccpNetworkJournal, JournalError> {
         let network_id = *network_id.as_bytes();
-        let dir = self.root.join(hex::encode(network_id));
-        ensure_private_dir(&dir)?;
-        Ok(SccpNetworkJournal { dir, network_id })
+        let name = hex::encode(network_id);
+        let directory = self
+            .directory
+            .ensure_child(&name)
+            .map_err(|error| custody(&self.root.join(name), error))?;
+        Ok(SccpNetworkJournal {
+            dir: directory.path().to_owned(),
+            network_id,
+            directory: RetainedDirectory::new(directory)?,
+        })
     }
 }
 
@@ -499,6 +555,7 @@ impl SccpJournalRoot {
 pub struct SccpNetworkJournal {
     dir: PathBuf,
     network_id: [u8; 32],
+    directory: RetainedDirectory,
 }
 
 impl SccpNetworkJournal {
@@ -514,12 +571,16 @@ impl SccpNetworkJournal {
     ///
     /// See [`SccpJournalRoot::open`].
     pub fn flow(&self, flow: &SccpFlowIdV1) -> Result<SccpFlowJournal, JournalError> {
-        let dir = self.dir.join(flow.dir_name());
-        ensure_private_dir(&dir)?;
+        let name = flow.dir_name();
+        let directory = self
+            .directory
+            .ensure_child(&name)
+            .map_err(|error| custody(&self.dir.join(name), error))?;
         Ok(SccpFlowJournal {
-            dir,
+            dir: directory.path().to_owned(),
             network_id: self.network_id,
             flow: *flow,
+            directory: RetainedDirectory::new(directory)?,
         })
     }
 
@@ -530,9 +591,11 @@ impl SccpNetworkJournal {
     /// Returns an I/O error or [`JournalError::Inconsistent`] for a foreign entry.
     pub fn flows(&self) -> Result<Vec<SccpFlowIdV1>, JournalError> {
         let mut flows = Vec::new();
-        for entry in fs::read_dir(&self.dir).map_err(io("list flows"))? {
-            let entry = entry.map_err(io("list flows"))?;
-            let name = entry.file_name();
+        for name in self
+            .directory
+            .entries(usize::MAX)
+            .map_err(io("list flows"))?
+        {
             let flow = name
                 .to_str()
                 .and_then(SccpFlowIdV1::from_dir_name)
@@ -555,6 +618,7 @@ pub struct SccpFlowJournal {
     dir: PathBuf,
     network_id: [u8; 32],
     flow: SccpFlowIdV1,
+    directory: RetainedDirectory,
 }
 
 impl SccpFlowJournal {
@@ -586,9 +650,11 @@ impl SccpFlowJournal {
     /// Returns an I/O error or [`JournalError::Inconsistent`].
     pub fn step_count(&self) -> Result<u32, JournalError> {
         let mut indexes = Vec::new();
-        for entry in fs::read_dir(&self.dir).map_err(io("list steps"))? {
-            let entry = entry.map_err(io("list steps"))?;
-            let name = entry.file_name();
+        for name in self
+            .directory
+            .entries(MAX_STEPS as usize + 1)
+            .map_err(io("list steps"))?
+        {
             let index = name
                 .to_str()
                 .and_then(|name| name.strip_prefix(STEP_DIR_PREFIX))
@@ -624,18 +690,20 @@ impl SccpFlowJournal {
     /// submission marker or an outcome but no prepared record.
     pub fn status(&self, index: u32) -> Result<SccpStepStatusV1, JournalError> {
         let dir = self.step_dir(index);
-        let metadata = fs::symlink_metadata(&dir).map_err(io("inspect a step"))?;
-        check_private(&dir, &metadata, true)?;
+        let directory = self
+            .directory
+            .open_child(dir.file_name().expect("step name"))
+            .map_err(|error| custody(&dir, error))?;
         // Records are installed in the order operation, submission, outcome and never removed,
         // so reading them in reverse order never sees a later record without its predecessors
         // even while another process advances the step.
         let applied = dir.join(APPLIED_FILE);
-        let outcome = read_private_file(&applied)?
+        let outcome = read_private_file(&directory, APPLIED_FILE)?
             .map(|bytes| decode_canonical::<SccpJournalOutcomeV1>(&applied, &bytes))
             .transpose()?;
-        let submitted = read_private_file(&dir.join(SUBMISSION_FILE))?.is_some();
+        let submitted = read_private_file(&directory, SUBMISSION_FILE)?.is_some();
         let operation = dir.join(OPERATION_FILE);
-        let Some(bytes) = read_private_file(&operation)? else {
+        let Some(bytes) = read_private_file(&directory, OPERATION_FILE)? else {
             if outcome.is_some() || submitted {
                 return Err(JournalError::Inconsistent(format!(
                     "step {index} has progress records but no prepared record"
@@ -723,7 +791,8 @@ impl SccpFlowJournal {
         }
         self.check_record(record, count)?;
         SccpJournalStep::install(
-            Journal::create(&self.step_dir(count)).map_err(storage)?,
+            Journal::create_child(&self.directory, format!("{STEP_DIR_PREFIX}{count:06}"))
+                .map_err(storage)?,
             record,
         )
     }
@@ -736,13 +805,27 @@ impl SccpFlowJournal {
     /// (`rmdir` fails on anything it holds) and created afresh.
     fn reclaim_empty_step(&self, index: u32) -> Result<Journal, JournalError> {
         let dir = self.step_dir(index);
-        match fs::symlink_metadata(dir.join(LOCK_FILE)) {
-            Ok(_) => Journal::open(&dir).map_err(storage),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                fs::remove_dir(&dir).map_err(io("remove an unprepared step"))?;
-                Journal::create(&dir).map_err(storage)
-            }
-            Err(error) => Err(io("inspect a step lock")(error)),
+        let name = dir.file_name().expect("step name");
+        let directory = self
+            .directory
+            .open_child(name)
+            .map_err(|error| custody(&dir, error))?;
+        if directory
+            .entries(usize::MAX)
+            .map_err(|error| custody(&dir, error))?
+            .iter()
+            .any(|name| name == LOCK_FILE)
+        {
+            Journal::open_optional_child(&self.directory, name)
+                .map_err(storage)?
+                .ok_or_else(|| {
+                    JournalError::Inconsistent("step disappeared before locking".to_owned())
+                })
+        } else {
+            directory
+                .remove_empty()
+                .map_err(io("remove an unprepared step"))?;
+            Journal::create_child(&self.directory, name).map_err(storage)
         }
     }
 
@@ -758,7 +841,14 @@ impl SccpFlowJournal {
                 "step {index} was never prepared; journal it again first"
             )));
         }
-        let journal = Journal::open(&self.step_dir(index)).map_err(storage)?;
+        let journal =
+            Journal::open_optional_child(&self.directory, format!("{STEP_DIR_PREFIX}{index:06}"))
+                .map_err(storage)?
+                .ok_or_else(|| {
+                    JournalError::Inconsistent(
+                        "prepared step disappeared before locking".to_owned(),
+                    )
+                })?;
         let record: SccpJournalRecordV1 = journal.read_operation().map_err(storage)?;
         self.check_record(&record, index)?;
         Ok(SccpJournalStep { journal, record })
@@ -865,44 +955,77 @@ impl SccpJournalStep {
         &self.record
     }
 
+    /// Revalidate the stored canonical operation on both sides of a journal action.
+    fn with_original<T>(
+        &self,
+        action: impl FnOnce() -> Result<T, JournalError>,
+    ) -> Result<T, JournalError> {
+        self.require_original()?;
+        let result = action();
+        self.require_original()?;
+        result
+    }
+
+    /// Require the current private operation record to equal the prepared record.
+    fn require_original(&self) -> Result<(), JournalError> {
+        let original: SccpJournalRecordV1 = self.journal.read_operation().map_err(storage)?;
+        if original != self.record {
+            return Err(JournalError::Inconsistent(
+                "the retained original operation changed".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Durably record the pre-dispatch marker. Only the call that returns `true` may submit;
     /// `false` means an earlier attempt exists and the step must be reconciled instead.
     ///
     /// # Errors
     ///
-    /// Returns an operation-journal error.
+    /// Refuses an unsafe or changed stored operation and returns journal errors.
     pub fn begin_submission(&self) -> Result<bool, JournalError> {
-        self.journal
-            .record_submission(&self.record)
-            .map_err(storage)
+        self.with_original(|| {
+            self.journal
+                .record_submission(&self.record)
+                .map_err(storage)
+        })
     }
 
     /// Whether the pre-dispatch marker exists.
     ///
     /// # Errors
     ///
-    /// Returns an operation-journal error.
+    /// Refuses an unsafe or changed stored operation and returns journal errors.
     pub fn submission_recorded(&self) -> Result<bool, JournalError> {
-        self.journal
-            .submission_recorded(&self.record)
-            .map_err(storage)
+        self.with_original(|| {
+            self.journal
+                .submission_recorded(&self.record)
+                .map_err(storage)
+        })
     }
 
     /// Record the step's outcome, once (an identical rewrite is accepted).
     ///
     /// # Errors
     ///
-    /// Returns an operation-journal error, including for a different outcome.
+    /// Refuses an unsafe or changed stored operation and returns journal errors,
+    /// including for a different outcome.
     pub fn complete(&self, outcome: &SccpJournalOutcomeV1) -> Result<(), JournalError> {
-        self.journal
-            .write_applied_evidence(outcome)
-            .map_err(storage)
+        self.with_original(|| {
+            self.journal
+                .write_applied_evidence(outcome)
+                .map_err(storage)
+        })
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
+    use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt as _, symlink};
+    #[cfg(windows)]
+    use std::os::windows::fs::symlink_file as symlink;
 
     use super::*;
 
@@ -946,6 +1069,244 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = SccpJournalRoot::open(&dir.path().join("journal")).expect("root");
         (dir, root)
+    }
+
+    #[test]
+    fn root_accepts_relative_and_existing_dot_paths_without_creating_missing_parents() {
+        let working = tempfile::tempdir().unwrap();
+        let mut child = iroha_fs::ProcessCommand::new(std::env::current_exe().unwrap()).unwrap();
+        child
+            .args([
+                "--ignored",
+                "--exact",
+                "journal::tests::relative_root_child",
+                "--nocapture",
+            ])
+            .env("IROHA_SCCP_RELATIVE_ROOT_CHILD", "1")
+            .current_dir(working.path());
+        let output = child.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.contains("running 1 test"), "{stdout}");
+        assert!(
+            stdout.contains("relative-root-custody-complete"),
+            "{stdout}"
+        );
+    }
+
+    #[test]
+    #[ignore = "invoked by the relative-root parent in its own local working directory"]
+    fn relative_root_child() {
+        assert_eq!(
+            std::env::var("IROHA_SCCP_RELATIVE_ROOT_CHILD").as_deref(),
+            Ok("1")
+        );
+        let current = std::env::current_dir().unwrap();
+        let temporary = tempfile::tempdir_in(&current).unwrap();
+        let relative = temporary
+            .path()
+            .strip_prefix(&current)
+            .unwrap()
+            .join("journal");
+        let root = SccpJournalRoot::open(&relative).unwrap();
+        assert!(root.path().is_absolute());
+        let original = root.directory.identity;
+        let reopened = SccpJournalRoot::open(&root.path().join(".")).unwrap();
+        assert_eq!(reopened.directory.identity, original);
+        assert_eq!(root.clone(), root);
+        let missing = temporary.path().join("missing");
+        assert!(SccpJournalRoot::open(&missing.join("journal")).is_err());
+        assert!(!missing.exists());
+        assert!(matches!(
+            SccpJournalRoot::open(Path::new("")),
+            Err(JournalError::Unsafe(_))
+        ));
+        assert!(SccpJournalRoot::open(&relative.join("..").join("other")).is_err());
+        println!("relative-root-custody-complete");
+    }
+
+    fn assert_no_submission_or_outcome(step: &SccpJournalStep) {
+        assert!(!step.journal.path().join(SUBMISSION_FILE).exists());
+        assert!(!step.journal.path().join(APPLIED_FILE).exists());
+    }
+
+    fn assert_original_required(step: &SccpJournalStep) {
+        assert!(step.begin_submission().is_err());
+        assert!(step.submission_recorded().is_err());
+        assert!(step.complete(&outcome()).is_err());
+        assert_no_submission_or_outcome(step);
+    }
+
+    #[test]
+    fn submission_and_completion_require_the_exact_stored_operation() {
+        let (temporary, root) = root();
+        let network = root.network(&network_id(0x11)).unwrap();
+        let flow = network.flow(&flow()).unwrap();
+        let record = record(&network, 0);
+        let step = flow.append(&record).unwrap();
+        let operation = step.journal.path().join(OPERATION_FILE);
+        let original = json::to_vec(&record).unwrap();
+        let mut changed = record.clone();
+        changed.submission.push(0xff);
+        fs::write(&operation, json::to_vec(&changed).unwrap()).unwrap();
+        assert_original_required(&step);
+        fs::write(&operation, &original).unwrap();
+        let alias = temporary.path().join("operation-alias");
+        fs::hard_link(&operation, &alias).unwrap();
+        assert_original_required(&step);
+        fs::remove_file(alias).unwrap();
+        assert!(!step.submission_recorded().unwrap());
+        assert!(step.begin_submission().unwrap());
+        assert!(step.submission_recorded().unwrap());
+        step.complete(&outcome()).unwrap();
+        assert_eq!(step.outcome().unwrap(), Some(outcome()));
+    }
+
+    #[test]
+    fn original_guard_revalidates_after_success_and_after_failed_actions() {
+        let (_temporary, root) = root();
+        let network = root.network(&network_id(0x11)).unwrap();
+        let flow = network.flow(&flow()).unwrap();
+        let record = record(&network, 0);
+        let step = flow.append(&record).unwrap();
+        let operation = step.journal.path().join(OPERATION_FILE);
+        let original = json::to_vec(&record).unwrap();
+        let mut changed = record.clone();
+        changed.submission.push(0xff);
+        for action_fails in [false, true] {
+            let result = step.with_original(|| {
+                fs::write(&operation, json::to_vec(&changed).unwrap()).unwrap();
+                if action_fails {
+                    Err(JournalError::Malformed(operation.clone()))
+                } else {
+                    Ok(())
+                }
+            });
+            assert!(matches!(result, Err(JournalError::Inconsistent(_))));
+            assert_no_submission_or_outcome(&step);
+            fs::write(&operation, &original).unwrap();
+        }
+        assert!(matches!(
+            step.with_original::<()>(|| Err(JournalError::Malformed(operation.clone()))),
+            Err(JournalError::Malformed(_))
+        ));
+        assert_no_submission_or_outcome(&step);
+    }
+
+    #[test]
+    fn step_retains_original_ancestry_after_all_selectors_are_dropped() {
+        let (_temporary, root) = root();
+        let network = root.network(&network_id(0x11)).unwrap();
+        let flow = network.flow(&flow()).unwrap();
+        let record = record(&network, 0);
+        let step = flow.append(&record).unwrap();
+        drop(flow);
+        drop(network);
+        drop(root);
+        assert_eq!(step.record(), &record);
+        assert!(step.begin_submission().unwrap());
+        step.complete(&outcome()).unwrap();
+        assert_eq!(step.outcome().unwrap(), Some(outcome()));
+    }
+
+    #[test]
+    fn malformed_and_unsafe_records_remain_distinct_from_initial_absence() {
+        let (_temporary, root) = root();
+        let network = root.network(&network_id(0x11)).unwrap();
+        let flow = network.flow(&flow()).unwrap();
+        let directory = flow.directory.create_child("step-000000").unwrap();
+        assert!(
+            read_private_file(&directory, OPERATION_FILE)
+                .unwrap()
+                .is_none()
+        );
+        let mut large = directory
+            .create_retained_private(OPERATION_FILE, MAX_RECORD_BYTES as usize + 2)
+            .unwrap();
+        use std::io::Write as _;
+        large
+            .write_all(&vec![0; MAX_RECORD_BYTES as usize + 1])
+            .unwrap();
+        drop(large);
+        assert!(matches!(
+            read_private_file(&directory, OPERATION_FILE),
+            Err(JournalError::Malformed(_))
+        ));
+        fs::remove_file(directory.path().join(OPERATION_FILE)).unwrap();
+        let wrong_type = directory.create_child(OPERATION_FILE).unwrap();
+        assert!(matches!(
+            read_private_file(&directory, OPERATION_FILE),
+            Err(JournalError::Unsafe(_))
+        ));
+        drop(wrong_type);
+    }
+
+    #[cfg(windows)]
+    fn change_everyone_read(path: &Path, grant: bool) {
+        assert!(
+            std::process::Command::new("icacls")
+                .arg(path)
+                .arg(if grant { "/grant" } else { "/remove:g" })
+                .arg(if grant { "*S-1-1-0:R" } else { "*S-1-1-0" })
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_journal_rejects_inherited_custody_and_live_acl_or_link_changes() {
+        let temporary = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            SccpJournalRoot::open(temporary.path()),
+            Err(JournalError::Unsafe(_))
+        ));
+        let root = SccpJournalRoot::open(&temporary.path().join("private")).unwrap();
+        let network = root.network(&network_id(0x11)).unwrap();
+        let flow = network.flow(&flow()).unwrap();
+        let step = flow.append(&record(&network, 0)).unwrap();
+        let operation = step.journal.path().join(OPERATION_FILE);
+        for path in [&operation, root.path()] {
+            change_everyone_read(path, true);
+            assert!(flow.status(0).is_err());
+            assert_original_required(&step);
+            change_everyone_read(path, false);
+        }
+        assert_eq!(flow.status(0).unwrap().state, SccpStepStateV1::Prepared);
+        let alias = temporary.path().join("operation-alias");
+        fs::hard_link(&operation, &alias).unwrap();
+        assert!(matches!(flow.status(0), Err(JournalError::Unsafe(_))));
+        assert_original_required(&step);
+        fs::remove_file(alias).unwrap();
+        assert_eq!(flow.status(0).unwrap().state, SccpStepStateV1::Prepared);
+        assert!(fs::rename(root.path(), temporary.path().join("displaced")).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_journal_refuses_junction_networks_without_following_target() {
+        let (temporary, root) = root();
+        let target =
+            iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("target")).unwrap();
+        let network_id = network_id(0x11);
+        let junction = root.path().join(hex::encode(network_id.as_bytes()));
+        assert!(
+            std::process::Command::new("cmd")
+                .arg("/C")
+                .arg("mklink")
+                .arg("/J")
+                .arg(&junction)
+                .arg(target.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(matches!(
+            root.network(&network_id),
+            Err(JournalError::Unsafe(_))
+        ));
+        assert!(target.entries(1).unwrap().is_empty());
     }
 
     #[test]
@@ -1230,8 +1591,10 @@ mod tests {
 
         // Progress records without a prepared record are not an empty step.
         let marker = flow_journal.step_dir(0).join(SUBMISSION_FILE);
-        fs::write(&marker, b"{}").expect("marker");
-        fs::set_permissions(&marker, fs::Permissions::from_mode(0o600)).expect("chmod");
+        iroha_fs::PrivateDirectory::open(marker.parent().unwrap())
+            .unwrap()
+            .write_atomic(SUBMISSION_FILE, b"{}", iroha_fs::PublishMode::CreateNew)
+            .expect("private marker");
         assert!(matches!(
             flow_journal.status(0),
             Err(JournalError::Inconsistent(_))
@@ -1255,6 +1618,7 @@ mod tests {
         assert_ne!(network.network_id(), reset.network_id());
     }
 
+    #[cfg(unix)]
     #[test]
     fn unsafe_directories_are_refused() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1282,6 +1646,5 @@ mod tests {
             network.flows(),
             Err(JournalError::Inconsistent(_))
         ));
-        assert!(JournalError::Unsupported.to_string().contains("Unix"));
     }
 }

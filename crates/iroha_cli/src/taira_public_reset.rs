@@ -49,12 +49,7 @@ const MAX_AUTHORIZATION_LIFETIME_MS: u64 = 15 * 60 * 1_000;
 const EXECUTION_SAFETY_MARGIN_MS: u64 = 5 * 60 * 1_000;
 const MAX_EXECUTION_LIFETIME_MS: u64 = 12 * 60 * 60 * 1_000;
 const MAX_CLOCK_SKEW_MS: u64 = 30_000;
-const VALIDATOR_SLUGS: [&str; 4] = [
-    "taira-validator-1",
-    "taira-validator-2",
-    "taira-validator-3",
-    "taira-validator-4",
-];
+use crate::taira_config_retirement_evidence::VALIDATOR_SLUGS;
 const VALIDATOR_ARTIFACT_ROLES: [&str; 8] = [
     "iroha3d",
     "iroha_cli",
@@ -96,9 +91,9 @@ mod native_edge_prepare;
 mod native_edge_protocol;
 #[path = "taira_public_reset_validator_config.rs"]
 mod validator_config;
+pub use host::config_retirement::RetireValidatorConfig;
 #[cfg(target_os = "linux")]
 pub(crate) use host::config_retirement::verify_installed_retirement;
-pub use host::config_retirement::{RetireValidatorConfig, validate_retirement_records};
 pub use host::maintenance::StoppedOwnerMaintenance;
 #[path = "taira_public_reset_deployment_profile.rs"]
 mod deployment_profile;
@@ -10328,12 +10323,4 @@ mod signed_genesis_startup_tests {
         let missing = format!("[genesis]\nfile = {:?}\n", path.to_str().unwrap());
         assert!(validate_validator_genesis_config(missing.as_bytes(), &path, &hash).is_err());
     }
-}
-
-#[cfg(test)]
-pub fn validate_inrou_checks_for_test(
-    report: &norito::json::Value,
-    scope: crate::taira::InrouProbeScope,
-) -> Result<()> {
-    host::validate_inrou_checks_for_test(report, scope)
 }

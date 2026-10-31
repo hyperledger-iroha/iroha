@@ -21,6 +21,7 @@ which read the chain through the certified-chain reader
 | Route | Response |
 | --- | --- |
 | `GET /v1/bridge/finality/{height}` | `SumeragiFinalityProof` |
+| `GET /v1/bridge/finality/interval/{from}/{to}` | 1–64 consecutive `SumeragiFinalityProof` values |
 | `GET /v1/bridge/finality/bundle/{height}` | `SumeragiFinalityBundle` |
 | `GET /v1/bridge/finality/attestation/{height}` | `SumeragiFinalityAttestation` |
 | `GET /v1/bridge/finality/attestation/latest` | `SumeragiFinalityAttestation` for the durable tip |
@@ -32,6 +33,44 @@ checks the proof with `SumeragiFinalityProof::decode_checked` before serving
 it. A height the State view has not committed, or whose frame or certificate
 is missing, returns `NotFound`; every other read or verification failure is an
 internal error. Nothing is served from unverified data.
+
+The full native single-proof and interval GETs have one initial memory profile
+under `torii.finality_max_working_set_bytes` (384,000,000 bytes by default).
+It shares the existing `query_fanout_max_retained_bytes` pool: one quarter of
+the default 512,000,000-byte aggregate stays with ingress, leaving 384,000,000
+bytes for all concurrent query working sets. The effective finality ceiling is
+the smaller of its configured limit and that existing pool. Ordinary query
+working sets remain capped at 48,000,000 bytes. A smaller configured pool can
+refuse native finality; the ceiling is local resource admission, not a change
+to transaction validity or a guarantee that every legal execution fits a proof.
+
+`iroha_core::sumeragi::finality::native_finality_frame_budget_bytes` derives the
+source/response corridor from `max(R + 2*B, 2*R)` plus bounded cursor,
+certificate and proof controls. `R` is the unchanged HTTP response limit and
+`B` the portable native block-frame limit. The query reader checks that its
+canonical resultless payload fits the original frame, drops a decoded body
+before decoding the next gap, and retains only bounded authenticated authority
+metadata. The remaining original grant prepays seven metadata lifetimes and one
+transient native verification phase. The signed-genesis epoch and four schedule
+graphs retain the intrinsic result-decoder allowance; the old and new committee
+authorities use a closed bound for at most 31 validators, including member and
+proof capacities, key storage, credential Arcs, committee-map backing, pairing
+scratch and the authority Arc. Actual owned material is checked against that
+bound only after the original native validation succeeds. This geometry alone
+does not establish maximum-payment endpoint qualification. It does not reset an
+inherited decoder's counters.
+An undersized initial profile refuses before acquiring pool credit; existing
+outer owners retain their original corridors and pool identities. Native work
+retains its permit through physical completion, and response bytes, clones and
+slices retain the same memory reservation until the last byte is released.
+The prepared native decoder also charges DA commitment/policy arrays, penalty
+custody and other owned children against that same pool. Universal admission
+for every legal combination of those children is not established; actual
+charges can refuse without expanding the original grant. The source byte-family
+and metadata bounds do not substitute for that remaining full-shape analysis.
+The 32 MiB portable native frame limit and the larger committed execution-output
+wire limit remain distinct; maximum-payment endpoint qualification alone does
+not close that broader resource contract.
 
 ## Proof
 

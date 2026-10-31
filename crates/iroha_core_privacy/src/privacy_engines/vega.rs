@@ -818,13 +818,12 @@ impl VegaMdlPublicInputsV1 {
         for (index, word) in statement
             .device_authentication_digest
             .as_bytes()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
         {
-            let value = u32::from_be_bytes(
-                word.try_into()
-                    .expect("four-byte chunks have an exact fixed width"),
-            );
+            let value = u32::from_be_bytes(*word);
             elements[index + 2] = VegaT256ScalarV1::from_u64(u64::from(value));
         }
         elements[10] = VegaT256ScalarV1::from_u64(u64::from(statement.presentation_date.year));

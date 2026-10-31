@@ -445,7 +445,10 @@ fn poseidon_matches_cpu_permutation() {
         cpu_states.push(idx * 5 + 1);
     }
     let mut metal_states = cpu_states.clone();
-    for chunk in cpu_states.chunks_exact_mut(cpu_poseidon::STATE_WIDTH) {
+    for chunk in cpu_states
+        .as_chunks_mut::<{ cpu_poseidon::STATE_WIDTH }>()
+        .0
+    {
         let mut state = [0u64; cpu_poseidon::STATE_WIDTH];
         state.copy_from_slice(chunk);
         cpu_poseidon::permute_state(&mut state);
@@ -481,7 +484,7 @@ fn poseidon_multi_state_chunks_match_cpu_edge_vectors() {
             .map(|index| edge_words[index % edge_words.len()])
             .collect();
         let mut expected = input.clone();
-        for words in expected.chunks_exact_mut(cpu_poseidon::STATE_WIDTH) {
+        for words in expected.as_chunks_mut::<{ cpu_poseidon::STATE_WIDTH }>().0 {
             let mut state = [words[0], words[1], words[2]];
             cpu_poseidon::permute_state(&mut state);
             words.copy_from_slice(&state);

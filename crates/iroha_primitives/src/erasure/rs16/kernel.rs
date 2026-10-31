@@ -207,17 +207,19 @@ fn scalar(coefficients: &[u16], sources: &[&[u8]], destination: &mut [u8], accum
     }
     for (index, (coefficient, source)) in coefficients.iter().zip(sources).enumerate() {
         let tables = ByteTables::new(*coefficient);
-        let pairs = destination.chunks_exact_mut(2).zip(source.chunks_exact(2));
+        let pairs = destination
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
+            .zip(source.as_chunks::<2>().0);
         if index == 0 && !accumulate {
             for (output, input) in pairs {
-                let product = tables.mul(u16::from_le_bytes([input[0], input[1]]));
-                output.copy_from_slice(&product.to_le_bytes());
+                *output = tables.mul(u16::from_le_bytes(*input)).to_le_bytes();
             }
         } else {
             for (output, input) in pairs {
-                let product = tables.mul(u16::from_le_bytes([input[0], input[1]]))
-                    ^ u16::from_le_bytes([output[0], output[1]]);
-                output.copy_from_slice(&product.to_le_bytes());
+                let product = tables.mul(u16::from_le_bytes(*input)) ^ u16::from_le_bytes(*output);
+                *output = product.to_le_bytes();
             }
         }
     }
@@ -553,7 +555,7 @@ mod tests {
     fn row(seed: u64, symbols: usize) -> Vec<u8> {
         let mut bytes = reference::bytes(seed, 2 * symbols);
         // Every fifth symbol is zero and every seventh all-ones: table and lane edge cases.
-        for (index, pair) in bytes.chunks_exact_mut(2).enumerate() {
+        for (index, pair) in bytes.as_chunks_mut::<2>().0.iter_mut().enumerate() {
             if index % 5 == 0 {
                 pair.fill(0);
             } else if index % 7 == 0 {

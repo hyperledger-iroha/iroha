@@ -562,7 +562,9 @@ fn poseidon_hash_columns_cuda(batch: &PoseidonColumnBatch) -> Result<Vec<u64>, G
         message: err.to_string(),
     })?;
     Ok(states
-        .chunks_exact(STATE_WIDTH)
+        .as_chunks::<STATE_WIDTH>()
+        .0
+        .iter()
         .map(|state| state[0])
         .collect())
 }

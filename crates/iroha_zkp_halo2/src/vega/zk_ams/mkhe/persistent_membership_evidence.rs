@@ -1216,7 +1216,10 @@ mod tests {
                 .iter()
                 .all(|coefficient| (-1..=1).contains(coefficient))
         );
-        for chunk in coefficients.chunks_exact(ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1) {
+        for chunk in coefficients
+            .as_chunks::<ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1>()
+            .0
+        {
             assert_eq!(chunk.len(), 16_384);
             assert!(chunk.contains(&-1));
             assert!(chunk.contains(&0));

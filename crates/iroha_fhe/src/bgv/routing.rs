@@ -32,6 +32,10 @@ use super::{
 /// other than the explicitly charged shared layout. These are not a claim
 /// about the complete working set or an application admission policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Every resource ceiling names its explicit byte unit; public fields and payload scopes stay unambiguous."
+)]
 pub struct SlotLinearBudget {
     /// Maximum bytes of owned matrix and bias coefficients (`u32` scalars).
     pub coefficient_bytes: usize,
@@ -381,9 +385,8 @@ impl<const INPUTS: usize, const OUTPUTS: usize> SlotLinearPlan<INPUTS, OUTPUTS> 
                 best = Some((galois, scratch, baby_bits, transfer));
             }
         }
-        let (galois_applications, scratch_residue_bytes, baby_bits, transfer) = best.ok_or(
-            SlotLinearError::Bgv(noise_error.unwrap_or(BgvError::Kernel)),
-        )?;
+        let (galois_applications, scratch_residue_bytes, baby_bits, transfer) =
+            best.ok_or_else(|| SlotLinearError::Bgv(noise_error.unwrap_or(BgvError::Kernel)))?;
         let baby_elements = (0..1_usize << baby_bits)
             .map(|mask| group_element(profile, &generators[..baby_bits], mask))
             .collect();
@@ -573,7 +576,7 @@ fn group_element(profile: &BgvProfile, generators: &[u32], mask: usize) -> u32 {
             element = element * u64::from(generator) % order;
         }
     }
-    element as u32
+    u32::try_from(element).expect("validated odd-unit residue is below 2N and fits u32")
 }
 
 struct SplitTransfer<const OUTPUTS: usize> {
@@ -653,8 +656,10 @@ fn plan_fold<const INPUTS: usize, const OUTPUTS: usize>(
         for input in 0..INPUTS {
             for baby in 0..babies {
                 let element = group_element(profile, &generators[..baby_bits], baby);
-                let diagonal =
-                    (u64::from(giant) * u64::from(element) % (2 * profile.degree()) as u64) as u32;
+                let diagonal = u32::try_from(
+                    u64::from(giant) * u64::from(element) % (2 * profile.degree()) as u64,
+                )
+                .map_err(|_| BgvError::Kernel)?;
                 if !layout.diagonal_active(output, input, diagonal) {
                     continue;
                 }
@@ -685,7 +690,9 @@ fn plan_fold<const INPUTS: usize, const OUTPUTS: usize>(
         transfer,
     )?;
     let generator = giant_keys[step];
-    let composed = (u64::from(giant) * u64::from(generator) % (2 * profile.degree()) as u64) as u32;
+    let composed =
+        u32::try_from(u64::from(giant) * u64::from(generator) % (2 * profile.degree()) as u64)
+            .map_err(|_| BgvError::Kernel)?;
     let right = plan_fold(
         profile,
         encoding,
@@ -947,14 +954,13 @@ impl<const INPUTS: usize, const OUTPUTS: usize> SlotLinearMap<INPUTS, OUTPUTS> {
     }
 
     fn coefficient(&self, row: usize, column: usize) -> u32 {
-        match self.layout.coefficient_index(row, column) {
-            Some(index) => {
+        self.layout
+            .coefficient_index(row, column)
+            .map_or(0, |index| {
                 #[cfg(test)]
                 tests::observe_private_read(index);
                 self.coefficients[index]
-            }
-            None => 0,
-        }
+            })
     }
 
     /// Apply every publicly supported diagonal through existing exact BGV kernels.
@@ -1071,16 +1077,19 @@ impl<const INPUTS: usize, const OUTPUTS: usize> SlotLinearMap<INPUTS, OUTPUTS> {
         if step == giant_keys.len() {
             // Euler's theorem on the public power-of-two modulus: phi(2N)=N.
             // Only its induced slot permutation is applied to private masks.
-            let inverse = crate::modular::mod_pow_u64(
+            let inverse = u32::try_from(crate::modular::mod_pow_u64(
                 u64::from(giant),
                 profile.degree() as u64 - 1,
                 2 * profile.degree() as u64,
-            ) as u32;
+            ))
+            .map_err(|_| BgvError::Kernel)?;
             let mut partial: Option<NttCiphertext> = None;
             for input_bank in 0..INPUTS {
                 for (baby, &element) in plan.baby_elements.iter().enumerate() {
-                    let diagonal = (u64::from(giant) * u64::from(element)
-                        % (2 * profile.degree()) as u64) as u32;
+                    let diagonal = u32::try_from(
+                        u64::from(giant) * u64::from(element) % (2 * profile.degree()) as u64,
+                    )
+                    .map_err(|_| BgvError::Kernel)?;
                     if !self.layout.diagonal_active(out_bank, input_bank, diagonal) {
                         continue;
                     }
@@ -1129,7 +1138,8 @@ impl<const INPUTS: usize, const OUTPUTS: usize> SlotLinearMap<INPUTS, OUTPUTS> {
         )?;
         let generator = giant_keys[step];
         let composed =
-            (u64::from(giant) * u64::from(generator) % (2 * profile.degree()) as u64) as u32;
+            u32::try_from(u64::from(giant) * u64::from(generator) % (2 * profile.degree()) as u64)
+                .map_err(|_| BgvError::Kernel)?;
         let right = self.fold_giants(
             profile,
             plan,
@@ -1274,11 +1284,12 @@ mod tests {
             if step == giant_keys.len() {
                 // Euler's theorem on the public power-of-two modulus: phi(2N)=N.
                 // Only its induced slot permutation is applied to private masks.
-                let inverse = crate::modular::mod_pow_u64(
+                let inverse = u32::try_from(crate::modular::mod_pow_u64(
                     u64::from(giant),
                     profile.degree() as u64 - 1,
                     2 * profile.degree() as u64,
-                ) as u32;
+                ))
+                .expect("automorphism within supported geometry");
                 let mut partial: Option<Ciphertext> = None;
                 for input_bank in 0..INPUTS {
                     for (baby, &element) in plan.baby_elements.iter().enumerate() {
@@ -1307,7 +1318,7 @@ mod tests {
                         });
                     }
                 }
-                return partial.ok_or(BgvError::Kernel.into());
+                return partial.ok_or_else(|| BgvError::Kernel.into());
             }
             let left = self.fold_coefficient_oracle(
                 profile,
@@ -1320,8 +1331,10 @@ mod tests {
                 weights,
             )?;
             let generator = giant_keys[step];
-            let composed =
-                (u64::from(giant) * u64::from(generator) % (2 * profile.degree()) as u64) as u32;
+            let composed = u32::try_from(
+                u64::from(giant) * u64::from(generator) % (2 * profile.degree()) as u64,
+            )
+            .expect("automorphism within supported geometry");
             let right = self.fold_coefficient_oracle(
                 profile,
                 plan,
@@ -1367,9 +1380,7 @@ mod tests {
             return Ok(());
         }
         CLEAR_CHECKPOINT.with(|x| x.set(super::super::poly::tests::cleared_words()));
-        if mode == 2 {
-            panic!("retained public subtree unwind control");
-        }
+        assert_ne!(mode, 2, "retained public subtree unwind control");
         Err(BgvError::Kernel.into())
     }
     pub(super) fn observe_addition() {
@@ -1476,8 +1487,14 @@ mod tests {
         let values = std::array::from_fn::<_, 2, _>(|bank| {
             std::array::from_fn::<_, 128, _>(|slot| ((bank * 91 + slot * 37 + 256) % 257) as u64)
         });
-        let inputs =
-            std::array::from_fn(|bank| encrypt(&profile, &keys, &values[bank], bank as u8 + 11));
+        let inputs = std::array::from_fn(|bank| {
+            encrypt(
+                &profile,
+                &keys,
+                &values[bank],
+                u8::try_from(bank).expect("two input banks") + 11,
+            )
+        });
         let matrix_count = 2 * 3 * 128 * 128;
         let mut expected_accesses = None;
         for kind in 0..4 {
@@ -1498,7 +1515,8 @@ mod tests {
                                     }
                                 }
                             };
-                            coefficients[((out * 2 + bank) * 128 + row) * 128 + col] = entry as u32;
+                            coefficients[((out * 2 + bank) * 128 + row) * 128 + col] =
+                                u32::try_from(entry).expect("F257 coefficient");
                         }
                     }
                 }
@@ -1506,7 +1524,7 @@ mod tests {
                     coefficients[matrix_count + out * 128 + row] = if kind == 2 {
                         0
                     } else {
-                        ((row * 13 + out * 31 + 256) % 257) as u32
+                        u32::try_from((row * 13 + out * 31 + 256) % 257).expect("F257 coefficient")
                     };
                 }
             }
@@ -1571,7 +1589,7 @@ mod tests {
         let encoding = SlotEncoding::new(&profile, profile.master_plaintext()).unwrap();
         let babies = plan.baby_count() as u64;
         let giants = plan.giant_count() as u64;
-        let baby_bits = babies.ilog2() as u64;
+        let baby_bits = u64::from(babies.ilog2());
         let expected = profile
             .fresh_noise()
             .mul_u64(2 * 128)
@@ -1666,7 +1684,7 @@ mod tests {
             SlotLinearError::EmptyDimensions
         );
         assert_eq!(
-            SlotLinearPlan::<1, 0>::new(&profile, &[fresh.clone()], large).unwrap_err(),
+            SlotLinearPlan::<1, 0>::new(&profile, std::array::from_ref(&fresh), large).unwrap_err(),
             SlotLinearError::EmptyDimensions
         );
         assert_eq!(
@@ -1773,7 +1791,7 @@ mod tests {
         PRIVATE_ACCESSES.with(|x| x.borrow_mut().clear());
         assert_eq!(
             owner
-                .evaluate(&profile, &plan, &[input.clone()], &missing)
+                .evaluate(&profile, &plan, std::array::from_ref(&input), &missing)
                 .unwrap_err(),
             SlotLinearError::Bgv(BgvError::WrongSwitchingKey)
         );
@@ -1787,7 +1805,12 @@ mod tests {
         let other = super::tests::profile(4);
         assert_eq!(
             owner
-                .evaluate(&other, &plan, &[input.clone()], &keys.evaluation)
+                .evaluate(
+                    &other,
+                    &plan,
+                    std::array::from_ref(&input),
+                    &keys.evaluation
+                )
                 .unwrap_err(),
             SlotLinearError::Bgv(BgvError::ProfileMismatch)
         );
@@ -1881,10 +1904,12 @@ mod tests {
         let mut coefficients = Zeroizing::new(vec![0_u32; normal.coefficient_count()]);
         let mut expected = [0_u64; 128];
         for row in 0..128 {
-            coefficients[128 * 128 + row] = ((row * 19 + 256) % 257) as u32;
+            coefficients[128 * 128 + row] =
+                u32::try_from((row * 19 + 256) % 257).expect("F257 coefficient");
             expected[row] = u64::from(coefficients[128 * 128 + row]);
             for column in 0..128 {
-                let coefficient = ((row * 31 + column * 17 + 256) % 257) as u32;
+                let coefficient =
+                    u32::try_from((row * 31 + column * 17 + 256) % 257).expect("F257 coefficient");
                 coefficients[row * 128 + column] = coefficient;
                 expected[row] += u64::from(coefficient) * values[column];
             }
@@ -2009,9 +2034,7 @@ mod tests {
             std::panic::catch_unwind(|| {
                 let _ = SlotLinearMap::prepare_rows(&plan, |row, values| {
                     values.fill(256);
-                    if row == 13 {
-                        panic!("row initializer unwind control");
-                    }
+                    assert_ne!(row, 13, "row initializer unwind control");
                     Ok(())
                 });
             })
@@ -2067,8 +2090,14 @@ mod tests {
         let values = std::array::from_fn::<_, 2, _>(|bank| {
             std::array::from_fn::<_, 128, _>(|slot| ((slot * 41 + bank * 97 + 256) % 257) as u64)
         });
-        let inputs =
-            std::array::from_fn(|bank| encrypt(&profile, &keys, &values[bank], 31 + bank as u8));
+        let inputs = std::array::from_fn(|bank| {
+            encrypt(
+                &profile,
+                &keys,
+                &values[bank],
+                31 + u8::try_from(bank).expect("two input banks"),
+            )
+        });
         let mut access_trace = None;
         for zero in [false, true] {
             let mut description = Zeroizing::new(vec![0_u32; dense.coefficient_count()]);
@@ -2078,7 +2107,8 @@ mod tests {
                         let value = if zero {
                             0
                         } else {
-                            ((row * 37 + column * 73 + 256) % 257) as u32
+                            u32::try_from((row * 37 + column * 73 + 256) % 257)
+                                .expect("F257 coefficient")
                         };
                         let index = if column == 256 {
                             2 * 3 * 128 * 128 + row
@@ -2382,7 +2412,9 @@ mod tests {
         )];
         let coefficients = Zeroizing::new(
             (0..normal.coefficient_count())
-                .map(|i| ((i * 17 + i / 128 * 31 + 256) % 257) as u32)
+                .map(|i| {
+                    u32::try_from((i * 17 + i / 128 * 31 + 256) % 257).expect("F257 coefficient")
+                })
                 .collect::<Vec<_>>(),
         );
         for bits in 0..=7 {
@@ -2533,9 +2565,9 @@ mod tests {
         );
         assert!(ACCESSES.with(|x| x.borrow().is_empty()));
         assert!(PRIVATE_ACCESSES.with(|x| x.borrow().is_empty()));
-        let low_plain = Plaintext::constant(&profile, low, 1).unwrap();
+        let low_plaintext = Plaintext::constant(&profile, low, 1).unwrap();
         let low_input =
-            fixtures::encrypt(&profile, &keys.public, &low_plain, &mut entropy).unwrap();
+            fixtures::encrypt(&profile, &keys.public, &low_plaintext, &mut entropy).unwrap();
         let ntt = NttCiphertext::from_ciphertext(&profile, low_input).unwrap();
         assert_eq!(
             ntt.multiply_plain(&profile, &plaintext).err(),

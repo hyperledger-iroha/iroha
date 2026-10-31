@@ -65,6 +65,13 @@ macro_rules! schema_types {
             iroha_data_model::nexus::PrivateSettlementContextsProofV1,
             iroha_data_model::nexus::PrivateSettlementContextRequestV1,
             iroha_data_model::nexus::PrivateSettlementProofIntentV1,
+            // The baseline privacy policy remains exported independently of private context reads.
+            iroha_data_model::privacy::PrivacyConsensusPolicyV1,
+            iroha_data_model::privacy::PrivateSettlementValidityLimitsV1,
+            iroha_data_model::privacy::PrivateSettlementPolicyV1,
+            iroha_data_model::privacy::PrivateSettlementPolicyUpdateV1,
+            iroha_data_model::privacy::PrivateSettlementProtocolClosureDrainV1,
+            iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1,
             // The one ordinary crypto policy carried by authenticated genesis and Parameters.
             iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
             // Independent private roots and body-free parent anchoring.

@@ -593,7 +593,9 @@ mod bn254_parity {
     }
     fn canonical_to_scalars(column: &[u64]) -> Vec<Bn254Scalar> {
         column
-            .chunks_exact(BN254_LIMBS)
+            .as_chunks::<BN254_LIMBS>()
+            .0
+            .iter()
             .map(|chunk| bn254_limbs_slice_to_scalar(chunk).expect("valid scalar"))
             .collect()
     }

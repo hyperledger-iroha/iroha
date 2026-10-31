@@ -367,9 +367,7 @@ fn public(
     out
 }
 fn satisfied(circuit: &Recursive, instances: &[Vec<Fp>]) -> bool {
-    check_circuit(circuit, 16, instances, CheckMode::Strict)
-        .map(|r| r.is_satisfied())
-        .unwrap_or(false)
+    check_circuit(circuit, 16, instances, CheckMode::Strict).is_ok_and(|r| r.is_satisfied())
 }
 
 fn fixture() -> Fixture {

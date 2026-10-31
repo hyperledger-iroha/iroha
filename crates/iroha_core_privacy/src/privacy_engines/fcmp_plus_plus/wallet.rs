@@ -525,7 +525,7 @@ pub fn validate_fcmp_encrypted_output_v1(
 /// # Errors
 /// Rejects invalid keys or note/output bindings, unhealthy randomness, encoding failures, or authenticated-encryption failures.
 pub fn encrypt_fcmp_wallet_note_v1(
-    rng: &mut (impl TryRng + TryCryptoRng),
+    rng: &mut (impl TryCryptoRng),
     pool_id: PrivacyPoolIdV1,
     output: PrivacyFcmpOutputTupleV1,
     note: &FcmpWalletNoteV1,

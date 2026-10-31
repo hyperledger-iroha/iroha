@@ -1743,14 +1743,14 @@ impl UsageVoucherCounters {
     fn add_ingress(&self, bytes: u64) {
         let _ = self
             .ingress_bytes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_add(bytes))
             });
     }
     fn add_egress(&self, bytes: u64) {
         let _ = self
             .egress_bytes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_add(bytes))
             });
     }

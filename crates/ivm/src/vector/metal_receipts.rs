@@ -84,11 +84,10 @@ impl CompletionCounts {
     fn record(&self, kernel: Option<MetalKernel>, completed: bool) {
         if let Some(kernel) = kernel.filter(|_| completed) {
             // Telemetry saturation must never affect execution or wrap receipts.
-            let _ = self.0[kernel as usize].fetch_update(
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-                |count| Some(count.saturating_add(1)),
-            );
+            let _ =
+                self.0[kernel as usize].try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                    Some(count.saturating_add(1))
+                });
         }
     }
 }

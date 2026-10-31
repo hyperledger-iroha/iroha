@@ -449,7 +449,7 @@ impl<'a> SelectedRowCommitmentV1<'a> {
         )?;
         let mut offset = 0usize;
         let mut tile = DigestCutTileV1([PrivacyOuterDigestV1::default(); CUT_ROWS_V1]);
-        for rows in self.selected_rows.chunks_exact(CUT_ROWS_V1) {
+        for rows in self.selected_rows.as_chunks::<CUT_ROWS_V1>().0 {
             let first = rows[0];
             let original = self.cut.roots[first / CUT_ROWS_V1];
             for (slot, stream) in tile
@@ -500,3 +500,7 @@ impl Drop for DigestCutTileV1 {
 #[cfg(test)]
 #[path = "retained_commitment_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "initial_preflighted_cost_tests.rs"]
+mod initial_preflighted_cost_tests;

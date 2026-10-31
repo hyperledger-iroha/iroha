@@ -195,7 +195,7 @@ fn absent_home_lookup_preserves_parameter_bytes_and_world_root() {
     let parameters = world.parameters.view().encode();
     let root = WorldStateAccumulator::capture(&world.block())
         .unwrap()
-        .root()
+        .baseline_root()
         .unwrap();
     assert_eq!(
         world.view().asset_definition_dataspace(&id()).unwrap(),
@@ -210,7 +210,7 @@ fn absent_home_lookup_preserves_parameter_bytes_and_world_root() {
         root,
         WorldStateAccumulator::capture(&world.block())
             .unwrap()
-            .root()
+            .baseline_root()
             .unwrap()
     );
 }
@@ -221,7 +221,7 @@ fn direct_home_is_exact_changes_world_root_and_leaves_parameters_unchanged() {
     let mut world = world();
     let before = WorldStateAccumulator::capture(&world.block())
         .unwrap()
-        .root()
+        .baseline_root()
         .unwrap();
     let parameters = (*world.parameters.view()).clone();
     let ds = DataSpaceId::new((1_u64 << 53) + 7);
@@ -249,7 +249,7 @@ fn direct_home_is_exact_changes_world_root_and_leaves_parameters_unchanged() {
         before,
         WorldStateAccumulator::capture(&world.block())
             .unwrap()
-            .root()
+            .baseline_root()
             .unwrap()
     );
     world.rebuild_asset_definition_indexes().unwrap();

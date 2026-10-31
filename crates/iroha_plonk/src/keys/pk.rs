@@ -51,6 +51,7 @@ pub mod artifact;
 
 use ff::{BatchInvert, Field, WithSmallOrderMulGroup};
 use iroha_pasta::{PastaCurve, PastaField, fft::FftDomain};
+use rayon::prelude::*;
 
 use super::{DescriptorBinding, KeyError, check_shape, vk::VerifyingKey};
 use crate::{
@@ -360,14 +361,15 @@ pub struct ProvingKey<C: PastaCurve> {
     copy_digest: [u8; 32],
 }
 
-/// Interpolates evaluation-form columns.
+/// Interpolates evaluation-form columns, several at once: one column alone leaves
+/// most workers idle.
 fn interpolate_all<F: PastaField>(
     domain: &FftDomain<F>,
     columns: &[Vec<F>],
     cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<Vec<Vec<F>>, KeyError> {
     columns
-        .iter()
+        .par_iter()
         .map(|column| {
             let mut coeffs = column.clone();
             domain.ifft_cancellable(&mut coeffs, cancellation)?;

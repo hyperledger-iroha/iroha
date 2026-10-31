@@ -134,7 +134,9 @@ impl Fixture {
             self.file
         );
         raw.as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| (hex_digit(pair[0]) << 4) | hex_digit(pair[1]))
             .collect()
     }

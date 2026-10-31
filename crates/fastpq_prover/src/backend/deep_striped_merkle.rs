@@ -543,7 +543,9 @@ fn stream_rows(
             let count = (stripe.rows() - start).min(BATCH);
             let mut indices = [0; BATCH];
             for (offset, packed) in bytes[..count * WIDTH * 8]
-                .chunks_exact_mut(WIDTH * 8)
+                .as_chunks_mut::<{ WIDTH * 8 }>()
+                .0
+                .iter_mut()
                 .enumerate()
             {
                 let index = stripe.global_index(start + offset);
@@ -640,8 +642,10 @@ pub(super) fn open_cached_rows(
         .map_err(|_| invalid("cached row opening allocation failed"))?;
     for (&index, bytes) in queries.iter().zip(opened.values()) {
         let values = bytes
-            .chunks_exact(8)
-            .map(|word| u64::from_le_bytes(word.try_into().expect("exact row cell")))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|word| u64::from_le_bytes(*word))
             .collect::<Vec<_>>();
         rows.push(RowOpening {
             index: u32::try_from(index)

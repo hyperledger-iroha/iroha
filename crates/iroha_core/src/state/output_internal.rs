@@ -262,8 +262,25 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             // Genesis callbacks belong to the authenticated complete genesis result.
             // Every later invocation must be coherent before publishing its overlay.
             execution = execution.and_then(|()| {
-                crate::resource_coherence::validate_final_policy(&tx.world, height)
-                    .map_err(|error| (error.into_transaction_rejection(), None))
+                crate::resource_coherence::validate_final_policy(&tx.world, height).map_err(
+                    |error| {
+                        let rejection = match error {
+                            ExecutionAttemptError::Rejected(error) => {
+                                error.into_transaction_rejection()
+                            }
+                            ExecutionAttemptError::Deferred(original) => {
+                                tx.world.record_execution_deferral(original);
+                                TransactionRejectionReason::Validation(
+                                    ValidationFail::InternalError(
+                                        "local private-settlement policy read did not complete"
+                                            .into(),
+                                    ),
+                                )
+                            }
+                        };
+                        (rejection, None)
+                    },
+                )
             });
         }
         if tx.fastpq_source_quota.intrinsic_rejected()? {

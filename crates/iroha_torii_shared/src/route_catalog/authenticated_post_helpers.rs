@@ -32,6 +32,10 @@ const fn account_read_get(id: &'static str, path: &'static str) -> RouteDescript
 const fn account_read_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
     authenticated_account_route(app_get(id, path), RouteEffect::ReadOnly)
 }
+const fn account_private_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+    authenticated_account_route(app_sdk_get(id, path), RouteEffect::ReadOnly)
+        .with_private_no_store()
+}
 const fn account_compute_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
     authenticated_account_route(app_sdk_get(id, path), RouteEffect::ExpensiveCompute)
 }

@@ -731,7 +731,7 @@ fn projection_union_batch_keeps_and_erases_every_private_allocation() {
     use super::super::super::super::private_table::{
         PrivateTableV1, inspection, zeroize_field_rows_v1,
     };
-    let (_, observed) = inspection::observe_v1(|| {
+    let ((), observed) = inspection::observe_v1(|| {
         let mut owner =
             PrivateTableV1::new(vec![vec![F(7); 4]; 8], zeroize_field_rows_v1::<Vec<F>>);
         assert!(prepare_union_batch_v1(&mut owner, 4).is_err());

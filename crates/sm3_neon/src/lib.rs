@@ -35,11 +35,11 @@ mod neon {
         ];
         let mut state = IV;
         let buffer = allocate_padded(message);
-        for chunk in buffer.chunks_exact(64) {
+        for chunk in buffer.as_chunks::<64>().0 {
             compress_block(&mut state, chunk);
         }
         let mut out = [0u8; 32];
-        for (slot, value) in out.chunks_exact_mut(4).zip(state.iter()) {
+        for (slot, value) in out.as_chunks_mut::<4>().0.iter_mut().zip(state.iter()) {
             slot.copy_from_slice(&value.to_be_bytes());
         }
         out
@@ -50,8 +50,8 @@ mod neon {
         debug_assert_eq!(block.len(), 64);
         let mut w = [0u32; 68];
         let mut w_prime = [0u32; 64];
-        for (i, chunk) in block.chunks_exact(4).enumerate() {
-            w[i] = u32::from_be_bytes(chunk.try_into().expect("SM3 chunk"));
+        for (i, chunk) in block.as_chunks::<4>().0.iter().enumerate() {
+            w[i] = u32::from_be_bytes(*chunk);
         }
         for j in 16..68 {
             let x = w[j - 16] ^ w[j - 9] ^ rotl32(w[j - 3], 15);

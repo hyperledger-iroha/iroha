@@ -5,7 +5,7 @@
 //! inner-product norm by independent arbitrary-integer CRT. It prints only
 //! public geometry and elapsed milliseconds, never secret-derived values.
 //! This is neither a resource ceiling nor parameter/privacy qualification.
-//! BigInt oracle temporaries are test-only synthetic data, not clearing custody
+//! `BigInt` oracle temporaries are test-only synthetic data, not clearing custody
 //! owners; the production key and fixture residue buffers retain their owners.
 
 use super::*;
@@ -142,10 +142,10 @@ fn current_n14_q6_maximum_affine_tapes_match_scalar_reference_and_physical_noise
         setup_ms,
         key_started.elapsed().as_millis(),
     );
-    let bytes = std::array::from_fn::<_, 63, _>(|i| ((i * 43 + 7) % 256) as u8);
+    let bytes = std::array::from_fn::<_, 63, _>(|i| u8::try_from((i * 43 + 7) % 256).unwrap());
     let input = RamLfeReferenceInputV1::from_bytes(&bytes).expect("full input");
     let memory = RamLfeInitialMemoryV1::from_lanes(&std::array::from_fn::<_, 32, _>(|i| {
-        ((i * 19 + 197) % 257) as u16
+        u16::try_from((i * 19 + 197) % 257).unwrap()
     }))
     .expect("fixture lanes");
     let mut input_slots = Zeroizing::new([0_u64; SLOTS]);

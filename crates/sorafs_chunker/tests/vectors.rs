@@ -55,7 +55,7 @@ fn decode_hex(hex: &str) -> Vec<u8> {
         "hex string must have an even number of characters"
     );
     let mut bytes = Vec::with_capacity(hex.len() / 2);
-    for pair in hex.as_bytes().chunks_exact(2) {
+    for pair in hex.as_bytes().as_chunks::<2>().0 {
         let hi = (pair[0] as char).to_digit(16).expect("hex digit") as u8;
         let lo = (pair[1] as char).to_digit(16).expect("hex digit") as u8;
         bytes.push((hi << 4) | lo);

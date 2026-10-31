@@ -1028,9 +1028,10 @@ def shared_path_rows(record: Record) -> list[dict[str, Any]]:
     return rows
 
 
-def load_run(run_dir: Path, manifest_sha256: str) -> dict[str, Any]:
+def load_run(run_dir: Path, manifest_sha256: str, *, expected_observation_contract, expected_delivery=None) -> dict[str, Any]:
     """Summarize evidence returned by the pinned reader without reopening its paths."""
-    verified = HARNESS.read_pinned_run(run_dir, manifest_sha256)
+    verified = HARNESS.read_pinned_run(run_dir, manifest_sha256,
+        expected_observation_contract=expected_observation_contract, expected_delivery=expected_delivery)
     report = verified["report"]
     records = []
     for entry in report["records"]:
@@ -1760,7 +1761,8 @@ STATIC_SECTIONS = {
 
 
 def build_summary(
-    run_dirs: Iterable[Path], repository: Path, *, manifest_sha256: Iterable[str]
+    run_dirs: Iterable[Path], repository: Path, *, manifest_sha256: Iterable[str],
+    expected_observation_contract, expected_delivery=None
 ) -> dict[str, Any]:
     """Build a comparison only from externally pinned, independently accepted runs."""
     directories, pins = list(run_dirs), list(manifest_sha256)
@@ -1770,7 +1772,8 @@ def build_summary(
         raise ValueError("every external manifest pin must be a SHA-256 digest")
     if len(set(pins)) != len(pins):
         raise ValueError("one sealed run cannot be counted as multiple measurements")
-    runs = [load_run(run_dir, pin) for run_dir, pin in zip(directories, pins)]
+    runs = [load_run(run_dir, pin, expected_observation_contract=expected_observation_contract,
+                     expected_delivery=expected_delivery) for run_dir, pin in zip(directories, pins)]
     return _assemble_summary(runs, repository)
 
 
@@ -2925,7 +2928,8 @@ def render(summary: dict[str, Any]) -> str:
     return _render(summary, 0) + "\n"
 
 
-def reproduction_errors(summary: dict[str, Any], tracked: str, repository: Path) -> list[str]:
+def reproduction_errors(summary: dict[str, Any], tracked: str, repository: Path, *,
+                        expected_observation_contract, expected_delivery=None) -> list[str]:
     """Whether the tracked text is what the raw records of its cited runs give.
 
     The raw records are untracked, so this is a local check: it needs every
@@ -2942,7 +2946,8 @@ def reproduction_errors(summary: dict[str, Any], tracked: str, repository: Path)
         return [f"--reproduce: the raw records of {', '.join(missing)} are not under {RAW_ROOT}/"]
     try:
         rebuilt = build_summary(
-            directories, repository, manifest_sha256=[run.get("manifest_sha256") for run in cited]
+            directories, repository, manifest_sha256=[run.get("manifest_sha256") for run in cited],
+            expected_observation_contract=expected_observation_contract, expected_delivery=expected_delivery
         )
     except (ValueError, KeyError, OSError) as error:
         return [f"--reproduce: the cited runs do not build a comparison ({error})"]
@@ -2979,16 +2984,25 @@ def main(argv: list[str] | None = None) -> int:
         help="also rebuild the comparison from the raw records it cites (untracked, under "
         f"{RAW_ROOT}/) and require the tracked file to be exactly that",
     )
+    HARNESS.observation_contract.add_consumer_arguments(parser,required=False)
     arguments = parser.parse_args(argv)
     repository = arguments.repository.resolve()
     path = repository / SUMMARY
     if arguments.source_digest:
         print(expected_config(repository))
         return 0
+    expected_contract=expected_delivery=None
+    if arguments.refresh or arguments.reproduce:
+        try:expected_contract,expected_delivery=HARNESS.observation_contract.arguments(arguments)
+        except ValueError as error:
+            print(str(error),file=sys.stderr)
+            if arguments.refresh:print(f'{SUMMARY}: not written',file=sys.stderr)
+            return 1
     if arguments.refresh:
         try:
             summary = build_summary(
-                arguments.refresh, repository, manifest_sha256=arguments.manifest_sha256 or []
+                arguments.refresh, repository, manifest_sha256=arguments.manifest_sha256 or [],
+                expected_observation_contract=expected_contract, expected_delivery=expected_delivery
             )
         except (ValueError, KeyError, OSError) as error:
             # Records that disagree, a directory that is not a harness run, or
@@ -3018,7 +3032,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     errors = check_summary(summary, repository)
     if arguments.reproduce and not errors:
-        errors = reproduction_errors(summary, path.read_text(), repository)
+        errors = reproduction_errors(summary, path.read_text(), repository,
+            expected_observation_contract=expected_contract, expected_delivery=expected_delivery)
     for error in errors:
         print(error, file=sys.stderr)
     if errors:

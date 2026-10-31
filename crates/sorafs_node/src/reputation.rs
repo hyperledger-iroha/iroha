@@ -3784,7 +3784,7 @@ fn saturating_increment(counter: &AtomicU64) {
     saturating_add(counter, 1);
 }
 fn saturating_add(counter: &AtomicU64, value: u64) {
-    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    let _ = counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         Some(current.saturating_add(value))
     });
 }
@@ -3833,6 +3833,18 @@ mod tests {
     };
     use std::fs;
     use tempfile::TempDir;
+    fn private_state_tempdir() -> std::io::Result<TempDir> {
+        let temporary = TempDir::new()?;
+        #[cfg(windows)]
+        {
+            // Create only this fresh empty fixture through the canonical private owner.
+            std::fs::remove_dir(temporary.path())?;
+            drop(iroha_fs::PrivateDirectory::open_or_create(
+                temporary.path(),
+            )?);
+        }
+        Ok(temporary)
+    }
     include!("reputation/canonical_boundary_tests.rs");
     const TARGET_HEIGHT: u64 = 10;
     const TARGET_HASH: [u8; 32] = [0xA1; 32];
@@ -4358,7 +4370,7 @@ mod tests {
         ReputationIngestService,
         ReputationUnsignedMaterialDeliveryV1,
     ) {
-        let root = TempDir::new().expect("ready material root");
+        let root = private_state_tempdir().expect("ready material root");
         let service = ReputationIngestService::open(
             root.path(),
             policy_for_trust_policy(verification_policy),
@@ -4380,7 +4392,7 @@ mod tests {
     #[test]
     fn journal_gap_fork_equivocation_and_cross_page_continuation_fail_closed() {
         let provider_id = provider(13);
-        let gap_root = TempDir::new().expect("journal gap root");
+        let gap_root = private_state_tempdir().expect("journal gap root");
         let gap = ReputationIngestService::open(gap_root.path(), policy()).expect("open gap");
         assert_eq!(
             gap.ingest_finalized_batch(journal_only_batch(vec![journal_page(vec![
@@ -4393,7 +4405,7 @@ mod tests {
             .expect_err("global journal gap rejected"),
             ReputationIngestError::EventGap
         );
-        let paged_root = TempDir::new().expect("journal paged root");
+        let paged_root = private_state_tempdir().expect("journal paged root");
         let paged = ReputationIngestService::open(paged_root.path(), policy()).expect("open paged");
         let first_event = journal_event(
             1,
@@ -4414,7 +4426,7 @@ mod tests {
                 .expect("contiguous journal pages"),
             ReputationIngestOutcomeV1::Applied { events: 2 }
         );
-        let conflict_root = TempDir::new().expect("journal conflict root");
+        let conflict_root = private_state_tempdir().expect("journal conflict root");
         let conflict =
             ReputationIngestService::open(conflict_root.path(), policy()).expect("open conflict");
         conflict
@@ -4447,7 +4459,7 @@ mod tests {
     }
     #[test]
     fn multiple_disputes_preserve_active_cardinality_across_pages() {
-        let root = TempDir::new().expect("dispute state root");
+        let root = private_state_tempdir().expect("dispute state root");
         let service = ReputationIngestService::open(root.path(), policy()).expect("open service");
         let provider_id = provider(14);
         let opened_a = opened_dispute_entry(provider_id, 0x51, FINALIZED_AT_MS - 1_600);
@@ -4498,7 +4510,7 @@ mod tests {
     #[test]
     fn reordered_gap_fork_and_equivocation_fail_closed() {
         let provider_id = provider(2);
-        let reordered_root = TempDir::new().expect("reordered root");
+        let reordered_root = private_state_tempdir().expect("reordered root");
         let reordered =
             ReputationIngestService::open(reordered_root.path(), policy()).expect("open service");
         let error = reordered
@@ -4511,7 +4523,7 @@ mod tests {
             ))
             .expect_err("reordered events rejected");
         assert_eq!(error, ReputationIngestError::EventReordered);
-        let gap_root = TempDir::new().expect("gap root");
+        let gap_root = private_state_tempdir().expect("gap root");
         let gap = ReputationIngestService::open(gap_root.path(), policy()).expect("open service");
         let error = gap
             .ingest_finalized_batch(proof_only_batch(
@@ -4520,7 +4532,7 @@ mod tests {
             ))
             .expect_err("gap rejected");
         assert_eq!(error, ReputationIngestError::EventGap);
-        let conflict_root = TempDir::new().expect("conflict root");
+        let conflict_root = private_state_tempdir().expect("conflict root");
         let conflict =
             ReputationIngestService::open(conflict_root.path(), policy()).expect("open service");
         let accepted = proof_event(1, 6, [0x61; 32], 0, provider_id, 0x11);
@@ -4553,7 +4565,7 @@ mod tests {
     }
     #[test]
     fn source_omission_blocks_material_until_global_journal_is_complete() {
-        let root = TempDir::new().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let service = ReputationIngestService::open(root.path(), policy()).expect("open service");
         let provider_id = provider(3);
         service
@@ -4568,7 +4580,7 @@ mod tests {
                 .expect_err("available source omissions block material"),
             ReputationIngestError::MissingRequiredSources
         );
-        let ready_root = TempDir::new().expect("ready state root");
+        let ready_root = private_state_tempdir().expect("ready state root");
         let ready =
             ReputationIngestService::open(ready_root.path(), policy()).expect("open ready service");
         ready
@@ -4611,7 +4623,7 @@ mod tests {
     }
     #[test]
     fn reserve_completion_requires_same_anchor_stage_projection() {
-        let root = TempDir::new().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let service = ReputationIngestService::open(root.path(), policy()).expect("open service");
         let error = service
             .ingest_finalized_batch(ReputationFinalizedBatchV1 {
@@ -4623,7 +4635,7 @@ mod tests {
     }
     #[test]
     fn pagination_cannot_complete_with_an_empty_promised_tail() {
-        let root = TempDir::new().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let service = ReputationIngestService::open(root.path(), policy()).expect("open service");
         let event = proof_event(1, 6, [0x61; 32], 0, provider(9), 0x11);
         let mut first = proof_page(TARGET_HASH, vec![event.clone()]);
@@ -4641,7 +4653,7 @@ mod tests {
     }
     #[test]
     fn finalized_batch_from_same_label_foreign_network_is_rejected() {
-        let root = TempDir::new().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let service = ReputationIngestService::open(root.path(), policy()).expect("open service");
         let mut batch = proof_only_batch(
             TARGET_HASH,
@@ -4657,7 +4669,7 @@ mod tests {
     }
     #[test]
     fn restart_reconciles_a_durably_staged_batch() {
-        let root = TempDir::new().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let provider_id = provider(4);
         {
             let service =
@@ -4710,7 +4722,7 @@ mod tests {
     }
     #[test]
     fn corrupt_checkpoint_and_batch_bound_are_rejected() {
-        let root = TempDir::new().expect("corrupt state root");
+        let root = private_state_tempdir().expect("corrupt state root");
         let service = ReputationIngestService::open(root.path(), policy()).expect("open service");
         service
             .ingest_finalized_batch(proof_only_batch(
@@ -4729,7 +4741,7 @@ mod tests {
                 .expect_err("corrupt checkpoint rejected"),
             ReputationIngestError::InvalidCheckpoint
         );
-        let bounded_root = TempDir::new().expect("bounded state root");
+        let bounded_root = private_state_tempdir().expect("bounded state root");
         let mut bounded_policy = policy();
         bounded_policy.max_pending_events = 1;
         let bounded = ReputationIngestService::open(bounded_root.path(), bounded_policy)
@@ -4747,7 +4759,7 @@ mod tests {
                 .expect_err("pending bound enforced"),
             ReputationIngestError::CapacityExceeded
         );
-        let byte_bounded_root = TempDir::new().expect("byte-bounded state root");
+        let byte_bounded_root = private_state_tempdir().expect("byte-bounded state root");
         let mut byte_bounded_policy = policy();
         byte_bounded_policy.checkpoint_max_bytes = REPUTATION_INGEST_MIN_CHECKPOINT_BYTES_V1;
         let byte_bounded =
@@ -4770,7 +4782,7 @@ mod tests {
     }
     #[test]
     fn poisoned_runtime_blocks_all_authoritative_reads() {
-        let root = TempDir::new().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let service = ReputationIngestService::open(root.path(), policy()).expect("open service");
         service.durability_poisoned.store(true, Ordering::Release);
         assert_eq!(
@@ -4810,7 +4822,7 @@ mod tests {
     }
     #[test]
     fn material_outbox_retry_dead_letter_and_acknowledgement_are_restart_safe() {
-        let root = TempDir::new().expect("material outbox root");
+        let root = private_state_tempdir().expect("material outbox root");
         let verification_policy = trust_policy();
         let mut ingest_policy = policy();
         ingest_policy.max_material_delivery_failures = 2;
@@ -4946,7 +4958,7 @@ mod tests {
     }
     #[test]
     fn material_outbox_corruption_and_substituted_receipts_fail_closed() {
-        let root = TempDir::new().expect("material corruption root");
+        let root = private_state_tempdir().expect("material corruption root");
         let ingest_policy = policy();
         let mut checkpoint;
         let material_digest;
@@ -5144,7 +5156,7 @@ mod tests {
     #[test]
     fn public_failures_are_payload_free() {
         let provider_id = provider(17);
-        let root = TempDir::new().expect("payload-free error root");
+        let root = private_state_tempdir().expect("payload-free error root");
         let service = ReputationIngestService::open(root.path(), policy()).expect("open service");
         let error = service
             .ingest_finalized_batch(proof_only_batch(

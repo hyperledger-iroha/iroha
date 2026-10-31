@@ -345,14 +345,14 @@ fn decode_instruction_stream(code: &[u8]) -> Result<Vec<DecodedOp>, ContractArti
         ));
     }
     let mut decoded = Vec::with_capacity(code.len() / 4);
-    for (index, bytes) in code.chunks_exact(4).enumerate() {
+    for (index, bytes) in code.as_chunks::<4>().0.iter().enumerate() {
         let pc = u64::try_from(index)
             .ok()
             .and_then(|index| index.checked_mul(4))
             .ok_or_else(|| ContractArtifactError::invalid("instruction pc overflows"))?;
         decoded.push(DecodedOp {
             pc,
-            inst: u32::from_le_bytes(bytes.try_into().expect("four-byte instruction")),
+            inst: u32::from_le_bytes(*bytes),
         });
     }
     Ok(decoded)

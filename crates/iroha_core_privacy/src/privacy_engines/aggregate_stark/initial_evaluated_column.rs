@@ -128,6 +128,12 @@ impl InitialEvaluationV1 for InitialEvaluatedColumnV1 {
     }
 }
 
+/// Conservative transient descriptors for the original and mapped checked
+/// batches plus the typed stream input, carved from the same runtime reserve.
+pub(crate) const PREFLIGHT_METADATA_BYTES_V1: usize =
+    2 * size_of::<joined_trace::PreflightedInitialColumnsV1<'static, &'static [F]>>()
+        + size_of::<StreamingColumnsV1<'static, &'static [F]>>();
+
 /// Every possible live16-column backing header and Arc, descriptor/iterator and
 /// borrowed-input scratch. Field pages replace already charged output cells.
 /// Charging one entire backing header per column overbounds shared batches.
@@ -144,6 +150,7 @@ pub(crate) const fn metadata_payload_v1() -> usize {
         + 2 * MASKED_TRACE_LDE_COLUMN_BATCH_V1 * size_of::<InitialEvaluatedColumnV1>()
         + 2 * MASKED_TRACE_LDE_COLUMN_BATCH_V1 * size_of::<ZeroizingFieldColumnV1>()
         + 2 * MASKED_TRACE_LDE_COLUMN_BATCH_V1 * size_of::<&[u64]>()
+        + PREFLIGHT_METADATA_BYTES_V1
 }
 
 /// Successful callers may parallelize clearing; failure/unwind uses ordinary Drop.

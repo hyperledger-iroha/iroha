@@ -1,6 +1,6 @@
 //! Isolated engineering-issuer enrollment cohort with real native proofs and custody.
 //! Hardware and issuer evidence are explicit software fixtures. Ledger execution and
-//! activation finality must come from the separate Core StateExecutor producer.
+//! activation finality must come from the separate Core `StateExecutor` producer.
 
 use super::*;
 use iroha_data_model::{
@@ -260,7 +260,7 @@ fn signed_activation(
         FeePaymentIntent::authority(vec![], None),
     );
     transaction.set_creation_time(Duration::from_millis(time_ms));
-    transaction.set_ttl(Duration::from_millis(100_000));
+    transaction.set_ttl(Duration::from_secs(100));
     transaction
         .with_instructions([KagemushaWalletLedgerV1::new(
             fixture.config.scheme.scheme_id(),

@@ -1310,7 +1310,7 @@ impl<F: ProofScalar> ScalarVector<F> {
         debug_assert_eq!(padded.0.len(), len);
         debug_assert_eq!(padded.0.capacity(), len);
         debug_assert_eq!(padded.0.as_ptr(), allocation_pointer);
-        self.0.truncate(0);
+        self.0.clear();
         debug_assert_eq!(self.0.capacity(), source_capacity);
         debug_assert_eq!(self.0.as_ptr(), source_pointer);
         core::mem::swap(&mut self.0, &mut padded.0);
@@ -1341,7 +1341,7 @@ impl<F: ProofScalar> ScalarVector<F> {
             core::mem::swap(source, destination);
             source.clear_secret();
         }
-        self.0.truncate(0);
+        self.0.clear();
         Ok((left, right))
     }
 }

@@ -113,7 +113,7 @@ fn freshly_recommitted_rotated_and_swapped_private_rows_fail_full_air_division()
         let (statement, mut witness) = fixture();
         let rows = witness.rows_mut();
         if swapped {
-            for pair in rows.chunks_exact_mut(2) {
+            for pair in rows.as_chunks_mut::<2>().0 {
                 let first = smt_row_cells(&pair[0]);
                 let second = smt_row_cells(&pair[1]);
                 let mut a = second;

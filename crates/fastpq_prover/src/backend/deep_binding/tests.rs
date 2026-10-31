@@ -250,11 +250,8 @@ fn complete_ood_coordinates_have_fixed_order_and_reject_every_noncanonical_lane(
     let quotient = &values[2 * COMMITTED_COLUMN_COUNT..];
     let bytes = ood_bytes(current, next, quotient).unwrap();
     assert_eq!(bytes.len(), 604 * 32);
-    for (index, word) in bytes.chunks_exact(8).enumerate() {
-        assert_eq!(
-            u64::from_le_bytes(word.try_into().unwrap()),
-            index as u64 + 1
-        );
+    for (index, word) in bytes.as_chunks::<8>().0.iter().enumerate() {
+        assert_eq!(u64::from_le_bytes(*word), index as u64 + 1);
     }
     for coordinate in 0..OOD_VALUES * 4 {
         let mut malformed = values.clone();

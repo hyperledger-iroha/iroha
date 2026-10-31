@@ -217,6 +217,10 @@ pub trait BinaryField:
     /// # Errors
     /// Returns [`FieldError::InvalidLength`] unless the length of `bytes` is a
     /// multiple of [`Self::BYTES`]; `expected` is then the next multiple.
+    #[expect(
+        clippy::chunks_exact_to_as_chunks,
+        reason = "a trait's associated const cannot parameterize `as_chunks` in a default method"
+    )]
     fn vec_from_bytes(bytes: &[u8]) -> Result<Vec<Self>, FieldError> {
         if !bytes.len().is_multiple_of(Self::BYTES) {
             return Err(FieldError::InvalidLength {

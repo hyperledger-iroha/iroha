@@ -165,6 +165,7 @@ fn native_payment_two_concurrent_gateways_recover_one_paid_effect_without_later_
                 rendezvous: Arc::clone(&rendezvous),
                 arrived: AtomicBool::new(false),
             }),
+            payment_finality(root.join("gateway-a-finality"))?,
             verifier(&genesis_wire, &selected_pins)?,
         )?;
         let second = second_client.account_client()?.native_payment(
@@ -174,6 +175,7 @@ fn native_payment_two_concurrent_gateways_recover_one_paid_effect_without_later_
                 rendezvous: Arc::clone(&rendezvous),
                 arrived: AtomicBool::new(false),
             }),
+            payment_finality(root.join("gateway-b-finality"))?,
             verifier(&genesis_wire, &selected_pins)?,
         )?;
         let first_id = first.id();
@@ -285,6 +287,7 @@ fn native_payment_two_concurrent_gateways_recover_one_paid_effect_without_later_
             let resumed = gateway.account_client().native_payment(
                 request.clone(),
                 Arc::new(FileWorkflowStorage::open_or_create(root.join(directory))?),
+                payment_finality(root.join(format!("{directory}-finality")))?,
                 verifier(&genesis_wire, &selected_pins)?,
             )?;
             let recovery = rt.block_on(resumed.recover(&options))?;

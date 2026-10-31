@@ -5,6 +5,39 @@ use crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
 use rand::SeedableRng;
 use rand_chacha::ChaCha12Rng;
 
+/// Fault only the output boundary while executing genuine Log19 admission/AIR.
+struct PartialEmissionFault<'a> {
+    fold: main_residue_fold::MainResidueFoldV1<'a>,
+    triggered: &'a std::cell::Cell<bool>,
+    unwind: bool,
+}
+
+impl crate::privacy_engines::zk_x509::sha_residue_output::ShaResidueSinkV1<F>
+    for PartialEmissionFault<'_>
+{
+    fn len(&self) -> usize {
+        let actual = self.fold.len();
+        if !self.unwind && actual >= 155 {
+            self.triggered.set(true);
+            actual - 1
+        } else {
+            actual
+        }
+    }
+
+    fn reserve(&mut self, additional: usize) {
+        self.fold.reserve(additional);
+    }
+
+    fn push(&mut self, value: F) {
+        self.fold.push(value);
+        if self.unwind && self.fold.len() == 17 {
+            self.triggered.set(true);
+            panic!("synthetic fault after actual ordered SHA emission");
+        }
+    }
+}
+
 #[test]
 fn every_profile_stripe_matches_direct_boundary_and_random_denominators() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
@@ -359,6 +392,92 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
                     "{:?}/{} stripe {ordinal} row {row}",
                     segment.adapter, segment.instance
                 );
+                if segment.adapter == SegmentAdapterIdV1::Sha256CallBus && ordinal == 0 && row == 0
+                {
+                    let MainProverConstraintProviderV1::Log19(source) = provider else {
+                        panic!("SHA registration must use actual Log19 source");
+                    };
+                    let original_residues = source
+                        .constraint_residues_v1(registration, opening, &rows[4], &rows[5])
+                        .unwrap();
+                    for unwind in [false, true] {
+                        // These faults precede the 1024-term reduction: the private
+                        // state is in four widened sums/carries, not the zero E result.
+                        let prefix_length = if unwind { 17 } else { 155 };
+                        let mut expected_sums = [0u128; 4];
+                        let mut expected_carries = [0u64; 4];
+                        for (residue, alpha) in
+                            original_residues[..prefix_length].iter().zip(&alphas)
+                        {
+                            for (lane, coefficient) in alpha.coefficients().iter().enumerate() {
+                                let product = u128::from(residue.0) * u128::from(coefficient.0);
+                                let (sum, carry) = expected_sums[lane].overflowing_add(product);
+                                expected_sums[lane] = sum;
+                                expected_carries[lane] += u64::from(carry);
+                            }
+                        }
+                        let nonzero_sums =
+                            expected_sums.iter().filter(|&&value| value != 0).count();
+                        let nonzero_carries =
+                            expected_carries.iter().filter(|&&value| value != 0).count();
+                        assert!(
+                            nonzero_sums > 0,
+                            "the genuine SHA prefix must populate the fold"
+                        );
+                        let triggered = std::cell::Cell::new(false);
+                        let (result, erased) =
+                            crate::privacy_engines::zk_x509::private_table::inspection::observe_v1(
+                                || {
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        let mut sink = PartialEmissionFault {
+                                            fold: main_residue_fold::MainResidueFoldV1::new_v1(
+                                                &alphas,
+                                            ),
+                                            triggered: &triggered,
+                                            unwind,
+                                        };
+                                        source.emit_constraint_residues_v1(
+                                            registration,
+                                            opening,
+                                            &rows[4],
+                                            &rows[5],
+                                            &mut sink,
+                                            Some(
+                                                &MainLog19CompositionRegistrationV1::new_v1(
+                                                    source,
+                                                    registration,
+                                                )
+                                                .unwrap(),
+                                            ),
+                                        )
+                                    }))
+                                },
+                            );
+                        assert!(triggered.get(), "the real emission fault must run");
+                        if unwind {
+                            assert!(result.is_err());
+                        } else {
+                            let expected = map_main_sha_source_error_v1(
+                                crate::privacy_engines::zk_x509::sha_word_stark::ZkX509ShaWordStarkErrorV1::Topology.into(),
+                            );
+                            assert!(result.unwrap().unwrap_err() == expected);
+                        }
+                        // The sink is the last clearing owner in the observed
+                        // closure. Require its exact result/sums/carries Drop records,
+                        // so unrelated AIR scratch erasure cannot satisfy the check.
+                        let first = erased.len().checked_sub(3).expect("all fold owners clear");
+                        let tail = &erased[first..];
+                        let actual: [_; 3] = core::array::from_fn(|index| {
+                            let record = &tail[index];
+                            (record.cells, record.nonzero_before, record.nonzero_after)
+                        });
+                        assert_eq!(
+                            actual,
+                            [(1, 0, 0), (4, nonzero_sums, 0), (4, nonzero_carries, 0)]
+                        );
+                        assert!(erased.iter().all(|r| r.nonzero_after == 0));
+                    }
+                }
             }
             assert!(
                 provider
@@ -374,6 +493,27 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
                     )
                     .is_err()
             );
+            let mut extra_alphas = alphas.clone();
+            extra_alphas.push(E::ONE);
+            for malformed in [&[][..], extra_alphas.as_slice()] {
+                let (result, erased) =
+                    crate::privacy_engines::zk_x509::private_table::inspection::observe_v1(|| {
+                        provider.composition_value_on_stripe_v1(
+                            registration,
+                            &table,
+                            0,
+                            opening,
+                            &rows[4],
+                            &rows[5],
+                            malformed,
+                            &mut residue_scratch,
+                        )
+                    });
+                assert!(matches!(result, Err(ZkX509StarkErrorV1::ProfileMismatch)));
+                // Every emission requires a clearing fold owner first. An empty
+                // erasure inventory proves this refused before that construction.
+                assert!(erased.is_empty());
+            }
             assert!(
                 provider
                     .composition_value_on_stripe_v1(

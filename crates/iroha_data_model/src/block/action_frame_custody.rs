@@ -11,7 +11,7 @@ use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 ///
 /// There is no Clone, mutable access, Vec extraction or normalization.
 /// Moving this owner keeps the same allocation and pool charge. Borrowing cannot
-/// outlive the owner. The underlying ChargedBuffer destroys its byte allocation
+/// outlive the owner. The underlying `ChargedBuffer` destroys its byte allocation
 /// before returning its credits; dropping an unpublished owner is its rollback.
 /// A consumer may separately copy a borrowed slice, but this owner funds no copy.
 ///
@@ -23,7 +23,7 @@ pub struct RetainedActionFrameBytesV1 {
 
 impl RetainedActionFrameBytesV1 {
     /// Called only after the scanner admits frame/count and copy-work bounds.
-    /// ChargedBuffer checks Layout::array::<u8>(len) and acquires the original
+    /// `ChargedBuffer` checks `Layout::array::`<u8>(len) and acquires the original
     /// pool charge before its sole allocation; no source byte is copied first.
     pub(super) fn try_copy(
         source: &[u8],

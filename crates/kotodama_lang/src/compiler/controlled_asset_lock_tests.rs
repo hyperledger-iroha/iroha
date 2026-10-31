@@ -23,8 +23,10 @@ fn typed_controlled_lock_calls_compile_to_four_distinct_effects() {
         .expect("typed lock operations compile");
     let parsed = ProgramMetadata::parse(&bytes).unwrap();
     let words = bytes[parsed.code_offset..]
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| u32::from_le_bytes(*chunk))
         .collect::<Vec<_>>();
     for syscall in [
         syscalls::SYSCALL_ASSET_LOCK_OPEN,

@@ -224,6 +224,56 @@ fn parser_read_key_files_fail_closed_on_custody() {
     );
 }
 
+/// A `data_dir` node creates its missing node-local identities on the first load, a check
+/// included, and keeps them afterwards.
+#[test]
+fn missing_local_identities_are_created_on_first_load_and_kept() {
+    let node = ProfileNode::new();
+    let identities = [NodeSecretFile::Transport, NodeSecretFile::Streaming];
+    for file in identities {
+        fs::remove_file(node.data_dir.secret(file)).expect("remove identity");
+    }
+    let (path, _) = node.node_file();
+    let path = path.to_str().expect("UTF-8 path").to_owned();
+    let (checked, _) = read_with_fixture_space(&parse_args_from(
+        test_build_metadata(),
+        ["iroha3d", "--config", &path, "--check-config"],
+    ))
+    .unwrap_or_else(|report| panic!("{report:?}"));
+    for file in identities {
+        let secret = node.data_dir.secret(file);
+        let mode = fs::metadata(&secret)
+            .expect("created identity")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7777, 0o600, "{file:?}");
+    }
+    let (started, _) = read_with_fixture_space(&parse_args_from(
+        test_build_metadata(),
+        ["iroha3d", "--config", &path],
+    ))
+    .unwrap_or_else(|report| panic!("{report:?}"));
+    let transport = |config: &Config| {
+        config
+            .common
+            .soranet_transport_key_pair
+            .public_key()
+            .clone()
+    };
+    let streaming = |config: &Config| {
+        config
+            .streaming
+            .key_material
+            .identity()
+            .public_key()
+            .clone()
+    };
+    assert_eq!(transport(&checked), transport(&started));
+    assert_eq!(streaming(&checked), streaming(&started));
+    assert_ne!(transport(&started), streaming(&started));
+    assert_eq!(transport(&started).algorithm(), Algorithm::Ed25519);
+}
+
 #[test]
 fn compiled_nexus_profile_needs_no_sora_flag() {
     let node = ProfileNode::with_profile("sora-nexus-v1", 369);
@@ -312,31 +362,4 @@ fn check_flags_parse_and_conflict() {
     assert!(args.startup.check_storage && !args.startup.check_config);
     assert!(Args::try_parse_from(["iroha3d", "--json"]).is_err());
     assert!(Args::try_parse_from(["iroha3d", "--check-storage", "--check-config"]).is_err());
-}
-
-#[test]
-fn drain_until_eof_consumes_the_whole_input() {
-    let mut input = std::io::Cursor::new(vec![0x5A; 1_000]);
-    drain_until_eof(&mut input);
-    assert_eq!(input.position(), 1_000);
-}
-
-#[test]
-fn closing_the_input_sends_the_shutdown_signal() {
-    let (reader, writer) = rustix::pipe::pipe().expect("pipe");
-    let signal = ShutdownSignal::new();
-    spawn_input_close_shutdown(fs::File::from(reader), signal.clone()).expect("watch input");
-    let mut writer = fs::File::from(writer);
-    std::io::Write::write_all(&mut writer, b"keepalive").expect("write to the pipe");
-    std::thread::sleep(Duration::from_millis(50));
-    assert!(!signal.is_sent(), "open input keeps the node running");
-    drop(writer);
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while !signal.is_sent() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "end-of-file must send the shutdown signal"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
 }

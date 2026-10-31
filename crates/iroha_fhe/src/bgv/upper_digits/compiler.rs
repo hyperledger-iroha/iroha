@@ -171,10 +171,13 @@ impl<S: Sink> Compiler<'_, S> {
         let fixed = crate::constant_time::FixedModulus::derive(self.modulus(precision)?)
             .ok_or(UpperDigitsError::Program)?;
         let word = fixed.canonicalize_i64(value);
+        let signed_word = i64::try_from(word).map_err(|_| UpperDigitsError::SizeOverflow)?;
+        let signed_modulus =
+            i64::try_from(fixed.modulus).map_err(|_| UpperDigitsError::SizeOverflow)?;
         let centered = if word > fixed.modulus / 2 {
-            word as i64 - fixed.modulus as i64
+            signed_word - signed_modulus
         } else {
-            word as i64
+            signed_word
         };
         Ok(Value::Constant(centered, precision))
     }
@@ -195,51 +198,69 @@ impl<S: Sink> Compiler<'_, S> {
             depth,
         })
     }
-    fn multiply(&mut self, a: Value, b: Value) -> Result<Value, UpperDigitsError> {
-        let k = a.precision();
-        if k != b.precision() {
+    fn multiply(&mut self, lhs: Value, rhs: Value) -> Result<Value, UpperDigitsError> {
+        let precision = lhs.precision();
+        if precision != rhs.precision() {
             return Err(UpperDigitsError::Program);
         }
-        match (a, b) {
-            (Value::Constant(x, _), Value::Constant(y, _)) => {
-                self.constant(x.checked_mul(y).ok_or(UpperDigitsError::SizeOverflow)?, k)
+        match (lhs, rhs) {
+            (Value::Constant(left_constant, _), Value::Constant(right_constant, _)) => self
+                .constant(
+                    left_constant
+                        .checked_mul(right_constant)
+                        .ok_or(UpperDigitsError::SizeOverflow)?,
+                    precision,
+                ),
+            (Value::Constant(constant, _), value) | (value, Value::Constant(constant, _)) => {
+                match constant {
+                    0 => self.constant(0, precision),
+                    1 => Ok(value),
+                    -1 => self.emit(Operation::Negate(value.id()?), precision, value.depth()),
+                    _ => self.emit(
+                        Operation::MultiplyPlain(value.id()?, constant),
+                        precision,
+                        value.depth(),
+                    ),
+                }
             }
-            (Value::Constant(c, _), v) | (v, Value::Constant(c, _)) => match c {
-                0 => self.constant(0, k),
-                1 => Ok(v),
-                -1 => self.emit(Operation::Negate(v.id()?), k, v.depth()),
-                _ => self.emit(Operation::MultiplyPlain(v.id()?, c), k, v.depth()),
-            },
             _ => self.emit(
-                Operation::Multiply(a.id()?, b.id()?),
-                k,
-                a.depth()
-                    .max(b.depth())
+                Operation::Multiply(lhs.id()?, rhs.id()?),
+                precision,
+                lhs.depth()
+                    .max(rhs.depth())
                     .checked_add(1)
                     .ok_or(UpperDigitsError::SizeOverflow)?,
             ),
         }
     }
-    fn add(&mut self, a: Value, b: Value) -> Result<Value, UpperDigitsError> {
-        let k = a.precision();
-        if k != b.precision() {
+    fn add(&mut self, lhs: Value, rhs: Value) -> Result<Value, UpperDigitsError> {
+        let precision = lhs.precision();
+        if precision != rhs.precision() {
             return Err(UpperDigitsError::Program);
         }
-        match (a, b) {
-            (Value::Constant(x, _), Value::Constant(y, _)) => {
-                self.constant(x.checked_add(y).ok_or(UpperDigitsError::SizeOverflow)?, k)
-            }
-            (Value::Constant(c, _), v) | (v, Value::Constant(c, _)) => {
-                if c == 0 {
-                    Ok(v)
+        match (lhs, rhs) {
+            (Value::Constant(left_constant, _), Value::Constant(right_constant, _)) => self
+                .constant(
+                    left_constant
+                        .checked_add(right_constant)
+                        .ok_or(UpperDigitsError::SizeOverflow)?,
+                    precision,
+                ),
+            (Value::Constant(constant, _), value) | (value, Value::Constant(constant, _)) => {
+                if constant == 0 {
+                    Ok(value)
                 } else {
-                    self.emit(Operation::AddPlain(v.id()?, c), k, v.depth())
+                    self.emit(
+                        Operation::AddPlain(value.id()?, constant),
+                        precision,
+                        value.depth(),
+                    )
                 }
             }
             _ => self.emit(
-                Operation::Add(a.id()?, b.id()?),
-                k,
-                a.depth().max(b.depth()),
+                Operation::Add(lhs.id()?, rhs.id()?),
+                precision,
+                lhs.depth().max(rhs.depth()),
             ),
         }
     }
@@ -298,10 +319,14 @@ impl<S: Sink> Compiler<'_, S> {
             if coefficient >= modulus {
                 return Err(UpperDigitsError::Program);
             }
+            let signed_coefficient =
+                i64::try_from(coefficient).map_err(|_| UpperDigitsError::SizeOverflow)?;
+            let signed_modulus =
+                i64::try_from(modulus).map_err(|_| UpperDigitsError::SizeOverflow)?;
             let c = if coefficient > modulus / 2 {
-                coefficient as i64 - modulus as i64
+                signed_coefficient - signed_modulus
             } else {
-                coefficient as i64
+                signed_coefficient
             };
             let power = self.power(powers, offset)?;
             let term = self.multiply(Value::Constant(c, k), power)?;
@@ -320,7 +345,7 @@ impl<S: Sink> Compiler<'_, S> {
             return self.block(powers, coefficients, start);
         }
         let low = 1_usize
-            .checked_shl(usize::BITS - (count - 1).leading_zeros() - 1)
+            .checked_shl((count - 1).bit_width() - 1)
             .ok_or(UpperDigitsError::SizeOverflow)?;
         let left = self.blocks(powers, coefficients, start, low)?;
         let right = self.blocks(powers, coefficients, start + low, count - low)?;
@@ -379,15 +404,19 @@ pub(super) fn compile<S: Sink>(
 ) -> Result<(S, usize, usize), UpperDigitsError> {
     let mut compiler = Compiler { program, sink };
     let plan = program.plan();
-    let e = plan.context().precision() as usize;
+    let full_precision = plan.context().precision();
+    let e = usize::try_from(full_precision).map_err(|_| UpperDigitsError::SizeOverflow)?;
     if e == 0 || e + 2 > REGISTERS || plan.context().modulus() >= 1 << 31 {
         return Err(UpperDigitsError::Program);
     }
-    let input = compiler.emit(Operation::Input, e as u32, 0)?;
+    let input = compiler.emit(Operation::Input, full_precision, 0)?;
     let mut registers = [input; REGISTERS];
     let mut instructions = program.instructions().iter();
-    for offset in 0..e - plan.retained_digits() as usize {
-        let precision = e as u32 - offset as u32;
+    let retained =
+        usize::try_from(plan.retained_digits()).map_err(|_| UpperDigitsError::SizeOverflow)?;
+    for offset in 0..e - retained {
+        let precision =
+            full_precision - u32::try_from(offset).map_err(|_| UpperDigitsError::SizeOverflow)?;
         let mut source = offset;
         for destination in offset + 1..e {
             let expected = UpperDigitInstruction::Evaluate {

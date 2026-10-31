@@ -26,7 +26,7 @@ fn unavailable_reader(error: &eyre::Report) -> bool {
                     kind: crate::TransportErrorKind::Io(kind),
                     ..
                 } => transient_io(*kind),
-                _ => matches!(error.http_status(), Some(502 | 503 | 504)),
+                _ => matches!(error.http_status(), Some(502..=504)),
             };
         }
     }

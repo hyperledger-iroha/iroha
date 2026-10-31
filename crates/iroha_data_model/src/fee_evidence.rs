@@ -912,8 +912,8 @@ fn verify_entitlement_sources(
                     return Err("invalid or duplicate funded allocation source".into());
                 }
             }
-            FeeEvidencePayloadV1::RewardExposure(page) => {
-                if validation_fee_exposure_page_key(
+            FeeEvidencePayloadV1::RewardExposure(page)
+                if (validation_fee_exposure_page_key(
                     binding,
                     page.earning_period_start_ms,
                     &page.validator,
@@ -928,10 +928,9 @@ fn verify_entitlement_sources(
                             ),
                             page,
                         )
-                        .is_some()
-                {
-                    return Err("invalid or duplicate historical exposure source".into());
-                }
+                        .is_some()) =>
+            {
+                return Err("invalid or duplicate historical exposure source".into());
             }
             _ => (),
         }
@@ -1006,17 +1005,17 @@ fn verify_beneficiary_sources(
                     return Err("invalid or duplicated immutable beneficiary alias source".into());
                 }
             }
-            FeeEvidencePayloadV1::RewardBeneficiaryRevision(revision) => {
-                if revision_key(binding, &revision.beneficiary_id, revision.revision)? != record.key
+            FeeEvidencePayloadV1::RewardBeneficiaryRevision(revision)
+                if (revision_key(binding, &revision.beneficiary_id, revision.revision)?
+                    != record.key
                     || revisions
                         .insert(
                             (revision.beneficiary_id.clone(), revision.revision),
                             revision,
                         )
-                        .is_some()
-                {
-                    return Err("invalid or duplicated immutable beneficiary owner revision".into());
-                }
+                        .is_some()) =>
+            {
+                return Err("invalid or duplicated immutable beneficiary owner revision".into());
             }
             _ => (),
         }
@@ -1160,10 +1159,8 @@ where
                         return Err("duplicate automatic reward entitlement".into());
                     }
                 }
-                FeeEvidencePayloadV1::RewardClaim(c) => {
-                    if claims.insert(c.sequence, c).is_some() {
-                        return Err("duplicate claim sequence".into());
-                    }
+                FeeEvidencePayloadV1::RewardClaim(c) if claims.insert(c.sequence, c).is_some() => {
+                    return Err("duplicate claim sequence".into());
                 }
                 _ => (),
             }

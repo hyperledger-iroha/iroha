@@ -519,7 +519,7 @@ mod tests {
         assert!(!left.is_known() && !right.is_known());
         assert!(a.error_if_known_and(|x| *x == Fp::from(3)).is_err());
         assert!(unknown.error_if_known_and(|_| true).is_ok());
-        assert!(Value::<Fp>::default() == unknown);
+        assert_eq!(Value::<Fp>::default(), unknown);
     }
 
     #[test]

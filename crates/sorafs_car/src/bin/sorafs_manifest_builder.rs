@@ -19,8 +19,17 @@ use sorafs_car::{
 };
 #[path = "common/output_fs.rs"]
 mod output_fs;
+#[cfg(not(windows))]
+#[path = "common/output_path.rs"]
+mod output_path;
 use output_fs::open_output_file;
+#[cfg(not(windows))]
 use sorafs_car::set_no_follow_flag;
+#[cfg(windows)]
+#[path = "sorafs_manifest_builder/council_key_windows.rs"]
+mod council_key_windows;
+#[cfg(windows)]
+use council_key_windows::read as read_council_signing_key_file;
 use sorafs_manifest::{
     AliasClaim, ChunkingProfileV1, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder,
     ManifestV1, PinPolicy, PinPolicyConstraints, ProfileId, StorageClass, chunker_registry,
@@ -567,8 +576,8 @@ fn run() -> Result<(), String> {
         .governance(GovernanceProofs {
             council_signatures: opts.council_signatures.clone(),
         })
-        .extend_aliases(opts.alias_claims.into_iter())
-        .extend_metadata(opts.metadata.into_iter())
+        .extend_aliases(opts.alias_claims)
+        .extend_metadata(opts.metadata)
         .build()
         .map_err(|err| err.to_string())?;
     if let Some(seed) = opts.council_signing_seed.take() {
@@ -1331,6 +1340,7 @@ fn validate_completed_manifest(manifest: &ManifestV1) -> Result<(), String> {
     validate_manifest(manifest, &constraints)
         .map_err(|error| format!("completed manifest failed canonical validation: {error}"))
 }
+#[cfg(not(windows))]
 fn read_council_signing_key_file(path: &Path) -> Result<CouncilSigningSeed, String> {
     validate_council_signing_key_path(path)?;
     let mut options = fs::OpenOptions::new();
@@ -1377,6 +1387,7 @@ fn read_council_signing_key_file(path: &Path) -> Result<CouncilSigningSeed, Stri
     }
     Ok(seed)
 }
+#[cfg(not(windows))]
 fn validate_council_signing_key_path(path: &Path) -> Result<(), String> {
     if path.as_os_str().is_empty() || path == Path::new("-") {
         return Err("--council-signing-key-file requires a regular file path".into());
@@ -2023,10 +2034,21 @@ mod tests {
                 .contains("regular file")
         );
         for size in [0, 31, 33, 4096] {
+            #[cfg(not(windows))]
             let mut key = NamedTempFile::new_in(&temp_path).expect("temporary signing key");
+            #[cfg(not(windows))]
             key.write_all(&vec![0xA5; size]).expect("write key bytes");
+            #[cfg(not(windows))]
             key.flush().expect("flush key bytes");
-            let error = read_council_signing_key_file(key.path())
+            #[cfg(not(windows))]
+            let key_path = key.path();
+            #[cfg(windows)]
+            let key_path = council_key_windows::write_fixture(
+                &temp_path,
+                &format!("size-{size}.seed"),
+                &vec![0xA5; size],
+            );
+            let error = read_council_signing_key_file(key_path.as_ref())
                 .err()
                 .expect("non-32-byte key file must fail");
             assert!(
@@ -2034,10 +2056,18 @@ mod tests {
                 "unexpected key-size error for {size} bytes: {error}"
             );
         }
+        #[cfg(not(windows))]
         let mut key = NamedTempFile::new_in(&temp_path).expect("temporary signing key");
+        #[cfg(not(windows))]
         key.write_all(&[0xA5; 32]).expect("write key bytes");
+        #[cfg(not(windows))]
         key.flush().expect("flush key bytes");
-        let seed = read_council_signing_key_file(key.path()).expect("read canonical signing seed");
+        #[cfg(not(windows))]
+        let key_path = key.path();
+        #[cfg(windows)]
+        let key_path = council_key_windows::write_fixture(&temp_path, "valid.seed", &[0xA5; 32]);
+        let seed =
+            read_council_signing_key_file(key_path.as_ref()).expect("read canonical signing seed");
         assert_eq!(seed.as_bytes(), &[0xA5; 32]);
     }
     #[test]

@@ -1,6 +1,6 @@
 #[test]
 fn acknowledgement_precommit_fence_preserves_checkpoint_for_head_race() {
-    let root = tempfile::tempdir().expect("state root");
+    let root = private_state_tempdir().expect("state root");
     let (service, _feed_policy, reference, _verifier, _publisher, ack_authority) =
         ready_service(root.path());
     let first = page(vec![event(1, "storage:event:ack-fence", "10")]);
@@ -87,7 +87,7 @@ fn acknowledgement_precommit_fence_preserves_checkpoint_for_head_race() {
 }
 #[test]
 fn exposure_and_intent_pages_include_below_threshold_periods_without_auto_execution() {
-    let root = tempfile::tempdir().expect("state root");
+    let root = private_state_tempdir().expect("state root");
     let (service, _feed_policy, reference, _verifier, _publisher, _ack_authority) =
         ready_service(root.path());
     let mut second = event(2, "storage:event:below-threshold:2", "1");

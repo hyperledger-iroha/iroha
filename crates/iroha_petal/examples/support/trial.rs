@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Claim one trial without wrapping after exhaustion, even at `usize::MAX`.
 pub fn next_trial(next: &AtomicUsize, trials: usize) -> Option<usize> {
-    next.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |trial| {
+    next.try_update(Ordering::SeqCst, Ordering::SeqCst, |trial| {
         (trial < trials).then(|| trial + 1)
     })
     .ok()
