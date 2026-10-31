@@ -10,6 +10,7 @@ pub mod attestation;
 pub mod catalog;
 pub(crate) mod change_set;
 pub(crate) mod containment;
+pub(crate) mod envelope;
 pub(crate) mod expectation;
 pub(crate) mod obligations;
 
@@ -43,6 +44,30 @@ pub(crate) fn founded_selection() -> Result<RootSelectionV1, CatalogError> {
     Ok(release_catalog()?.baseline.clone())
 }
 
+/// The change set that moves the universal root of `world`, on `network`, from its committed
+/// selection to the addition `module` of this release, effective at `effective_height`
+/// ([`ReleaseCatalog::activation`]); an operator endorses and proposes it.
+///
+/// # Errors
+/// `module` is not an addition of this release, or the change set does not apply to the
+/// committed selection (an earlier addition is not active yet, or this one already is).
+pub fn draft_addition(
+    world: &impl crate::state::WorldReadOnly,
+    network: iroha_data_model::NetworkId,
+    module: &str,
+    effective_height: u64,
+    qualification: [u8; 32],
+) -> Result<iroha_data_model::runtime::lifecycle::ChangeSetV1, CatalogError> {
+    release_catalog()?.activation(
+        module,
+        world.runtime_selection(),
+        &change_set::PublishedDefinitions(world.runtime_definitions()),
+        network,
+        effective_height,
+        qualification,
+    )
+}
+
 /// Resolve `instruction` against the selection its root executes at `height` (§5.2).
 ///
 /// The instruction's wire ID must be bound, and neither its interface nor the bound
@@ -59,6 +84,9 @@ pub(crate) fn founded_selection() -> Result<RootSelectionV1, CatalogError> {
 /// accepts only registered wire IDs. Native code constructs it as a private primitive inside its
 /// own reference closure (§3.2), which the resolution of the instruction that invoked it covers.
 ///
+/// Returns the implementation the selection binds the instruction's wire ID to, which executes
+/// it, or `None` for a private primitive.
+///
 /// # Errors
 /// The stable rejection of the live-upgrade mechanism.
 pub(crate) fn resolve(
@@ -66,9 +94,9 @@ pub(crate) fn resolve(
     selection: &RootSelectionV1,
     height: u64,
     obligation_step: impl FnOnce() -> Option<obligations::Step>,
-) -> Result<(), iroha_data_model::isi::error::InstructionExecutionError> {
+) -> Result<Option<DefinitionId>, iroha_data_model::isi::error::InstructionExecutionError> {
     let Some(wire_id) = iroha_data_model::isi::instruction_wire_id(instruction) else {
-        return Ok(());
+        return Ok(None);
     };
     let binding = selection
         .bindings
@@ -92,7 +120,7 @@ pub(crate) fn resolve(
             }
         }
     }
-    Ok(())
+    Ok(Some(binding.implementation))
 }
 
 /// The restriction of `definition` that stops new work at `height`, if any (§7.1).

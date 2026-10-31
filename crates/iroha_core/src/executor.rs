@@ -1472,8 +1472,9 @@ pub enum ExecutorMigrationError {
     /// A completed migration error retains its original VM fields.
     #[error("executor migration rejected: {0}")]
     Rejected(#[source] VMError),
-    /// Live escrow or lock custody still depends on the installed executor's authorization.
-    #[error("executor migration would strand live escrow or lock obligations")]
+    /// A live obligation (escrow or lock custody, or an AMX participation) still depends on the
+    /// installed executor's authorization.
+    #[error("executor migration would strand live obligations")]
     LiveCustody,
     /// The transaction retains the first local refusal. This notice owns no cause and cannot
     /// become a completed rejection; the outer State terminal must export the original once.
@@ -7543,6 +7544,17 @@ impl Executor {
     ) -> Result<(), ValidationFail> {
         #[cfg(test)]
         signed_source_observation::record(transaction);
+        // The first instruction-dependent step (`specs/live_runtime_upgrades.md` §5.2): every
+        // release stops at the same top-level envelope execution can never apply (unbound, or
+        // kept opaque), before scope, fee, privacy, ballot or any other work that depends on what
+        // an instruction is. Transaction validation already walked the same envelopes against the
+        // same selection (`StateBlock::execute_signed_transaction_in_overlay`); this keeps the
+        // guarantee for every caller of the executor.
+        crate::runtime::envelope::admit_envelopes(
+            state_transaction.world.runtime_selection.get(),
+            state_transaction.block_height(),
+            transaction.instructions(),
+        )?;
         root_scope::ensure_executable_scope(state_transaction, transaction.instructions())?;
         state_transaction.bind_privacy_transaction_intent_v1(None);
         state_transaction.bind_private_settlement_carrier_v1(None);
@@ -8700,6 +8712,19 @@ impl Executor {
         if contract_runtime_context.is_some() || matches!(self, Self::UserProvided(_)) {
             state_transaction.clear_direct_parliament_candidate_testing();
         }
+        // Resolution comes before any check that depends on what the instruction is: an
+        // envelope execution can never apply (an unbound wire ID, or one this release kept
+        // opaque) is refused with the same stable rejection by every release and every executor,
+        // and a restriction or containment holds on every path below, including the controlled
+        // lock, linked-FI and multisig paths that bypass the native dispatch table
+        // (`specs/live_runtime_upgrades.md` §5.2, §7.1).
+        crate::runtime::envelope::resolve_envelope(
+            state_transaction.world.runtime_selection.get(),
+            state_transaction.block_height(),
+            instruction,
+            || crate::runtime::obligations::step(instruction, &state_transaction.world),
+        )
+        .map_err(ValidationFail::InstructionFailed)?;
         root_scope::ensure_instruction_scope(instruction, state_transaction)?;
         ensure_contract_deployment_permission_mutation_allowed(
             state_transaction,
@@ -9264,14 +9289,11 @@ impl Executor {
         }
         // A replacement can deny the original completion instructions or delete their
         // permissions when its data model is installed. Even identical bytecode reruns
-        // migration and can change those permissions. TODO(§7.2): permit replacement only
-        // through captured completion executor authority or a certified obligation transfer.
-        if state_transaction
-            .world
-            .asset_escrows
-            .iter()
-            .any(|(_, escrow)| crate::runtime::obligations::is_live(escrow.status))
-        {
+        // migration and can change those permissions. Every live obligation (escrow, lock or
+        // AMX participation) keeps the authorization it was admitted under. TODO(§7.2): permit
+        // replacement only through captured completion executor authority or a certified
+        // obligation transfer.
+        if !crate::runtime::obligations::LiveObligations::of(&state_transaction.world).is_empty() {
             return Err(ExecutorMigrationError::LiveCustody);
         }
         // Load new executor bytecode

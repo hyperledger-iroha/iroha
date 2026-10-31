@@ -15738,10 +15738,19 @@ pub mod isi {
             for selector in &rule.selectors {
                 match selector {
                     FeeSponsorRuleSelector::NativeInstruction(selector) => {
+                        // The root's selection decides which instructions exist, never the
+                        // release's registry: releases that differ in what they register must
+                        // validate a revision alike (`specs/live_runtime_upgrades.md` §5.2).
                         if selector.wire_id.trim().is_empty()
-                            || !iroha_data_model::isi::registry::is_instruction_wire_id_registered(
-                                &selector.wire_id,
-                            )
+                            || state_transaction
+                                .world
+                                .runtime_selection
+                                .get()
+                                .bindings
+                                .binary_search_by(|binding| {
+                                    binding.wire_id.as_str().cmp(selector.wire_id.as_str())
+                                })
+                                .is_err()
                         {
                             return Err(invalid_fee_sponsor_program(format!(
                                 "fee sponsor rule `{}` references unknown instruction wire id `{}`",
@@ -18062,8 +18071,7 @@ pub mod isi {
                 .map_err(|migration_error| match migration_error {
                     crate::executor::ExecutorMigrationError::LiveCustody => {
                         InstructionExecutionError::InvariantViolation(
-                            "executor migration would strand live escrow or lock obligations"
-                                .into(),
+                            "executor migration would strand live obligations".into(),
                         )
                     }
                     crate::executor::ExecutorMigrationError::LocalRefusalRetained => {

@@ -50,7 +50,7 @@ use iroha_data_model::musubi::{
     ArchiveId, MusubiArchiveAvailabilityV1, MusubiOrderedPackageEntryV1, MusubiPackageSelectorV1,
     MusubiReleaseIdV1, MusubiResolverReleaseRowV1,
 };
-use iroha_data_model::runtime::definition::{DefinitionId, RootSelectionV1};
+use iroha_data_model::runtime::definition::RootSelectionV1;
 use iroha_data_model::sumeragi_finality::{
     WorldStateElementKindV1, world_state_element_v1, world_state_path_hash_v1,
     world_state_root_from_accumulator_v1,
@@ -278,13 +278,16 @@ enum Classified {
     Excluded,
 }
 
-/// The registry, indexed by projection name, with each canonical field's storage definition.
+/// The registry, indexed by projection name.
+///
+/// The storage definition each canonical field implements comes from the release catalog at the
+/// time of use ([`installed_slots`]), never from this process-wide index: the release, not the
+/// compiled registry, decides which definition a field implements (an addition after the baseline
+/// publishes a field's storage definition without installing it).
 struct FieldIndex {
     by_name: BTreeMap<&'static str, Classified>,
     /// Canonical registry identities in slot order.
     ids: Vec<&'static str>,
-    /// The storage definition each canonical slot implements.
-    storage: Vec<DefinitionId>,
     canonical: usize,
     /// Kind and key/value schema fingerprints of every canonical field, by registry identity:
     /// the predecessor root rule of an upgrade checkpoint.
@@ -328,15 +331,8 @@ impl FieldIndex {
                 return Err(format!("World field registered twice: {}", field.id));
             }
         }
-        let catalog = crate::runtime::release_catalog().map_err(|error| error.to_string())?;
         let mut fingerprints = BTreeMap::new();
-        let mut storage = Vec::with_capacity(canonical.len());
         for (slot, (id, (kind, key, value))) in canonical.iter().enumerate() {
-            storage.push(
-                *catalog.world_storage.get(id).ok_or_else(|| {
-                    format!("canonical World field {id} has no storage definition")
-                })?,
-            );
             let path = path_hash(id, *kind)?;
             fingerprints.insert(
                 *id,
@@ -359,7 +355,6 @@ impl FieldIndex {
         Ok(Self {
             by_name,
             ids: canonical.keys().copied().collect(),
-            storage,
             canonical: canonical.len(),
             fingerprints,
         })
@@ -405,13 +400,21 @@ pub(crate) fn selection_schema(selection: &RootSelectionV1) -> Result<Hash, Stri
 /// Whether each canonical slot's storage is installed by `selection`.
 ///
 /// # Errors
-/// The selection installs storage no canonical field of this release implements.
+/// A canonical field has no storage definition in the release catalog, or the selection installs
+/// storage no canonical field of this release implements.
 fn installed_slots(index: &FieldIndex, selection: &RootSelectionV1) -> Result<Vec<bool>, String> {
-    let installed: Vec<bool> = index
-        .storage
+    let catalog = crate::runtime::release_catalog().map_err(|error| error.to_string())?;
+    let installed = index
+        .ids
         .iter()
-        .map(|storage| selection.installed_storage.binary_search(storage).is_ok())
-        .collect();
+        .map(|id| {
+            catalog
+                .world_storage
+                .get(id)
+                .map(|storage| selection.installed_storage.binary_search(storage).is_ok())
+                .ok_or_else(|| format!("canonical World field {id} has no storage definition"))
+        })
+        .collect::<Result<Vec<bool>, String>>()?;
     if installed.iter().filter(|installed| **installed).count() != selection.installed_storage.len()
     {
         return Err("the selection installs storage this release does not implement".into());

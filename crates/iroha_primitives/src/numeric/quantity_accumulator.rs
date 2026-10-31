@@ -31,7 +31,12 @@ impl QuantityAccumulator {
     /// Refuses a canonical scale above the V1 decimal domain.
     pub fn from_scaled_u128(mantissa: u128, scale: u32) -> Result<Self, NumericOperationError> {
         let mut limbs = [0; QUANTITY_SUM_RELATION_LIMBS];
-        limbs[0] = mantissa as u64;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the low limb takes exactly the low 64 bits of the mantissa"
+        )]
+        let low = mantissa as u64;
+        limbs[0] = low;
         limbs[1] = (mantissa >> 64) as u64;
         let value = Self::normalize(limbs, scale, false)?;
         if value.scale > super::MAX_DECIMAL_SCALE {

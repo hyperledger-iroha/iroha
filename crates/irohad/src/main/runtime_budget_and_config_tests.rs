@@ -29,6 +29,7 @@ fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode() -> e
             check_config: false,
             json: false,
             check_storage: false,
+            check_replay: false,
             require_genesis_inrou_deployment_authority: None,
             trace_config: false,
             config_blake3: None,

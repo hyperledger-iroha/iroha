@@ -7452,6 +7452,12 @@ mod tests {
                 RuntimeRejectionV1::ExpectationMismatch { wire_id: None },
                 "ExpectationMismatch",
             ),
+            (
+                RuntimeRejectionV1::MalformedPayload {
+                    wire_id: "iroha.bond.call.v1".into(),
+                },
+                "MalformedPayload",
+            ),
         ] {
             let rejection = TransactionRejectionReason::Validation(
                 ValidationFail::InstructionFailed(InstructionExecutionError::Runtime(reason)),
@@ -12382,6 +12388,7 @@ fn instruction_execution_rejection_code(error: &InstructionExecutionError) -> &'
             RuntimeRejectionV1::DefinitionInactive { .. } => "DefinitionInactive",
             RuntimeRejectionV1::DefinitionRestricted { .. } => "DefinitionRestricted",
             RuntimeRejectionV1::ExpectationMismatch { .. } => "ExpectationMismatch",
+            RuntimeRejectionV1::MalformedPayload { .. } => "MalformedPayload",
         },
     }
 }

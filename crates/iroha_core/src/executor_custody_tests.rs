@@ -94,7 +94,7 @@ fn executor_upgrade_refuses_every_live_custody_state_before_migration() {
                 .execute(&ALICE_ID, tx)
                 .unwrap_err();
             assert!(
-                matches!(error, InstructionExecutionError::InvariantViolation(ref reason) if reason.contains("live escrow")),
+                matches!(error, InstructionExecutionError::InvariantViolation(ref reason) if reason.contains("live obligations")),
                 "{status:?}: {error:?}"
             );
             assert_eq!(tx.world.executor.runtime_consent_hash(), before);
@@ -162,6 +162,39 @@ fn direct_and_identical_code_executor_migrations_cannot_bypass_live_custody() {
                 Err(ExecutorMigrationError::LiveCustody)
             ),
             "custody is checked before loading untrusted replacement code"
+        );
+    });
+}
+
+#[test]
+fn a_live_amx_participation_blocks_executor_migration() {
+    use iroha_data_model::sumeragi_amx::{AmxBeginV1, AmxGlobalEntryV1, SumeragiAmxState};
+    use iroha_model_base::topology::DataSpaceId;
+    with_escrow(AssetEscrowStatus::Released, |tx| {
+        *tx.world.sumeragi_amx.get_mut() = SumeragiAmxState {
+            dataspaces: Vec::new(),
+            transactions: vec![AmxGlobalEntryV1 {
+                begin: AmxBeginV1 {
+                    tx: [0x92; 32],
+                    participants: vec![DataSpaceId::new(41), DataSpaceId::new(42)],
+                    deadline: 10,
+                    expires_at_ms: 1_000,
+                },
+                begun_at: 1,
+                begun_time_ms: 1,
+                original_cadence_ms: 100,
+                yes: Vec::new(),
+                decided: None,
+            }],
+        };
+        let raw = replacement();
+        let mut executor = Executor::UserProvided(LoadedExecutor::load(raw.clone()).unwrap());
+        assert!(
+            matches!(
+                executor.migrate(raw, tx, &ALICE_ID),
+                Err(ExecutorMigrationError::LiveCustody)
+            ),
+            "an undecided AMX transaction keeps the authorization it was admitted under"
         );
     });
 }

@@ -1058,6 +1058,10 @@ pub enum Error {
         /// Exact local invariant failure.
         reason: String,
     },
+    // The first top-level envelope with an unbound wire ID or kept opaque, with the stable
+    // rejection execution would commit (`specs/live_runtime_upgrades.md` §5.2).
+    /// The committed runtime selection does not admit the transaction: {0}
+    RuntimeRejected(iroha_data_model::runtime::lifecycle::RuntimeRejectionV1),
 }
 
 impl From<RoutingResolveError> for Error {
@@ -1141,6 +1145,13 @@ trait QueueAdmissionStateAccess {
             iroha_data_model::parameter::system::TransactionNeverIncludable,
         >,
     >;
+    /// The rejection of the first top-level envelope of `transaction` the committed selection
+    /// would refuse: an unbound wire ID or an envelope kept opaque
+    /// (`specs/live_runtime_upgrades.md` §5.2).
+    fn first_inactive_envelope(
+        &mut self,
+        transaction: &AcceptedTransaction<'_>,
+    ) -> Option<iroha_data_model::runtime::lifecycle::RuntimeRejectionV1>;
     /// Classify an external signed transaction's SCCP exemption against committed state
     /// (`specs/sccp.md` §4.19).
     fn sccp_exempt_admission(
@@ -1222,6 +1233,21 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
             self.ledger_time_ms,
             self.next_block_height,
             transaction,
+        )
+    }
+    fn first_inactive_envelope(
+        &mut self,
+        transaction: &AcceptedTransaction<'_>,
+    ) -> Option<iroha_data_model::runtime::lifecycle::RuntimeRejectionV1> {
+        let signed = match transaction.entrypoint() {
+            TransactionEntrypoint::External(signed) => signed,
+            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+            TransactionEntrypoint::SealedCommitment(_)
+            | TransactionEntrypoint::AnonymousBallot(_) => return None,
+        };
+        crate::runtime::envelope::first_unadmitted_envelope(
+            self.view.world().runtime_selection.get(),
+            signed.instructions(),
         )
     }
     fn sccp_exempt_admission(
@@ -4119,6 +4145,12 @@ impl Queue {
                 },
                 checked,
             ));
+        }
+        // Honest proposers never carry an envelope the committed selection does not admit; it
+        // would only commit `definition_inactive` or `malformed_payload`
+        // (`specs/live_runtime_upgrades.md` §5.2).
+        if let Some(rejection) = state_access.first_inactive_envelope(checked.as_accepted()) {
+            return Err(Self::refused(Error::RuntimeRejected(rejection), checked));
         }
         // Reclaim bounded stale work and reject cheap saturation/duplication cases before fee,
         // manifest, privacy-proof, compliance, and gas analysis.
@@ -9506,6 +9538,7 @@ pub mod tests {
         include!("queue/resident_owner_tests.rs");
     }
     include!("queue/current_admission_tests.rs");
+    include!("queue/runtime_envelope_admission_tests.rs");
     include!("queue/keepalive_tests.rs");
     include!("queue/domain_admission_tests.rs");
     include!("queue/resource_contract_tests.rs");

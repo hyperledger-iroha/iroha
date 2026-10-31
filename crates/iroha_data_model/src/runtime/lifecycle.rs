@@ -1246,6 +1246,14 @@ pub enum RuntimeRejectionV1 {
         /// The wire ID whose binding differs, or `None` for an execution profile or dependency.
         wire_id: Option<String>,
     },
+    /// The payload of the envelope with wire ID {wire_id} is malformed
+    ///
+    /// An active interface answers the wire ID, but its envelope stayed opaque: the frame is not
+    /// the canonical frame of a payload the interface decodes (§5.2).
+    MalformedPayload {
+        /// Its wire ID.
+        wire_id: String,
+    },
 }
 
 impl RuntimeRejectionV1 {
@@ -1256,6 +1264,7 @@ impl RuntimeRejectionV1 {
             Self::DefinitionInactive { .. } => "definition_inactive",
             Self::DefinitionRestricted { .. } => "definition_restricted",
             Self::ExpectationMismatch { .. } => "expectation_mismatch",
+            Self::MalformedPayload { .. } => "malformed_payload",
         }
     }
 }

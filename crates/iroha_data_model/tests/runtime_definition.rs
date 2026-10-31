@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 
 use iroha_data_model::runtime::definition::{
     BindingV1, CarrierFieldV1, CarrierNodeV1, CarrierSchemaV1, CarrierVariantV1,
-    CommitmentProfileDescriptorV1, DefinitionDescriptorV1, DefinitionError, DefinitionId,
-    DefinitionKind, EntrypointV1, EventDescriptorV1, ImplementationCodeV1,
+    CommitmentProfileDescriptorV1, CompletionClosureV1, DefinitionDescriptorV1, DefinitionError,
+    DefinitionId, DefinitionKind, EntrypointV1, EventDescriptorV1, ImplementationCodeV1,
     ImplementationDescriptorV1, InterfaceDescriptorV1, KernelDescriptorV1, PermissionDescriptorV1,
     ProjectionV1, ResourceLimitsV1, RestrictionEntryV1, RestrictionV1, RootSelectionV1, SchemaV1,
     SelectionError, ServiceEntryV1, ServicesProfileDescriptorV1, StorageDescriptorV1,
@@ -611,6 +611,69 @@ fn closure_violations_are_refused() {
         restriction: RestrictionV1::AdmissionClosed(5),
     }];
     assert_eq!(restricted.check_closure(&catalog), Ok(()));
+}
+
+#[test]
+fn completion_closures_keep_the_kernel_and_profiles_that_restrictions_cannot_target() {
+    let (catalog, ids, selection) = bond_root();
+    let claim_impl = selection.bindings[0].implementation;
+    let closure = |definitions| CompletionClosureV1 {
+        obligation: [0x51; 32],
+        definitions: sorted(definitions),
+    };
+
+    let mut retained = selection.clone();
+    retained.completion_closures = vec![closure(vec![
+        ids.kernel,
+        ids.commitment,
+        ids.services,
+        ids.table,
+        claim_impl,
+    ])];
+    assert_eq!(
+        retained.check_closure(&catalog),
+        Ok(()),
+        "a completion runs under the kernel and commits under the commitment profile"
+    );
+
+    let foreign = DefinitionId([0xee; 32]);
+    let mut outside = selection.clone();
+    outside.completion_closures = vec![closure(vec![ids.kernel, foreign])];
+    assert_eq!(
+        outside.check_closure(&catalog),
+        Err(SelectionError::Outside(foreign))
+    );
+
+    for profile in [ids.kernel, ids.commitment, ids.services] {
+        let mut restricted = selection.clone();
+        restricted.restrictions = vec![RestrictionEntryV1 {
+            definition: profile,
+            restriction: RestrictionV1::AdmissionClosed(5),
+        }];
+        assert_eq!(
+            restricted.check_closure(&catalog),
+            Err(SelectionError::Outside(profile)),
+            "the kernel and profiles are replaced, never restricted"
+        );
+    }
+
+    let restricted = |restriction| {
+        let mut restricted = retained.clone();
+        restricted.restrictions = vec![RestrictionEntryV1 {
+            definition: claim_impl,
+            restriction,
+        }];
+        restricted.check_closure(&catalog)
+    };
+    assert_eq!(
+        restricted(RestrictionV1::Disabled(5)),
+        Err(SelectionError::ObligationStranded(claim_impl))
+    );
+    assert_eq!(
+        restricted(RestrictionV1::CompletionOnly(5)),
+        Ok(()),
+        "completion-only still completes"
+    );
 }
 
 #[test]

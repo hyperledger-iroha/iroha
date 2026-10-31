@@ -38,6 +38,10 @@ pub struct BuiltInInstructionSchema {
     pub wire_id: &'static str,
     /// Declared Norito nominal identity of the payload type.
     pub payload: fn() -> std::borrow::Cow<'static, str>,
+    /// Registered tolerantly: an instruction this release adds after the frozen baseline, whose
+    /// envelopes decode as opaque rather than fail when their frame is not canonical
+    /// (`specs/live_runtime_upgrades.md` §5.2). Baseline instructions never are.
+    pub tolerant: bool,
 }
 
 impl core::fmt::Debug for BuiltInInstructionSchema {
@@ -45,6 +49,7 @@ impl core::fmt::Debug for BuiltInInstructionSchema {
         f.debug_struct("BuiltInInstructionSchema")
             .field("wire_id", &self.wire_id)
             .field("payload", &(self.payload)())
+            .field("tolerant", &self.tolerant)
             .finish()
     }
 }
@@ -55,13 +60,16 @@ pub fn built_in_instruction_schemas() -> impl Iterator<Item = BuiltInInstruction
     wire_ids::ALL.iter().map(|entry| BuiltInInstructionSchema {
         wire_id: entry.wire_id,
         payload: entry.payload,
+        tolerant: entry.tolerant,
     })
 }
 
 /// Return whether `wire_id` identifies a built-in instruction accepted by the default registry.
 ///
-/// Sponsor-program revision validation uses this fail-closed lookup before an
-/// immutable native-instruction selector can be staged.
+/// The answer depends on the release, so it must never decide whether a transaction, block or
+/// state change is valid: releases that differ in what they register would disagree
+/// (`specs/live_runtime_upgrades.md` §5.2). Validity follows the root's selection and the
+/// release-independent [`crate::isi::is_well_formed_wire_id`].
 #[must_use]
 pub fn is_instruction_wire_id_registered(wire_id: &str) -> bool {
     static DEFAULT_REGISTRY: std::sync::OnceLock<InstructionRegistry> = std::sync::OnceLock::new();

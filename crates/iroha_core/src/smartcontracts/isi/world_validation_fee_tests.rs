@@ -2319,6 +2319,65 @@ fn fee_sponsor_vault_allocation_rejects_future_source_height() {
     }
 }
 #[test]
+fn fee_sponsor_native_selectors_name_instructions_the_selection_binds() {
+    // Whether this release registers a wire ID never decides validity
+    // (`specs/live_runtime_upgrades.md` §5.2): a native selector must name an instruction an
+    // interface of the root's selection answers.
+    use iroha_data_model::nexus::{
+        FeeSponsorNativeInstructionSelector, FeeSponsorProgramId, FeeSponsorRuleSelector,
+    };
+    let state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let mut block = state.block(first_test_block_header_with_checked_height());
+    let mut stx = block.transaction();
+    let program_id = FeeSponsorProgramId::new(
+        ALICE_ID.clone(),
+        "selector_binding".parse().expect("program name"),
+    );
+    let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+        .parse()
+        .expect("canonical asset definition id");
+    let revision = |wire_id: &str| {
+        let mut revision =
+            fee_sponsor_revision_fixture(program_id.clone(), asset_definition_id.clone(), 1);
+        revision.rules[0].selectors = vec![FeeSponsorRuleSelector::NativeInstruction(
+            FeeSponsorNativeInstructionSelector {
+                wire_id: wire_id.to_owned(),
+                asset_definition_id: None,
+            },
+        )];
+        revision
+    };
+    let names_unknown_instruction = |result: Result<(), Error>| {
+        matches!(
+            result,
+            Err(Error::InvalidParameter(InvalidParameterError::SmartContract(message)))
+                if message.contains("references unknown instruction wire id")
+        )
+    };
+    let log_wire_id =
+        iroha_data_model::isi::wire_id_of::<iroha_data_model::isi::Log>().expect("registered");
+    assert!(names_unknown_instruction(
+        super::validate_fee_sponsor_revision(&revision("test.unreleased.instruction.v1"), &stx)
+    ));
+    // A bound wire ID passes the selector check; the fixture fails later, on its unknown asset.
+    assert!(!names_unknown_instruction(
+        super::validate_fee_sponsor_revision(&revision(log_wire_id), &stx)
+    ));
+    // A wire ID this release registers but the selection does not bind is refused.
+    stx.world
+        .runtime_selection
+        .get_mut()
+        .bindings
+        .retain(|binding| binding.wire_id != log_wire_id);
+    assert!(names_unknown_instruction(
+        super::validate_fee_sponsor_revision(&revision(log_wire_id), &stx)
+    ));
+}
+#[test]
 fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
     use iroha_data_model::{
         isi::nexus::{

@@ -69,10 +69,6 @@ fn unsupported_storage_effects_are_rejected_before_scheduling() {
             "storage migration cutover",
         ),
         (
-            test_support::install_storage(network(), 200, true),
-            "storage cell initialization",
-        ),
-        (
             test_support::activate_migration(network(), 200),
             "migration execution",
         ),
@@ -92,17 +88,19 @@ fn unsupported_storage_effects_are_rejected_before_scheduling() {
         .expect_err("closed definitions cannot substitute for lifecycle effects");
         assert!(error.to_string().contains(operation), "{error}");
     }
-    let table = test_support::install_storage(network(), 200, false);
-    admit(
-        &table,
-        &network(),
-        100,
-        notice(),
-        &baseline(),
-        &BTreeMap::new(),
-        &lookup,
-    )
-    .expect("an empty table may be proposed before its implementing release is installed");
+    for cell in [false, true] {
+        let storage = test_support::install_storage(network(), 200, cell);
+        admit(
+            &storage,
+            &network(),
+            100,
+            notice(),
+            &baseline(),
+            &BTreeMap::new(),
+            &lookup,
+        )
+        .expect("new storage may be proposed before its implementing release is installed");
+    }
 }
 
 #[test]
@@ -559,7 +557,6 @@ fn block_start_lapses_a_change_set_without_every_validator() {
 fn block_start_lapses_attested_but_unimplemented_storage_effects() {
     for change in [
         test_support::retire_baseline_storage(network(), 150),
-        test_support::install_storage(network(), 150, true),
         test_support::activate_migration(network(), 150),
     ] {
         let id = change.id().expect("identity");
@@ -613,4 +610,146 @@ fn block_start_stops_a_release_that_cannot_execute_the_successor() {
         baseline(),
         "the refused block leaves the committed selection"
     );
+}
+
+#[test]
+fn block_start_stops_a_release_that_cannot_install_the_successor_storage() {
+    for cell in [false, true] {
+        let change = test_support::install_storage(network(), 150, cell);
+        let state = scheduled_state(&change, &validators(), 4);
+        let error = state
+            .try_block(header_at(150))
+            .err()
+            .expect("this release does not implement the installed storage");
+        assert!(
+            matches!(
+                error,
+                crate::state::StateBlockStartError::Storage(
+                    crate::state::StateStorageAdmissionError::UnsupportedRuntime {
+                        height: 150,
+                        ..
+                    }
+                )
+            ),
+            "{error:?}"
+        );
+        assert_eq!(*state.world.runtime_selection.view().get(), baseline());
+    }
+}
+
+#[test]
+fn block_start_activates_an_addition_and_installs_its_cell() {
+    use crate::runtime::catalog::{
+        additions::test_additions::{CELL_INITIAL, LOG, LOG_MODULE, LOG_WIRE_ID},
+        test_catalog,
+    };
+    test_catalog::with_additions(&[LOG], || {
+        let catalog = release_catalog().expect("test catalog");
+        let addition = &catalog.additions[0];
+        let founded = crate::runtime::founded_definitions().expect("founded definitions");
+        let change = catalog
+            .activation(
+                LOG_MODULE,
+                &catalog.baseline,
+                &PublishedDefinitions(&founded.view()),
+                network(),
+                150,
+                [0x51; 32],
+            )
+            .expect("the addition activates from the baseline");
+        let id = change.id().unwrap();
+        let state = scheduled_state(&change, &validators(), 4);
+        assert_eq!(
+            *state.world.soradns_history_len.view().get(),
+            0,
+            "an uninstalled cell holds no value"
+        );
+        let block = state
+            .try_block(header_at(150))
+            .expect("this release implements the addition");
+        assert_eq!(
+            block
+                .world
+                .runtime_change_sets
+                .get(&id)
+                .map(|record| record.status),
+            Some(ChangeSetStatusV1::Activated(150))
+        );
+        let selection = block.world.runtime_selection.get();
+        assert_eq!(selection.id().unwrap(), change.successor);
+        assert!(
+            selection
+                .bindings
+                .iter()
+                .any(|binding| binding.wire_id == LOG_WIRE_ID
+                    && binding.implementation == addition.implementation)
+        );
+        assert_eq!(
+            *block.world.soradns_history_len.get(),
+            CELL_INITIAL,
+            "installation writes the published initial value"
+        );
+        for definition in addition.definitions() {
+            assert!(block.world.runtime_definitions.get(&definition).is_some());
+        }
+    });
+}
+
+#[test]
+fn block_start_lapses_a_change_set_that_would_strand_a_live_amx_transaction() {
+    use iroha_data_model::{
+        isi::sumeragi_amx::ExpireAmxV1,
+        sumeragi_amx::{AmxBeginV1, AmxGlobalEntryV1, SumeragiAmxState},
+    };
+    use iroha_model_base::topology::DataSpaceId;
+    let change = test_support::restrict_baseline_interface(
+        network(),
+        150,
+        ExpireAmxV1::WIRE_ID,
+        RestrictionKindV1::Disabled,
+    );
+    let id = change.id().unwrap();
+    let status = |state: &crate::state::State| {
+        let block = state.try_block(header_at(150)).expect("block start");
+        let status = block
+            .world
+            .runtime_change_sets
+            .get(&id)
+            .map(|record| record.status);
+        (status, block.world.runtime_selection.get().clone())
+    };
+
+    let state = scheduled_state(&change, &validators(), 4);
+    {
+        let mut amx = state.world.sumeragi_amx.block();
+        *amx.get_mut() = SumeragiAmxState {
+            dataspaces: Vec::new(),
+            transactions: vec![AmxGlobalEntryV1 {
+                begin: AmxBeginV1 {
+                    tx: [0x71; 32],
+                    participants: vec![DataSpaceId::new(41), DataSpaceId::new(42)],
+                    deadline: 10,
+                    expires_at_ms: 1_000,
+                },
+                begun_at: 1,
+                begun_time_ms: 1,
+                original_cadence_ms: 100,
+                yes: Vec::new(),
+                decided: None,
+            }],
+        };
+        amx.commit();
+    }
+    let (lapsed, selection) = status(&state);
+    assert_eq!(lapsed, Some(ChangeSetStatusV1::Lapsed(150)));
+    assert_eq!(
+        selection,
+        baseline(),
+        "the undecided transaction can still expire"
+    );
+
+    let decided = scheduled_state(&change, &validators(), 4);
+    let (activated, selection) = status(&decided);
+    assert_eq!(activated, Some(ChangeSetStatusV1::Activated(150)));
+    assert_eq!(selection.id().unwrap(), change.successor);
 }

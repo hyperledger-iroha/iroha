@@ -69,6 +69,69 @@ and its admission check are deleted.
 IVM admission accepts a contract only when its ABI hash is one of the host profiles the committed
 selection activates.
 
+## Release additions
+
+Once a network installs the baseline it executes it unchanged, so a release adds instructions and
+World fields after it (design §4, "Add an instruction", "Add storage"):
+
+- **Declaration.** `iroha_core::runtime::catalog::additions::ADDITIONS` lists each addition: a
+  native module, the wire IDs it adds, the earlier wire IDs it rebinds and the World tables and
+  cells it adds (a cell with the canonical bytes of its initial value and the installer that writes
+  them). The baseline is everything compiled that no addition claims. The pinned inventory
+  (`runtime_baseline_catalog.json`) lists only the baseline, so a new instruction or field fails it
+  until it is declared.
+- **Definitions.** Each addition publishes one native implementation, one interface per wire ID it
+  adds and one storage definition per field; a cell's definition carries its initial bytes. Like
+  the baseline bundle it declares a conservative superset of dependencies, every storage definition
+  and interface of the baseline and of the additions before it, so additions activate in
+  declaration order. The catalog publishes them without installing or activating anything.
+- **Activation.** `ReleaseCatalog::activation(module, current, published, network, height,
+  qualification)` drafts the change set that moves a root to an addition: it publishes the
+  definitions the root lacks, installs the addition's storage, activates its interfaces and
+  implementation and binds its wire IDs and rebinds to it. Until it activates, every release
+  rejects an added wire ID as `definition_inactive`, and a release without the addition stops
+  before the effective height.
+- **Dispatch.** Execution runs the implementation the selection binds: `runtime::resolve`
+  returns it, an addition that rebinds a wire ID answers it with its own handler
+  (`ADDITION_HANDLERS` in `smartcontracts/isi/mod.rs`, required for every rebind), and every
+  other implementation runs the instruction type's native handler.
+- **Storage installation.** Installing a table starts it empty. Installing a cell writes the
+  initial bytes its published definition declares through the installer of the release that adds
+  it; a node whose release lacks the storage stops at block start like any unsupported node. The
+  World root commits installed storage from its installation height.
+
+TODO(§5.5): snapshot writers omit, and readers default, fields their selection does not install.
+The first release that adds a World field needs this so that a previous release can still read
+its snapshots before activation; this release adds none, so its strict reader is unchanged.
+
+## Envelopes
+
+Every release decodes the same bytes alike and stops at the same envelope (design §5.2):
+
+- **Opaque envelopes.** Every `InstructionBox` decoder goes through
+  `isi::decode_instruction_envelope`. A wire ID the release registers decodes into its typed
+  instruction; any other well-formed wire ID (`isi::is_well_formed_wire_id`: the interface wire-ID
+  rule, at most 192 bytes of ASCII letters, digits and `. _ : - @ /`) decodes into an
+  `OpaqueInstructionV1` that keeps the exact frame and re-encodes as the same pair, so hashes and
+  signatures do not depend on the release. A wire ID breaking the rule, and malformed pair framing,
+  stay decode errors. `isi::decode_instruction_from_pair` remains the strict typed decoder for
+  clients. Signed attachment actions name wire IDs under the same rule, never by registration.
+- **Tolerant registration.** An addition's instructions register with
+  `built_in_wire_id!(T => "id", tolerant)`: a frame that is not the canonical frame of a payload
+  the decoder accepts (invalid bytes or the decoder's own protocol limits) yields the opaque
+  envelope an earlier release keeps, never a decode error; a local refusal (allocator failure or
+  the caller's enclosing decode budget) stays an error. Baseline instructions register strictly.
+- **Validation.** Before any instruction-dependent step (admission, fees, policies, scope),
+  transaction validation refuses the transaction at its first top-level envelope (instructions and
+  batch instruction items, in order) that execution can never apply: an unbound wire ID
+  (`definition_inactive`), or a bound envelope the release kept opaque (`malformed_payload`, after
+  its restrictions), committed exactly as execution commits it (`runtime::envelope`). A decoded
+  envelope's restrictions stay with execution and its obligation context. Queue admission refuses
+  such a transaction against the committed selection (`queue::Error::RuntimeRejected`, Torii code
+  `definition_inactive` or `malformed_payload`). Envelopes emitted during execution (contracts,
+  triggers, approved proposals) get the same refusals when they execute, before any executor's
+  own admission.
+
 ## Emergency containment
 
 `ContainRuntimeV1 { containment, endorsements }` lets the runtime emergency panel restrict
@@ -108,27 +171,57 @@ CLI: `iroha runtime contain list` reads the records; `iroha runtime contain endo
 
 ## Obligations
 
-A live asset escrow or lock (status `Open`, `Accepted`, `PaymentSent`, `Disputed` or `Locked`) is
-an obligation of the native escrow implementation (design §7.2, `iroha_core::runtime::obligations`);
-its committed `world.asset_escrows` record is its registration. A restriction never removes its
-settlement authority:
+Two kinds of committed State are obligations (design §7.2, `iroha_core::runtime::obligations`);
+each committed record is its registration:
 
-- **Dispatch.** While a definition behind an escrow instruction has admission closed, the
-  instructions that continue or complete a live escrow still run: accepting its offer continues
-  it, and marking payment sent, releasing, cancelling, opening or resolving a dispute, attesting a
-  condition, drawing down and expiring (with the controlled-lock forms) complete it. While the
-  definition is completion-only, only the completions run. Opening new custody runs under
-  neither, and disabling stops every instruction.
-- **Activation.** A change set whose successor leaves a completion of a live escrow unbound, or
-  changes its original binding, transitive declared calls, storage, kernel, commitment, services
-  or host profiles, or disables any required definition, lapses at its effective height. The
-  baseline bundle conservatively declares all its native callees. Keeping a replacement active
-  does not transfer the original custody obligation to it. Until captured completion capabilities
-  exist, rebinding those dependencies requires draining custody first.
-- **Executor replacement.** `Executor::migrate` refuses while any native escrow or lock remains
-  live, before loading code or running migration effects. This includes identical-code migrations,
-  which can still change permissions or State. Replacing the authorization component requires
-  drained custody until captured completion authority or a certified transfer is implemented.
+- a live asset escrow or lock (status `Open`, `Accepted`, `PaymentSent`, `Disputed` or `Locked`)
+  in `world.asset_escrows`;
+- a live AMX participation (`sumeragi.md` §11): on the global chain, a transaction of
+  `world.sumeragi_amx` whose `Begin` is recorded and that is not decided; on a participant root,
+  an escrow in `world.sumeragi_amx_participant` of a `Yes` vote that no decision has settled. A
+  `No` vote escrows nothing and is not live.
+
+A restriction never removes their settlement authority:
+
+- **Dispatch.** While a definition behind an instruction has admission closed, the instructions
+  that continue or complete a live obligation still run; while it is completion-only, only the
+  completions run. Starting new work runs under neither, and disabling stops every instruction.
+  Accepting an escrow's offer continues it; marking payment sent, releasing, cancelling, opening
+  or resolving a dispute, attesting a condition, drawing down and expiring (with the
+  controlled-lock forms) complete it; opening custody is new work. On the global chain, relaying a
+  `Prepared` proof or expiring completes an undecided transaction, and relaying a participant's
+  handoff completes the undecided transactions it takes part in. On a participant, settling
+  completes its unsettled escrow of the decided transaction, and relaying a global handoff, which
+  a decision certified in a later global epoch needs, completes its unsettled escrows. Registering,
+  beginning and preparing are new work: a participant cannot tie a `Prepare` to an admitted
+  transaction before verifying its proof, and refusing one strands nothing, because the global
+  chain aborts by the deadline and the `Yes` voters settle that abort. The deadline step is a
+  block hook, not an instruction.
+- **Activation.** A change set whose successor changes an original binding of a live obligation's
+  completions or of their transitive declared calls (rebinding, unbinding or newly binding it), or
+  stops executing a required definition the predecessor executes (its storage, the kernel, the
+  commitment or services profile, and for escrows the host profiles, since controlled locks invoke
+  contracts), lapses at its effective height. AMX completions are native and retain no host
+  profile. A binding the predecessor already leaves out, or a definition it already disables, is
+  no part of the executable closure: keeping it so blocks no change set, and lifting such a
+  restriction restores the same code. The baseline bundle conservatively declares all its native
+  callees. Keeping a replacement active does not transfer the original obligation to it. Until
+  captured completion capabilities exist, rebinding those dependencies requires draining the
+  obligations first: closing admission to new escrows, `Begin` and `Prepare`, then completing
+  what is live.
+- **Closure.** A selection's completion closure may name the kernel and the commitment and
+  services profiles besides active and installed definitions, but no disabled one
+  (`SelectionError::ObligationStranded`). A restriction targets only an active or installed
+  definition; the kernel and profiles are replaced, never restricted.
+- **Executor replacement.** `Executor::migrate` refuses while any obligation remains live (an
+  escrow or lock, an undecided AMX transaction or an unsettled AMX escrow), before loading code or
+  running migration effects. This includes identical-code migrations, which can still change
+  permissions or State. Replacing the authorization component requires drained obligations until
+  captured completion authority or a certified transfer is implemented.
+- **Every execution path.** Resolution, with restrictions and the obligation an instruction acts
+  on, runs before any check that depends on what the instruction is, on every path that executes
+  one: the native dispatch table and the controlled-lock, linked-FI and multisig paths that bypass
+  it. A containment therefore holds whichever path runs an instruction.
 
 ## Deferred consent
 
@@ -156,9 +249,9 @@ cover the complete callable binding set; expanding that surface requires renewed
 Explicitly following current bindings and narrower authenticated dynamic-call manifests remain
 unimplemented.
 
-Migration cursors, AMX participations and contract-created obligations still need kernel
-registration. Escrows do not yet retain a captured completion capability that dispatch honors after
-a rebinding. These protections do not close the whole obligation lifecycle of design §7.2.
+Migration cursors and contract-created obligations still need kernel registration. Escrows and AMX
+participations do not yet retain a captured completion capability that dispatch honors after a
+rebinding. These protections do not close the whole obligation lifecycle of design §7.2.
 
 Persisted pending proposals and triggers require their original capture. There is no restore-time
 fallback that manufactures consent from the current selection. A predecessor snapshot containing
@@ -168,14 +261,14 @@ though no World table was added, and is not an encoding-neutral live deployment.
 
 ## Unsupported transition effects
 
-The shared successor resolver rejects storage retirement, installation of storage cells,
-activation of migration definitions and manual retention/release of completion capabilities: the
-cursor, write-barrier, initialization, cutover and kernel capability engines are not implemented.
-Proposal/enactment and node support attestation use this resolver; block start
-also checks it and lapses an already scheduled unsupported transition without changing the
-selection. Empty-table additions remain admissible; an executing release still has to implement
-the resulting selection. Recognizing every definition in a successor is not evidence that a
-release can perform a storage transition.
+The shared successor resolver rejects storage retirement, activation of migration definitions and
+manual retention/release of completion capabilities: the cursor, write-barrier, cutover and kernel
+capability engines are not implemented. Proposal/enactment and node support attestation use this
+resolver; block start also checks it and lapses an already scheduled unsupported transition
+without changing the selection. The rule depends only on the change set, so every node rejects the
+same transitions. Installing tables and cells is supported (release additions, above); an
+executing release still has to implement the resulting selection. Recognizing every definition in
+a successor is not evidence that a release can perform a storage transition.
 
 ## Notice policy
 
@@ -247,11 +340,55 @@ refreshes it after every `RuntimeUpgradeEvent::Activated`. The compatibility pro
 
 `runtime_abi_version` and `runtime_upgrade_events_total{kind=scheduled|canceled|attested|contained}`.
 
+## Operations
+
+`iroha3d --check-replay` replays a stopped validator's store, or an immutable copy of it, with a
+candidate release before it is installed ([`live_runtime_upgrades.md`](live_runtime_upgrades.md)
+§9.2; `crates/irohad/src/replay_check.rs`, `iroha_core::sumeragi::node::replay_check`).
+
+- The store is opened read-only under its store-root lock, as `--check-storage` opens it, and is
+  never written; nor are the snapshot and tiered-state directories. Signed genesis is
+  authenticated against the configured trust anchor first.
+- The whole store (blocks, native execution context records, lane stores and geometry journals;
+  every file but the store-root lock) is copied into a temporary directory, and the original is
+  released. The State is built on the copy as a Strict startup builds it: restored from the
+  newest authenticated snapshot, or empty to re-execute signed genesis. Blocks at or below
+  `snapshot.upgrade_checkpoint` are never re-executed.
+- Every later block's certificate is verified and the block re-executed through the startup
+  executor. The first block whose execution result differs from its certificate ends the check
+  with `outcome: "diverged"`, naming the first differing commitment component in report order
+  (`validity`, `height`, `parent_world_state_root`, `transaction_inputs`,
+  `transaction_results`, `transaction_outputs`, `events`, the witnessed roots,
+  `world_state_root`, `native_lanes`, `schedule`, `beacon`, `finality_header`) with both values.
+  A body the store no longer holds is `outcome: "missing_history"`, never a divergence. After the
+  last block the replayed World is checked against a cold capture
+  (`world_state_accumulator`).
+- The JSON report is the last line of standard output and the command exits nonzero unless
+  every replayed block matched.
+
 ## Still open
 
 Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `roadmap.md` N14:
-kernel obligation registration and completion capabilities, migrations and storage capabilities,
-complete-State commitments, checkpoints and the startup floor, and governed adoption on Taira.
+
+- **Before the first World-field addition:** snapshots that follow the selection (a writer omits
+  and a reader defaults every field the snapshot's selection does not install), so a previous
+  release reads this release's snapshots until activation; a catalog test refuses such an
+  addition until then.
+- **Operations:** the operator route that drafts an addition's activation from the node's catalog
+  (`iroha_core::runtime::draft_addition` is implemented; its Torii route, client and CLI command
+  are not), and the Taira launcher treating `--check-replay` as an offline command.
+- **Obligations:** kernel registration of contract-created obligations and migration cursors,
+  completion capabilities retained across rebinding, explicit current-binding consent and
+  narrower authenticated dynamic-call manifests.
+- **Transitions:** migrations with cursors, write barriers and atomic cutover, storage retirement,
+  storage capabilities and generic carriers.
+- **Commitment and history:** complete-State commitments, which first need the node-configured
+  policy cells (G1-D3, ZK delivery F.4) in committed State and a decision on how the pinned
+  history meets the new root; checkpoints and the startup floor.
+- **Adoption:** the governed adoption carrier that replaces the interim configuration import
+  (`state::upgrade_checkpoint`): a predecessor-recorded authorization naming this baseline and
+  the adoption height, verified at import, with the adoption record as trust anchor.
+
 Parliament lifecycle parameter updates are validated, but Core still needs the frozen
 governance-clock policy and anonymous-ballot integration owned by
 [`parliament_ballot_implementation_goals.md`](parliament_ballot_implementation_goals.md) E2.

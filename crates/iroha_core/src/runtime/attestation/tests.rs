@@ -150,10 +150,6 @@ fn a_release_refuses_to_attest_unimplemented_storage_effects() {
             "storage migration cutover",
         ),
         (
-            test_support::install_storage(network(), 150, true),
-            "storage cell initialization",
-        ),
-        (
             test_support::activate_migration(network(), 150),
             "migration execution",
         ),
@@ -168,6 +164,20 @@ fn a_release_refuses_to_attest_unimplemented_storage_effects() {
             "{error}"
         );
         assert!(error.to_string().contains(operation), "{error}");
+    }
+    // Installing storage is an effect this release performs; it still attests only storage its
+    // release implements.
+    for cell in [false, true] {
+        let change = test_support::install_storage(network(), 150, cell);
+        let id = change.id().expect("identity");
+        let state = state_with(&change, &committee, ChangeSetStatusV1::Scheduled);
+        let world = state.world_view();
+        let error = sign_support(&world, &committee, 42, id, &pairs[0], [0x55; 32])
+            .expect_err("this release does not implement the installed storage");
+        assert!(
+            matches!(error, NodeAttestationError::Unsupported { .. }),
+            "{error}"
+        );
     }
     let retirement = test_support::retire_baseline_storage(network(), 150);
     let catalog = release_catalog().expect("catalog");

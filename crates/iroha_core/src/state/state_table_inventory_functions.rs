@@ -32,6 +32,7 @@ const CERTIFIED_IDENTITY: &str = "Carries the certified block identity and R of 
 const ORIGINAL_WIRE_FENCE: &str = "Hashes or returns the exact original native block-wire prefix identity used only to invalidate a local finality-proof cursor; no State root or independent finality authority";
 const BLOCK_PROOF: &str =
     "Merkle proofs of a transaction entrypoint and its result inside their block: block content";
+const DEFERRED_CONSENT: &str = "Digests one captured deferred-consent expectation (the resolved bindings and transitive definitions a multisig occurrence or trigger incarnation relies on, with the installed executor's consent hash) that the deferred action stores and rechecks: no digest over a table or cell";
 const TABLE_ACCESSOR: &str = "Borrows a table whose key type is the content hash of one record (a pin manifest, contract bytecode): a table accessor that computes no digest";
 
 const fn function(
@@ -158,6 +159,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
             Use::Record,
             "Lists the identities of the active containments that still hold a restriction they imposed, so block start can close their ratification cases after the height's change sets: record identifiers, no digest over a table or cell",
         ),
+    ),
+    function(
+        "crates/iroha_core/src/runtime/expectation.rs",
+        "digest_owned",
+        1,
+        UseOwner::Other(Use::Record, DEFERRED_CONSENT),
     ),
     function(
         "crates/iroha_core/src/smartcontracts/code.rs",
@@ -380,6 +387,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         "read_repair_indexed_task",
         1,
         UseOwner::Other(Use::Record, RECORD_IDENTITY),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/triggers/runtime_expectation.rs",
+        "capture_trigger_runtime",
+        1,
+        UseOwner::Other(Use::Record, DEFERRED_CONSENT),
     ),
     function(
         "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
