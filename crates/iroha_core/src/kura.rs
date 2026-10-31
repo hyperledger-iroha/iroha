@@ -107,7 +107,8 @@ const BOUND_PROGRESS_APPEND_INTENT_DIGEST_DOMAIN: &[u8] =
     b"iroha:kura:bound-progress-append-intent:v1\0";
 const MAX_BLOCK_COMMIT_MARKER_BYTES: usize = 1024;
 const VERIFIED_SNAPSHOT_TAIL_FILE_NAME: &str = "verified_snapshot_tail.norito";
-const STORE_ROOT_LOCK_FILE_NAME: &str = ".kura.lock";
+/// The store-root lock file; a copy of a store takes its own lock instead of copying this one.
+pub(crate) const STORE_ROOT_LOCK_FILE_NAME: &str = ".kura.lock";
 /// Retired pre-release rollback marker. No first-release code writes or recovers it;
 /// its presence is rejected so operators must remove stale state explicitly.
 const ROLLBACK_INTENT_FILE_NAME: &str = "rollback-intent.norito";
@@ -1125,6 +1126,31 @@ impl Kura {
             .prefix("iroha-staging-kura-")
             .tempdir()
             .map_err(|error| Error::IO(error, std::env::temp_dir()))?;
+        Self::adopt_temporary_with_configured_lane_catalog(
+            config,
+            lane_config,
+            configured_lane_catalog,
+            temp_store_dir,
+        )
+    }
+
+    /// Open the store a caller placed in the temporary directory `temp_store_dir` as isolated
+    /// temporary staging, such as a copy of another store (`iroha3d --check-replay`).
+    ///
+    /// The copy is opened as `config` opens a store, with the same configured-catalog
+    /// authentication as [`Self::new_with_configured_lane_catalog`], and the returned Kura owns
+    /// the directory: dropping it removes the copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the configured lane catalog cannot open an authenticated Kura in the
+    /// directory.
+    pub fn adopt_temporary_with_configured_lane_catalog(
+        config: &Config,
+        lane_config: &LaneConfig,
+        configured_lane_catalog: &LaneCatalog,
+        temp_store_dir: tempfile::TempDir,
+    ) -> Result<Arc<Self>> {
         let mut temporary_config = config.clone();
         temporary_config.store_dir = WithOrigin::inline(temp_store_dir.path().to_path_buf());
         let (mut kura, _) = Self::new_with_configured_lane_catalog(

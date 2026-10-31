@@ -3347,6 +3347,21 @@ impl StateBlock<'_> {
         state_transaction
             .ensure_execution_ready()
             .map_err(ExecutionAttemptError::Deferred)?;
+        // The first instruction-dependent step of validation (`specs/live_runtime_upgrades.md`
+        // §5.2): stop at the first top-level envelope execution can never apply (its wire ID
+        // unbound, or the envelope kept opaque), before stateful admission, fee and policy checks
+        // that depend on what an instruction is. A release that knows the wire ID and one that
+        // kept the envelope opaque commit the same rejection.
+        // TODO(§5.2): the policy route the caller captured is still derived from instruction
+        // types; an addition's instruction must route like an unknown one until it activates.
+        crate::runtime::envelope::admit_envelopes(
+            state_transaction.world.runtime_selection.get(),
+            state_transaction.block_height(),
+            signed.instructions(),
+        )
+        .map_err(|error| {
+            ExecutionAttemptError::from(TransactionRejectionReason::Validation(error))
+        })?;
         let admission = Self::validate_stateful_admission(
             signed,
             state_transaction,
@@ -3447,7 +3462,11 @@ impl StateBlock<'_> {
                 &state_transaction.world,
                 state_transaction.block_height(),
             )
-            .map_err(crate::resource_coherence::PolicyCoherenceError::into_transaction_rejection)?;
+            .map_err(|error| {
+                error.map_rejection(
+                    crate::resource_coherence::PolicyCoherenceError::into_transaction_rejection,
+                )
+            })?;
         }
         if let Some(seq) = admission.sequence_to_commit {
             state_transaction
@@ -13186,6 +13205,7 @@ pub mod tests {
         }
     }
     include!("tx/empty_instruction_test.rs");
+    include!("tx/runtime_envelope_test.rs");
     #[test]
     fn lane_privacy_proofs_collected_from_attachments() {
         let (authority, keypair) = gen_account_in("wonderland");

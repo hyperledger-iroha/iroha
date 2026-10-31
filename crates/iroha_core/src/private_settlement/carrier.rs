@@ -280,6 +280,9 @@ fn not_permitted() -> ValidationFail {
 /// Closed failure while consuming a transaction-scoped carrier binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivateSettlementCarrierBindingErrorV1 {
+    /// The committed private-settlement extension or its original read is unavailable.
+    #[error("private-settlement committed policy is unavailable")]
+    Policy,
     /// Signed genesis configures the initial policy and pools before monetary obligations.
     #[error("private-settlement monetary carriers are forbidden in genesis")]
     GenesisCarrier,

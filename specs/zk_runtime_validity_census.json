@@ -1202,7 +1202,8 @@
     ["crates/iroha_core/src/release_identity.rs", "env_read", "VERGEN_CARGO_TARGET_TRIPLE", 1],
     ["crates/iroha_core/src/release_identity.rs", "env_read", "VERGEN_GIT_SHA", 1],
     ["crates/iroha_js_host/src/lib.rs", "env_read", "IROHA_GIT_COMMIT_HASH", 1],
-    ["crates/iroha_kagami/src/main.rs", "env_read", "IROHA_GIT_COMMIT_HASH", 1]
+    ["crates/iroha_kagami/src/main.rs", "env_read", "IROHA_GIT_COMMIT_HASH", 1],
+    ["crates/iroha_kagami/src/main.rs", "env_read", "VERGEN_GIT_SHA", 1]
    ]
   },
   {
@@ -1515,9 +1516,10 @@
    "sites": [
     ["crates/iroha_cli/src/client_config.rs", "env_read", "HOME", 1],
     ["crates/iroha_cli/src/client_config.rs", "env_read", "USERPROFILE", 1],
-    ["crates/iroha_deploy/src/sora_network.rs", "env_read", "CARGO_TARGET_DIR", 1],
+    ["crates/iroha_deploy/src/localnet/bundle.rs", "env_read", "CARGO_TARGET_DIR", 1],
     ["crates/iroha_deploy/src/managed/workspace.rs", "env_read", "LOCALAPPDATA", 1],
     ["crates/iroha_deploy/src/managed/workspace.rs", "env_read", "XDG_STATE_HOME", 1],
+    ["crates/iroha_deploy/src/sora_network.rs", "env_read", "CARGO_TARGET_DIR", 1],
     ["crates/iroha_test_network/src/config.rs", "env_read", "IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR", 1],
     ["crates/iroha_test_network/src/disposable_runtime_provider_broker.rs", "env_read", "TEMPDIR_IN_ENV", 1],
     ["crates/iroha_test_network/src/lib.rs", "env_read", "<expression>", 1],
@@ -1997,6 +1999,32 @@
    "sites": []
   },
   {
+   "id": "cfg.nexus.private_settlement_frozen_v1",
+   "kind": "node_local_config",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_config/src/parameters/actual.rs",
+   "symbol": "fn frozen_v1() -> Self",
+   "gates": "The original private-settlement fields inside the signed V1 SORA Nexus consensus-policy preimage.",
+   "decided_by": "Literal immutable V1 baseline bytes; current private validity comes from the authenticated private_settlement_policy_v1 Parameters extension or its explicit native absence semantics.",
+   "attribution": "read",
+   "note": "These fifteen preimage fields retain their original nominal layout and position so source ownership changes do not reinterpret authenticated genesis metadata. They read no node settings or mutable defaults. In particular the original sidecar-capacity words remain fixed commitment bytes, while current sidecar capacity is local. This fixed baseline does not reconstruct or qualify arbitrary earlier non-default configurations or live-obligation histories.",
+   "sites": [],
+   "anchors": [
+    {
+     "path": "crates/iroha_config/src/parameters/actual.rs",
+     "function": "frozen_v1",
+     "contains": "max_participants: 255"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/iroha_config/src/parameters/actual/tests.rs",
+     "name": "frozen_private_settlement_v1_matches_original_commitment_bytes_and_position"
+    }
+   ]
+  },
+  {
    "id": "cfg.nexus.bounds",
    "kind": "node_local_config",
    "status": "open",
@@ -2006,8 +2034,8 @@
    "gates": "Four remaining [nexus] limits: uploaded-model plaintext bytes and chunk count (C.9), and DA ingest quota count and bytes.",
    "decided_by": "Typed committed parameters, read through the State view.",
    "attribution": "read",
-   "open_reason": "Uploaded-model and DA validity bounds remain in the State projection of node configuration and require typed committed owners with regenerated authoring artifacts and current-candidate validation. Private-settlement validity bounds have moved to PrivacyConsensusPolicyV1; node settings retain only local sidecar storage capacities.",
-   "note": "Private-settlement participant, carrier, proof and capsule bounds are consumed from committed current_limits.private_settlement in Core and Torii. Their phase windows and pending drain are recorded under private_settlement.committed_windows. Local sidecar record and byte limits are no longer fields of the Nexus consensus-policy preimage.",
+   "open_reason": "Uploaded-model and DA validity bounds remain in the State projection of node configuration and require typed committed owners with regenerated authoring artifacts and current-candidate validation. Private-settlement validity bounds use PrivateSettlementPolicyV1 in the typed private_settlement_policy_v1 custom Parameters extension, with immutable native semantics for authenticated absence; node settings retain only local sidecar storage capacities.",
+   "note": "Private-settlement participant, carrier, proof and capsule bounds are consumed from PrivateSettlementPolicyV1.current_limits in the authenticated Parameters cell in Core and Torii. A malformed present custom payload never selects the absence profile. Their phase windows and pending drain are recorded under private_settlement.committed_windows. The signed V1 SORA Nexus consensus-policy preimage preserves its original fixed bytes across this owner move; current node-local sidecar record and byte capacities do not supply validity authority.",
    "sites": [
     ["crates/iroha_core/src/smartcontracts/isi/soracloud.rs", "node_policy_read", "uploaded_models.max_chunk_count_per_model", 2],
     ["crates/iroha_core/src/smartcontracts/isi/soracloud.rs", "node_policy_read", "uploaded_models.max_plaintext_bytes_per_model", 2]
@@ -2073,7 +2101,7 @@
    "gates": "The remaining Nexus consensus-policy preimage fields and recorded readers: lane, data space and routing identities, validator activation/capacity, lease and endorsement timing, governance modules, fusion and autoscale policy, DA attester sampling and the preimage version. Staking monetary terms and private-settlement validity have separate committed owners.",
    "decided_by": "Committed State (the Nexus runtime catalog and lane policy already are; these values follow them).",
    "attribution": "read",
-   "open_reason": "The remaining recorded readers still consume the State projection of node configuration, including validator capacity, endorsement and autoscale settings. PublicLaneStakingPolicy owns monetary terms in original committed Parameters, and PrivacyConsensusPolicyV1 owns private-settlement validity. Those migrations do not close the remaining validity inputs. Current-candidate native validation, original-parameter resource custody and whole-node parity remain unfinished.",
+   "open_reason": "The remaining recorded readers still consume the State projection of node configuration, including validator capacity, endorsement and autoscale settings. PublicLaneStakingPolicy owns monetary terms in original committed Parameters, and PrivateSettlementPolicyV1 in the typed custom Parameters extension owns private-settlement validity. Those migrations do not close the remaining validity inputs. Current-candidate native validation, original-parameter resource custody and whole-node parity remain unfinished.",
    "sites": [
     ["crates/iroha_core/src/block.rs", "node_policy_read", "da.*", 1],
     ["crates/iroha_core/src/smartcontracts/isi/sns.rs", "node_policy_read", "endorsement.quorum", 1],
@@ -3634,7 +3662,7 @@
     ["crates/iroha_data_model/src/privacy/action_role.rs", "global_manifest", "exact12", 2],
     ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "global_manifest", "exact12", 50],
     ["crates/iroha_data_model/src/privacy/proofs.rs", "global_manifest", "exact12", 1],
-    ["crates/iroha_data_model/src/privacy/protocol.rs", "global_manifest", "capability_manifest", 20],
+    ["crates/iroha_data_model/src/privacy/protocol.rs", "global_manifest", "capability_manifest", 21],
     ["crates/iroha_data_model/src/privacy/protocol.rs", "global_manifest", "exact12", 3],
     ["crates/iroha_data_model/src/privacy/release_manifest.rs", "global_manifest", "exact12", 130],
     ["crates/iroha_data_model/src/privacy/release_manifest.rs", "global_manifest", "release_manifest", 13],
@@ -5798,7 +5826,7 @@
    "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
    "symbol": "pub fn private_settlement_admission_deadline_v1(",
    "gates": "Native private-payment phase durations, signed expiry spans and pending policy drain boundaries.",
-   "decided_by": "The validated PrivacyConsensusPolicyV1 and optional PrivacyProtocolPolicyV1 at the same authenticated World cut, compared with signed context/expiry heights and the executing block height.",
+   "decided_by": "The validated PrivateSettlementPolicyV1 extracted from the authenticated Parameters cell and optional PrivacyProtocolPolicyV1 at the same World cut, compared with signed context/expiry heights and the executing block height. Exact parameter absence has immutable native V1 semantics; malformed presence is refused.",
    "attribution": "read",
    "note": "audit_timeout_blocks, prepare_timeout_blocks and commit_timeout_blocks are positive committed block counts whose checked sum cannot exceed max_expiry_blocks. exclusive_deadline and private_settlement_admission_deadline_v1 select the earliest committed effective_at_height for private-policy changes or native relation closure. No wall clock is read. Core Prepare-lock admission and Torii manifest admission consume the same policy function; genuine continuations keep their original obligations. This source classification does not qualify complete private-settlement execution or recovery.",
    "sites": [
@@ -5809,12 +5837,12 @@
     {
      "path": "crates/iroha_core/src/state.rs",
      "function": "apply_private_settlement_prepare_locks_v1",
-     "contains": "self.world.privacy_consensus_policy.get()"
+     "contains": "self.private_settlement_policy_v1()?"
     },
     {
      "path": "crates/iroha_torii/src/private_settlement.rs",
      "function": "active_config_at_view",
-     "contains": "state.world().privacy_consensus_policy()"
+     "contains": "PrivateSettlementPolicyV1::from_parameters"
     }
    ],
    "tests": [
@@ -6369,6 +6397,26 @@
    "catalog": "nexus_consensus_policy_v1",
    "groups": [
     {
+     "entry": "cfg.nexus.private_settlement_frozen_v1",
+     "fields": [
+      "atomic_private_settlement.proof_profile_version",
+      "atomic_private_settlement.max_participants",
+      "atomic_private_settlement.max_expiry_blocks",
+      "atomic_private_settlement.audit_timeout_blocks",
+      "atomic_private_settlement.prepare_timeout_blocks",
+      "atomic_private_settlement.commit_timeout_blocks",
+      "atomic_private_settlement.capsule_padding_classes_bytes",
+      "atomic_private_settlement.max_proof_bytes",
+      "atomic_private_settlement.max_capsule_bytes",
+      "atomic_private_settlement.max_carrier_bytes",
+      "atomic_private_settlement.sidecar_retention_blocks",
+      "atomic_private_settlement.sidecar_max_records",
+      "atomic_private_settlement.sidecar_max_total_bytes",
+      "atomic_private_settlement.default_min_auditor_approvals",
+      "atomic_private_settlement.permitted_policy_versions"
+     ]
+    },
+    {
      "entry": "cfg.nexus.bounds",
      "fields": [
       "uploaded_models.max_plaintext_bytes_per_model",
@@ -6707,9 +6755,9 @@
   }
  },
  "summary": {
-  "entries": 234,
-  "sites": 1503,
-  "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 117, "open": 40, "out_of_plan": 21, "unsupported": 19},
-  "by_owner": {"-": 138, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
+  "entries": 235,
+  "sites": 1505,
+  "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 118, "open": 40, "out_of_plan": 21, "unsupported": 19},
+  "by_owner": {"-": 139, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }
 }

@@ -130,6 +130,12 @@ impl InstructionBox {
     fn from_boxed(instruction: Box<dyn Instruction>) -> Self {
         Self(InstructionStorage::Boxed(instruction))
     }
+    /// The opaque envelope this instruction is, when this release kept its envelope opaque
+    /// (`specs/live_runtime_upgrades.md` §5.2).
+    #[must_use]
+    pub fn as_opaque(&self) -> Option<&OpaqueInstructionV1> {
+        self.as_any().downcast_ref::<OpaqueInstructionV1>()
+    }
 }
 impl norito::NoritoSchema for InstructionBox {
     fn nominal_name() -> String {
@@ -157,6 +163,9 @@ impl core::fmt::Display for InstructionBox {
 }
 impl core::fmt::Debug for InstructionBox {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if let Some(opaque) = self.as_opaque() {
+            return f.debug_tuple("InstructionBox").field(opaque).finish();
+        }
         f.debug_tuple("InstructionBox")
             .field(&Instruction::id(&**self))
             .finish()
@@ -884,9 +893,17 @@ impl<W: std::io::Write + ?Sized> std::io::Write for ExactInstructionFrameWriter<
         self.inner.flush()
     }
 }
-/// Return the stable registry wire identifier used to frame an instruction.
+/// Return the wire identifier an instruction is framed with: its type's stable registry wire
+/// identifier, or the wire identifier an opaque envelope carries (`specs/live_runtime_upgrades.md`
+/// §5.2).
+///
+/// `None` means an instruction type without a registered wire identifier, which no transaction
+/// or contract can carry.
 #[must_use]
-pub fn instruction_wire_id(instr: &InstructionBox) -> Option<&'static str> {
+pub fn instruction_wire_id(instr: &InstructionBox) -> Option<&str> {
+    if let Some(opaque) = instr.as_opaque() {
+        return Some(opaque.wire_id());
+    }
     let inner = &**instr;
     let type_name = Instruction::id(inner);
     instruction_encoding_entry(type_name).map(|entry| entry.wire_id)
@@ -897,13 +914,18 @@ pub fn instruction_wire_id(instr: &InstructionBox) -> Option<&'static str> {
 pub fn wire_id_of<T: Instruction>() -> Option<&'static str> {
     instruction_registry().wire_id(std::any::type_name::<T>())
 }
-/// Encode one registered instruction into its stable wire id and exact Norito frame.
+/// Encode one instruction into its wire id and exact Norito frame.
 ///
 /// The returned payload is the same framed byte sequence embedded in an [`InstructionBox`] wire
-/// tuple. It can be decoded with [`decode_instruction_from_pair`] and is suitable for planner
-/// responses that clients must verify and submit without altering instruction bytes.
+/// tuple. For a registered instruction it can be decoded with [`decode_instruction_from_pair`] and
+/// is suitable for planner responses that clients must verify and submit without altering
+/// instruction bytes; an opaque envelope returns the wire ID and frame it carries
+/// ([`decode_instruction_envelope`] decodes those).
 #[must_use]
-pub fn framed_instruction_payload(instr: &InstructionBox) -> Option<(&'static str, Vec<u8>)> {
+pub fn framed_instruction_payload(instr: &InstructionBox) -> Option<(&str, Vec<u8>)> {
+    if let Some(opaque) = instr.as_opaque() {
+        return Some((opaque.wire_id(), opaque.frame().to_vec()));
+    }
     let inner = &**instr;
     let type_name = Instruction::id(inner);
     let entry = {
@@ -921,11 +943,20 @@ pub fn framed_instruction_payload(instr: &InstructionBox) -> Option<(&'static st
     write_result.ok()?;
     complete.then_some((entry.wire_id, payload))
 }
+/// The static registry wire ID and exact frame of a registered instruction; `None` for an opaque
+/// envelope, which has no registry entry.
 #[cfg(test)]
 fn encoded_instruction_pair_payload(instr: &InstructionBox) -> Option<(&'static str, Vec<u8>)> {
-    framed_instruction_payload(instr)
+    let (_, frame) = framed_instruction_payload(instr)?;
+    let wire_id = instruction_registry()
+        .entry_for_type_name(Instruction::id(&**instr))?
+        .wire_id;
+    Some((wire_id, frame))
 }
 fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
+    if let Some(opaque) = instr.as_opaque() {
+        return encoded_instruction_tuple_len(opaque.wire_id(), opaque.frame().len());
+    }
     let inner = &**instr;
     let type_name = Instruction::id(inner);
     let entry = instruction_encoding_entry(type_name)?;
@@ -933,6 +964,9 @@ fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
     encoded_instruction_tuple_len(entry.wire_id, framed_payload_len)
 }
 fn encoded_instruction_pair_hint(instr: &InstructionBox) -> Option<usize> {
+    if let Some(opaque) = instr.as_opaque() {
+        return encoded_instruction_tuple_len(opaque.wire_id(), opaque.frame().len());
+    }
     let inner = &**instr;
     let type_name = Instruction::id(inner);
     let entry = instruction_encoding_entry(type_name)?;
@@ -971,6 +1005,10 @@ fn framed_instruction_payload_len_for<T>(payload_len: usize) -> Option<usize> {
 impl norito::core::SerializePayload for InstructionBox {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let inner = &**self;
+        if let Some(opaque) = self.as_opaque() {
+            // The envelope writes back the exact pair it was decoded from.
+            return inner.dyn_write_pair(writer, opaque.wire_id());
+        }
         let type_name = Instruction::id(inner);
         let entry =
             instruction_encoding_entry(type_name).ok_or(norito::core::Error::InvalidValue {
@@ -1007,7 +1045,7 @@ impl<'a> norito::core::DeserializePayload<'a> for InstructionBox {
         if used != bytes.len() {
             return invalid(name, Some(payload), instruction_canonical_framing_error());
         }
-        decode_instruction_from_pair(name, payload)
+        decode_instruction_envelope(name, payload)
             .unwrap_or_else(|error| invalid(name, Some(payload), error))
     }
     fn try_deserialize(
@@ -1333,6 +1371,10 @@ impl iroha_schema::TypeId for InstructionBox {
 /// aliases. The `payload` must be framed with the Norito header as produced by
 /// [`frame_instruction_payload`].
 ///
+/// This is the strict typed decoder for clients and tools: it never yields an
+/// [`OpaqueInstructionV1`]. Transactions, blocks and contract output decode every instruction
+/// with [`decode_instruction_envelope`] instead.
+///
 /// # Errors
 /// Returns `norito::Error` if the wire identifier is not registered or payload decoding fails.
 pub fn decode_instruction_from_pair(
@@ -1350,6 +1392,59 @@ pub fn decode_instruction_from_pair(
     Err(norito::Error::Message(
         "unknown instruction wire identifier".to_owned(),
     ))
+}
+/// Decode one instruction envelope `(wire_id, frame)` exactly as every release decodes it
+/// (`specs/live_runtime_upgrades.md` §5.2).
+///
+/// - A wire ID this release registers decodes into its typed instruction.
+/// - A tolerant registration, which an instruction added after the frozen baseline uses because
+///   earlier releases keep its envelope opaque, yields an [`OpaqueInstructionV1`] instead of an
+///   error when `frame` is not the canonical frame of a payload its decoder accepts.
+/// - Every other well-formed wire ID ([`is_well_formed_wire_id`]) decodes into an
+///   [`OpaqueInstructionV1`] that keeps `frame` byte for byte without interpreting it.
+///
+/// Every [`InstructionBox`] decoder uses this, so a block decodes alike on every release whatever
+/// instructions it carries; execution refuses an envelope whose interface is not active.
+///
+/// # Errors
+/// - a wire ID that is not well formed: malformed envelope framing on every release;
+/// - a registered, non-tolerant wire ID whose frame fails to decode;
+/// - a local refusal (an allocator failure or the caller's enclosing decode budget), which is no
+///   verdict about the bytes and never becomes an opaque envelope.
+pub fn decode_instruction_envelope(
+    wire_id: &str,
+    frame: &[u8],
+) -> Result<InstructionBox, norito::Error> {
+    let entry = {
+        let registry = instruction_registry();
+        registry.entry_for_wire_id(wire_id).copied()
+    };
+    let Some(entry) = entry else {
+        return OpaqueInstructionV1::decode_owned(wire_id, frame).map(InstructionBox::from);
+    };
+    let decode = || {
+        let header_flags = framed_instruction_payload_header_flags(frame)?;
+        InstructionRegistry::decode_entry(&entry, header_flags, frame)
+    };
+    if !entry.tolerant {
+        return decode();
+    }
+    // Invalid bytes and the decoder's own protocol limits are deterministic verdicts about the
+    // frame: a release without the registration keeps it opaque, so this one does too. A local
+    // refusal depends on this node and stays an error.
+    match norito::core::classify_decode_attempt(decode) {
+        Ok(instruction) => Ok(instruction),
+        Err(attempt)
+            if matches!(
+                attempt.kind(),
+                norito::core::DecodeAttemptErrorKind::Allocator
+                    | norito::core::DecodeAttemptErrorKind::EnclosingLimit
+            ) =>
+        {
+            Err(attempt.into_error())
+        }
+        Err(_) => OpaqueInstructionV1::decode_owned(wire_id, frame).map(InstructionBox::from),
+    }
 }
 fn framed_instruction_payload_header_flags(payload: &[u8]) -> Result<u8, norito::Error> {
     let flags = *payload
@@ -1420,7 +1515,7 @@ fn decode_instruction_from_borrowed_pair(
     bytes: &[u8],
 ) -> Result<(InstructionBox, usize), norito::Error> {
     let (name, payload, used) = decode_instruction_pair_fields_from_slice(bytes)?;
-    let instruction = decode_instruction_from_pair(name, payload)?;
+    let instruction = decode_instruction_envelope(name, payload)?;
     Ok((instruction, used))
 }
 /// Frame a bare instruction payload with its Norito header using its canonical wire identifier.
@@ -1486,6 +1581,9 @@ struct RegistryEntry {
     wire_id: &'static str,
     frame: fn(&[u8], u8) -> Result<Vec<u8>, norito::core::Error>,
     frame_len: fn(usize) -> Option<usize>,
+    /// Whether [`decode_instruction_envelope`] keeps a frame its constructor refuses as an
+    /// opaque envelope instead of failing; the constructor then accepts only canonical frames.
+    tolerant: bool,
 }
 impl InstructionRegistry {
     /// Create an empty registry.
@@ -1497,7 +1595,7 @@ impl InstructionRegistry {
     /// The concrete Rust [`std::any::type_name`] is retained only as the encoding-side key;
     /// decoders accept only `wire_id`.
     #[must_use]
-    pub fn register_with_id<T>(mut self, wire_id: &'static str) -> Self
+    pub fn register_with_id<T>(self, wire_id: &'static str) -> Self
     where
         T: Instruction + Decode + 'static + norito::NoritoSerialize,
         for<'a> T: norito::NoritoDeserialize<'a>,
@@ -1509,36 +1607,7 @@ impl InstructionRegistry {
         {
             decode_instruction_payload::<T>(input, header_flags)
         }
-        fn frame<T>(payload: &[u8], header_flags: u8) -> Result<Vec<u8>, norito::core::Error>
-        where
-            T: Instruction
-                + Decode
-                + 'static
-                + norito::NoritoSerialize
-                + for<'a> norito::NoritoDeserialize<'a>,
-        {
-            norito::core::frame_bare_with_header_flags::<T>(payload, header_flags)
-        }
-        fn frame_len<T>(payload_len: usize) -> Option<usize>
-        where
-            T: Instruction
-                + Decode
-                + 'static
-                + norito::NoritoSerialize
-                + for<'a> norito::NoritoDeserialize<'a>,
-        {
-            framed_instruction_payload_len_for::<T>(payload_len)
-        }
-        let name = std::any::type_name::<T>();
-        let entry = RegistryEntry {
-            type_name: name,
-            ctor: ctor::<T>,
-            wire_id,
-            frame: frame::<T>,
-            frame_len: frame_len::<T>,
-        };
-        self.insert_entry(entry);
-        self
+        self.with_entry::<T>(wire_id, ctor::<T>, false)
     }
     /// Register an [`crate::isi::Instruction`] with an explicit wire identifier
     /// and the direct slice decoder.
@@ -1546,7 +1615,7 @@ impl InstructionRegistry {
     /// This is intentionally opt-in because not every built-in instruction has a
     /// slice-safe decoder for all of its nested fields yet.
     #[must_use]
-    pub(crate) fn register_with_id_slice<T>(mut self, wire_id: &'static str) -> Self
+    pub(crate) fn register_with_id_slice<T>(self, wire_id: &'static str) -> Self
     where
         T: Instruction + Decode + 'static + norito::NoritoSerialize,
         for<'a> T: norito::NoritoDeserialize<'a> + norito::core::DecodeFromSlice<'a>,
@@ -1558,36 +1627,80 @@ impl InstructionRegistry {
         {
             decode_instruction_payload_from_slice::<T>(input, header_flags)
         }
-        fn frame<T>(payload: &[u8], header_flags: u8) -> Result<Vec<u8>, norito::core::Error>
+        self.with_entry::<T>(wire_id, ctor::<T>, false)
+    }
+    /// Register tolerantly, like [`Self::register_with_id`]: the registration every instruction
+    /// added after the frozen baseline uses (`specs/live_runtime_upgrades.md` §5.2).
+    ///
+    /// Earlier releases keep the envelopes of such a wire ID opaque, so this release must never
+    /// fail to decode one either: [`decode_instruction_envelope`] yields the typed instruction only
+    /// for the canonical frame of a payload it decodes, which re-encodes byte for byte, and an
+    /// [`OpaqueInstructionV1`] for any other frame, including one that trips the decoder's own
+    /// protocol limits. A local refusal (an allocator failure or the caller's enclosing decode
+    /// budget) stays an error.
+    #[must_use]
+    pub fn register_with_id_tolerant<T>(self, wire_id: &'static str) -> Self
+    where
+        T: Instruction + Decode + 'static + norito::NoritoSerialize,
+        for<'a> T: norito::NoritoDeserialize<'a>,
+    {
+        fn ctor<T>(header_flags: u8, input: &[u8]) -> Result<InstructionBox, norito::Error>
         where
-            T: Instruction
-                + Decode
-                + 'static
-                + norito::NoritoSerialize
-                + for<'a> norito::NoritoDeserialize<'a>,
+            T: Instruction + Decode + 'static + norito::NoritoSerialize,
+            for<'a> T: norito::NoritoDeserialize<'a>,
         {
+            decode_canonical_instruction_payload::<T>(input, header_flags)
+        }
+        self.with_entry::<T>(wire_id, ctor::<T>, true)
+    }
+    /// Register tolerantly with the direct slice decoder: [`Self::register_with_id_tolerant`]
+    /// for an instruction with a slice-safe decoder.
+    #[must_use]
+    pub fn register_with_id_slice_tolerant<T>(self, wire_id: &'static str) -> Self
+    where
+        T: Instruction + Decode + 'static + norito::NoritoSerialize,
+        for<'a> T: norito::NoritoDeserialize<'a> + norito::core::DecodeFromSlice<'a>,
+    {
+        fn ctor<T>(header_flags: u8, input: &[u8]) -> Result<InstructionBox, norito::Error>
+        where
+            T: Instruction + Decode + 'static + norito::NoritoSerialize,
+            for<'a> T: norito::NoritoDeserialize<'a> + norito::core::DecodeFromSlice<'a>,
+        {
+            decode_canonical_instruction_payload_from_slice::<T>(input, header_flags)
+        }
+        self.with_entry::<T>(wire_id, ctor::<T>, true)
+    }
+    /// Insert the entry of `T` under `wire_id` with its frame geometry.
+    fn with_entry<T>(
+        mut self,
+        wire_id: &'static str,
+        ctor: InstructionConstructor,
+        tolerant: bool,
+    ) -> Self
+    where
+        T: norito::NoritoSerialize + 'static,
+    {
+        fn frame<T: norito::NoritoSerialize>(
+            payload: &[u8],
+            header_flags: u8,
+        ) -> Result<Vec<u8>, norito::core::Error> {
             norito::core::frame_bare_with_header_flags::<T>(payload, header_flags)
         }
-        fn frame_len<T>(payload_len: usize) -> Option<usize>
-        where
-            T: Instruction
-                + Decode
-                + 'static
-                + norito::NoritoSerialize
-                + for<'a> norito::NoritoDeserialize<'a>,
-        {
-            framed_instruction_payload_len_for::<T>(payload_len)
-        }
-        let name = std::any::type_name::<T>();
         let entry = RegistryEntry {
-            type_name: name,
-            ctor: ctor::<T>,
+            type_name: std::any::type_name::<T>(),
+            ctor,
             wire_id,
             frame: frame::<T>,
-            frame_len: frame_len::<T>,
+            frame_len: framed_instruction_payload_len_for::<T>,
+            tolerant,
         };
         self.insert_entry(entry);
         self
+    }
+    /// Whether `wire_id` is registered tolerantly ([`Self::register_with_id_tolerant`]).
+    pub fn is_tolerant(&self, wire_id: &str) -> bool {
+        self.entry_for_wire_id(wire_id)
+            .is_some_and(|entry| entry.tolerant)
     }
     /// Decode an [`crate::isi::Instruction`] using its canonical wire identifier.
     pub fn decode(
@@ -1683,6 +1796,40 @@ where
 {
     let _guard = norito::core::DecodeFlagsGuard::enter(header_flags);
     let instruction = norito::core::from_bytes_view(input)?.decode::<T>()?;
+    Ok(InstructionBox::from_boxed(Box::new(instruction)))
+}
+/// Constructor of a tolerant registration: the typed instruction only when `input` is exactly
+/// its canonical frame, so it re-encodes byte for byte like the opaque envelope that releases
+/// without the registration keep (`specs/live_runtime_upgrades.md` §5.2).
+fn decode_canonical_instruction_payload<T>(
+    input: &[u8],
+    header_flags: u8,
+) -> Result<InstructionBox, norito::Error>
+where
+    T: Instruction + Decode + 'static + norito::NoritoSerialize,
+    for<'a> T: norito::NoritoDeserialize<'a>,
+{
+    let instruction = {
+        let _guard = norito::core::DecodeFlagsGuard::enter(header_flags);
+        norito::decode_from_bytes::<T>(input)?
+    };
+    norito::verify_exact_canonical_frame(&instruction, input)?;
+    Ok(InstructionBox::from_boxed(Box::new(instruction)))
+}
+/// Slice-decoder form of [`decode_canonical_instruction_payload`].
+fn decode_canonical_instruction_payload_from_slice<T>(
+    input: &[u8],
+    header_flags: u8,
+) -> Result<InstructionBox, norito::Error>
+where
+    T: Instruction + Decode + 'static + norito::NoritoSerialize,
+    for<'a> T: norito::NoritoDeserialize<'a> + norito::core::DecodeFromSlice<'a>,
+{
+    let instruction = {
+        let _guard = norito::core::DecodeFlagsGuard::enter(header_flags);
+        norito::core::from_bytes_view(input)?.decode::<T>()?
+    };
+    norito::verify_exact_canonical_frame(&instruction, input)?;
     Ok(InstructionBox::from_boxed(Box::new(instruction)))
 }
 pub(crate) fn read_aos_field<'a>(
@@ -1996,6 +2143,7 @@ pub mod content;
 pub mod contract_alias;
 /// DeFi-native instructions.
 pub mod defi;
+mod envelope;
 /// Ledger-managed asset escrow instructions.
 pub mod escrow;
 pub mod escrow_control;
@@ -2057,6 +2205,7 @@ pub mod sumeragi_amx;
 /// Asset, account, and value transfer instructions.
 pub mod transfer;
 mod transparent;
+pub use envelope::{MAX_INSTRUCTION_WIRE_ID_BYTES, OpaqueInstructionV1, is_well_formed_wire_id};
 /// Verifying-key management instructions.
 pub mod verifying_keys;
 /// `SoraNet` VPN lease escrow instructions.
@@ -2991,6 +3140,9 @@ mod tests;
 
 #[cfg(test)]
 mod framing_tests;
+
+#[cfg(test)]
+mod envelope_tests;
 
 #[cfg(test)]
 mod aos_field_decode_tests;

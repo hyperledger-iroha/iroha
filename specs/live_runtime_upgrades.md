@@ -2,7 +2,8 @@
 
 Status: accepted design, 2026-10-29; implementation in progress (section 14). Independent model
 reviews (Codex, `gpt-6-astra`, read-only) shaped it. The definition contracts, the founded baseline
-selection with selection-aware dispatch, and the change-set lifecycle of the universal root
+selection with selection-aware dispatch, stable instruction envelopes, release additions after the
+frozen baseline with storage installation, and the change-set lifecycle of the universal root
 (proposal, notice, attestation, activation, lapse and the unsupported-node stop) are implemented;
 [`runtime_upgrades.md`](runtime_upgrades.md) records that surface as built. It amends `AGENTS.md`,
 [`first_release_history_cutover.md`](first_release_history_cutover.md),
@@ -219,9 +220,12 @@ running release does not implement yet is rejected; there is no interim path.
 - Storage not installed is inaccessible to execution, not merely unrecorded: dispatch and storage
   capabilities keep it unreachable, and a capture asserts that it is empty.
 - At a transition the parent root uses the predecessor schema and commitment profile, migration
-  reads use predecessor codecs, and the successor root uses successor codecs and profile. Today
-  `WorldStateAccumulator::root` reads one process-global schema and `world_state_transition` uses it
-  for both parent and successor; the replacement takes each from its own selection.
+  reads use predecessor codecs, and the successor root uses successor codecs and profile.
+  `WorldStateAccumulator::root` takes `S` from the selection it is given, and
+  `world_state_transition` computes the parent root under the selection before the block and the
+  result root under the selection after it. Field paths and codecs still come from this release's
+  registry, and only the baseline commitment profile is implemented; migration reads under
+  predecessor codecs arrive with the migration engine (5.4).
 - Cold and incremental roots agree across activation, aborted publication, block replacement and
   restart.
 
@@ -720,9 +724,20 @@ not a date: it happens once everything its first selection needs is implemented 
    included, storage capabilities, generic carriers, snapshots through the selection, and staging.
    Pre-foundation compatibility code is deleted. The guard inventories
    definitions, descriptors and reference closures, and the pinned history
-   (`sumeragi/node/tests/history_cutover_tests.rs`, today genesis plus two `Log` blocks), which this
-   cutover regenerates anyway, gains successes, rejections, permissions, triggers, contract emissions
-   and populated State.
+   (`sumeragi/node/tests/history_cutover_tests.rs`, today genesis plus two `Log` blocks), whose
+   original signed frames, state root and execution tip remain fixed. Additional captured histories
+   must cover successes, rejections, permissions, triggers, contract emissions and populated State;
+   they do not replace the original replay regression. Done: historical schema selection, the
+   catalog with its frozen baseline and release additions after it (each its own native
+   implementation, interfaces and storage, activated by a change set the catalog drafts), dispatch
+   to the implementation the selection binds, storage installation (tables empty, cells at their
+   published initial bytes), and stable envelopes: a wire ID a release does not register decodes
+   to an opaque envelope that re-encodes byte for byte, and execution stops at the first unbound
+   or opaque envelope with `definition_inactive` or `malformed_payload` before any type-dependent
+   check. Still open: complete-State coverage, which first needs the policy cells of G1-D3 in
+   committed State and the decision how the pinned history meets the new root; snapshots through
+   the selection, required before the first addition of a World field; storage capabilities and
+   generic carriers.
 3. **Transition and lifecycle engine.** Change sets, all-`n` attestation of resolved selections,
    committed notice and provenance policy, scheduling, the unsupported-node stop, handshake
    profiles, restrictions, completion capabilities, the deferred-kind rules for every obligation the
@@ -733,22 +748,37 @@ not a date: it happens once everything its first selection needs is implemented 
    block start, the unsupported-node stop with a reason naming the selection, stable rejection
    codes and lifecycle events, handshake host profiles, and native escrow obligations, whose
    continuations and completions run through admission closure and completion-only and which no
-   activation strands. Still open: the other obligation kinds (pending consent, triggers,
-   migration cursors, AMX), captured completion closures, expectations and deferred consent.
+   activation strands. Deferred consent now captures the resolved transitive closure for multisig
+   occurrences and trigger incarnations; changed or restricted semantics prevent execution before
+   effects. Native escrow activation also preserves its original completion closure instead of
+   treating any active replacement as settlement authority. AMX participations are obligations
+   too: an undecided global transaction and an unsettled participant escrow keep completing
+   through admission closure and completion-only, and no activation strands them. The baseline
+   capture is conservative; opaque code captures the entire callable surface. Still open: kernel
+   registration of contract-created obligations and migration cursors, retained completion
+   capabilities across rebinding, explicit current-binding consent and narrower authenticated
+   dynamic-call manifests.
 4. **Governance.** Parliament's Core integration (still a TODO in
    `parameter/parliament_lifecycle.rs`) with its committed timing policy, and the runtime emergency
    panel. Neither gets a temporary substitute on Taira. The panel's containment is implemented
    (`runtime_emergency_panel_v1`, `ContainRuntimeV1`, renewal and expiry), with its bound
    ratification case: governance proposals and approvals that address a contained definition
    record review progress, a renewal needs it, and the containment resolves once change sets take
-   over every restriction it held.
+   over every restriction it held. `SetParameter` validates the canonical lifecycle policy, including
+   its millisecond and body-sizing bounds. Runtime consumption still depends on the frozen
+   governance-clock/anonymous-ballot migration in `parliament_ballot_implementation_goals.md` E2;
+   converting its millisecond windows to node-configured block counts would not implement it.
 5. **Checkpoints, adoption and deletion.** Checkpoint export and certificate-chain bootstrap, the
    startup floor and its advancement, the deletion rule and its guard, the adoption carrier, import
    and trust anchor (section 13), and a rehearsal that adopts a copy of a running network, physically
    deletes the pre-foundation code and then starts a node from the oldest accepted checkpoint.
 6. **Operations and clients.** `--check-replay`, per-validator Taira tooling with rolling recovery,
    certified discovery and the client contract (8.4), tested against archived SDK and indexer
-   builds.
+   builds. Done: `iroha3d --check-replay`, which replays a copy of a stopped store with the
+   candidate from its newest authenticated snapshot (or signed genesis) and names the first
+   differing commitment component or the first missing body. Still open: the operator route that
+   drafts an addition's activation, the Taira launcher treating `--check-replay` as offline, and
+   the rest of this step.
 7. **Taira adoption** at a governed checkpoint (section 13), then the acceptance journey (1.3). The
    next release deletes the import and every pre-foundation path.
 8. **Later governed upgrades** on the running network, each using only extension contracts that
@@ -756,6 +786,12 @@ not a date: it happens once everything its first selection needs is implemented 
    implementations, specific migrations, the IVM instruction adapter (section 10), and independently
    rooted data spaces with their own selections. A change set that
    asks for anything not yet implemented is rejected.
+
+Storage retirement, cell initialization and migration activation are refused by the successor
+resolver and lapse if encountered in an already scheduled record. They cannot be attested merely
+because the remaining definitions are compiled. Deferred-consent captures are required in restored
+State; adoption must explicitly account for predecessor triggers and pending proposals that lack
+them, never infer earlier consent from the new release's selection.
 
 Minamoto adopts the foundation only after every gate passes on Taira.
 

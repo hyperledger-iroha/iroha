@@ -364,6 +364,7 @@ enum Request {
         Qc,
         mpsc::SyncSender<Result<(), PublicationError>>,
     ),
+    ExecutedResult(Hash32, mpsc::SyncSender<Result<CertifiedResultV1, String>>),
     Build(
         u64,
         u64,
@@ -668,6 +669,17 @@ impl StateExecutor {
         commit_qc: &Qc,
     ) -> Result<Option<Hash32>, PublicationError> {
         self.prepare_with_origin(block, commit_qc, CommitTelemetryOrigin::HistoricalReplay)
+    }
+
+    /// The execution result the retained execution of `block_hash` produced, for diagnosing a
+    /// replayed block whose result differs from its certificate (`iroha3d --check-replay`).
+    /// Read only: the execution, its overlay and its publication phase are unchanged.
+    ///
+    /// # Errors
+    /// No execution of `block_hash` is retained, or the worker stopped.
+    pub(crate) fn executed_result(&self, block_hash: Hash32) -> Result<CertifiedResultV1, String> {
+        self.call(|reply| Request::ExecutedResult(block_hash, reply))
+            .unwrap_or_else(|| Err("original execution Worker stopped".into()))
     }
 
     #[expect(
@@ -1415,6 +1427,9 @@ impl<'s> Worker<'s> {
             }
             Request::Replay(block, qc, reply) => {
                 let _ = reply.send(self.replay(&block, &qc));
+            }
+            Request::ExecutedResult(block_hash, reply) => {
+                let _ = reply.send(self.executed_result(block_hash));
             }
             Request::Build(height, view, max_bytes, exec_budget_ms, reply) => {
                 let _ = reply.send(self.build(height, view, max_bytes, exec_budget_ms));
@@ -2801,6 +2816,21 @@ impl<'s> Worker<'s> {
                         | PublicationPhase::Consuming
                 )
             })
+    }
+
+    /// Clone the canonical result of the retained execution of `block_hash`. Read only: no
+    /// phase, overlay or witness changes, so preparation and discard proceed as before.
+    fn executed_result(&self, block_hash: Hash32) -> Result<CertifiedResultV1, String> {
+        let live = self
+            .live
+            .as_ref()
+            .filter(|live| live.block_hash == block_hash)
+            .ok_or_else(|| "no retained execution of this block".to_owned())?;
+        let Live {
+            _commitment: commitment,
+            ..
+        } = live;
+        Ok(commitment.get().clone())
     }
 
     /// Pin the original execution and exactly one certified frame for durable append.

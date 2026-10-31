@@ -613,7 +613,7 @@ Run these with a new binary before it replaces an old one:
 - `iroha3d --config <file> --check-config --json` prints the handshake- and
   genesis-bound values of this build and configuration as one Norito JSON object
   (`config_fingerprint`, `protocol_version`, `wire_schema_hash`,
-  `nexus_policy_digest`, `gas_schedule_hash`, `execution_policy_hash`,
+  `nexus_policy_digest`, `host_profiles`, `execution_policy_hash`,
   `nexus_amx_context_hash`, plus `status`). Genesis-bound values are `null`
   while the signed genesis is not available locally.
 - When this configuration derives other policy commitments than the signed
@@ -633,6 +633,23 @@ Run these with a new binary before it replaces an old one:
   `{tip_height, tip_hash, snapshot_height, prefix_hash_at_snapshot_height,
   snapshot_restore_dry_run, snapshot_restore_error}`. It exits nonzero when the
   store cannot be read or the restore dry run fails, and never writes to the store.
+- `iroha3d --config <file> --check-replay` replays a stopped node's store (or an
+  immutable copy of it) with this build. It opens the store as `--check-storage`
+  does, authenticates signed genesis against the configured trust anchor, copies
+  the whole store (every file but its lock) into the system temporary directory
+  (it needs free space for a copy of the store) and releases the original, restores
+  the newest snapshot on the copy as a Strict startup does or re-executes signed
+  genesis, and re-executes every later block, comparing each result with its
+  certificate. Blocks at or below
+  `snapshot.upgrade_checkpoint` are never re-executed. Progress goes to standard
+  error; the last line of standard output is
+  `{tip_height, start: {height, source}, replayed_to, outcome, divergence,
+  missing_height}` with `outcome` `matched`, `diverged` (the first block whose
+  result differs, its first differing commitment component such as
+  `world_state_root`, both values and every differing component) or
+  `missing_history` (the first height whose body the store no longer holds). It
+  exits nonzero unless every replayed block matched, and never writes to the
+  store, the snapshot directory or the tiered-state directory.
 
 `lifecycle.exit_on_stdin_close = true` makes the daemon shut down cleanly when
 its standard input reaches end-of-file; a local supervisor sets it and holds the

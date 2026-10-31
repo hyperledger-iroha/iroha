@@ -524,7 +524,9 @@ impl StateBlock<'_> {
                 params
             } else {
                 crate::resource_coherence::validate_final_policy(&self.world, source.height)
-                    .map_err(|error| ScheduleError::Epoch(error.to_string()))?;
+                    .map_err(|error| {
+                        error.map_rejection(|error| ScheduleError::Epoch(error.to_string()))
+                    })?;
                 self.world.consensus_schedule().ready(source.height)?.params
             };
             let graph = epoch_election::retain_outcome_schedule(
@@ -602,7 +604,7 @@ pub fn validate_executed_genesis(
     crate::smartcontracts::isi::sccp::keepalive::clock_parameters(world)
         .map_err(|error| ScheduleError::Epoch(error.into()))?;
     crate::resource_coherence::validate_final_policy(world, 1)
-        .map_err(|error| ScheduleError::Epoch(error.to_string()))?;
+        .map_err(|error| error.map_rejection(|error| ScheduleError::Epoch(error.to_string())))?;
     crate::executor::root_fees::validate_committed(world).map_err(|error| {
         error.map_rejection(|error| {
             ScheduleError::Epoch(format!(

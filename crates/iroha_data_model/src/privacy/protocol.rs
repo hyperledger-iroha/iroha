@@ -2077,15 +2077,10 @@ pub struct PrivacyConsensusLimitsV1 {
     pub max_commitments_per_action: u32,
     /// Number of recent commitment roots retained for proof admission.
     pub retained_root_count: u32,
-    /// Committed admission contract for the fixed native private-payment relation.
-    pub private_settlement: PrivateSettlementValidityLimitsV1,
 }
 /// Validation failure for [`PrivacyConsensusLimitsV1`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyConsensusLimitsValidationError {
-    /// The native private-payment admission contract is malformed.
-    #[error("invalid private-settlement limits: {0}")]
-    PrivateSettlement(PrivateSettlementValidityErrorV1),
     /// A consensus limit is zero.
     #[error("privacy limit {field:?} must be non-zero")]
     Zero {
@@ -2183,9 +2178,6 @@ pub struct PrivacyConsensusPolicyV1 {
 /// Validation failure for a singleton privacy-policy value or schedule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyPolicyValidationErrorV1 {
-    /// A private-payment policy change does not drain its original obligations.
-    #[error("invalid private-settlement drain schedule: {0}")]
-    PrivateSettlementDrain(PrivateSettlementValidityErrorV1),
     /// Current limits are malformed.
     #[error("current privacy policy limits are invalid: {0}")]
     InvalidCurrentLimits(PrivacyConsensusLimitsValidationError),
@@ -3068,19 +3060,10 @@ pub struct PrivacyProtocolLimitsUpdateV1 {
     pub effective_at_height: u64,
     /// Complete protocol-tagged successor limit set.
     pub next_limits: PrivacyProtocolLimitsV1,
-    /// Original private-payment expiry horizon when this schedule closes the native relation.
-    ///
-    /// Governed execution derives this value from the current committed private policy. It is
-    /// not supplied by the scheduling instruction and is retained only while this update is
-    /// pending, so later private-policy changes cannot reinterpret the original drain.
-    pub private_settlement_drain_blocks: Option<u64>,
 }
 /// Validation failure for a scheduled protocol-specific update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyProtocolLimitsUpdateValidationErrorV1 {
-    /// A relation-closing schedule lacks or violates its governed original drain horizon.
-    #[error("invalid private-settlement relation drain: {0}")]
-    PrivateSettlementDrain(PrivateSettlementValidityErrorV1),
     /// Scheduled/effective heights violate the strictly future block rule.
     #[error("privacy protocol-limit schedule is invalid: {0}")]
     Schedule(PrivacyPolicyValidationErrorV1),
@@ -3785,7 +3768,8 @@ pub enum PrivacyCompiledProfileCatalogArchiveValidationStatusV1 {
     Empty = 2,
     /// The archive exceeds the fixed byte ceiling.
     ArchiveTooLarge = 3,
-    /// Norito rejected a declared sequence, field, allocation, or nesting budget.
+    /// Norito rejected an enclosing allowance or a field, allocation, or nesting budget.
+    /// Exceeding the fixed twelve-row catalog is instead [`Self::InvalidManifest`].
     DecodeResourceLimit = 4,
     /// The archive schema is not exactly [`PrivacyCompiledProfileCatalogV1`].
     SchemaMismatch = 5,
@@ -3937,18 +3921,32 @@ pub fn validate_privacy_capability_archive_v1(
         PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1,
         PRIVACY_CAPABILITY_ARCHIVE_MAX_NESTING_DEPTH_V1,
     );
-    let manifest = match norito::decode_canonical_with_limits::<PrivacyExact12CapabilityManifestV1>(
-        archive, limits,
-    ) {
+    let manifest = match norito::core::classify_decode_attempt(|| {
+        norito::decode_canonical_with_limits::<PrivacyExact12CapabilityManifestV1>(archive, limits)
+    }) {
         Ok(manifest) => manifest,
-        Err(error) if error.is_decode_resource_limit() => return Status::DecodeResourceLimit,
-        Err(norito::Error::SchemaMismatch) => return Status::SchemaMismatch,
-        Err(
-            norito::Error::NonCanonicalEncoding
-            | norito::Error::DecodeFlagsMismatch { .. }
-            | norito::Error::UnsupportedCompression { .. },
-        ) => return Status::NonCanonical,
-        Err(_) => return Status::MalformedArchive,
+        Err(error) => {
+            // The early row ceiling enforces the same intrinsic cardinality as
+            // manifest validation. An enclosing allowance is still a local refusal,
+            // even when its diagnostic fields resemble this protocol-owned limit.
+            if error.kind() == norito::core::DecodeAttemptErrorKind::Invalid
+                && matches!(
+                    error.error().decode_resource_error(),
+                    Some(norito::core::DecodeResourceError::SequenceLengthExceeded { limit, .. })
+                        if limit == PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1 as u64
+                )
+            {
+                return Status::InvalidManifest;
+            }
+            return match error.into_error() {
+                error if error.is_decode_resource_limit() => Status::DecodeResourceLimit,
+                norito::Error::SchemaMismatch => Status::SchemaMismatch,
+                norito::Error::NonCanonicalEncoding
+                | norito::Error::DecodeFlagsMismatch { .. }
+                | norito::Error::UnsupportedCompression { .. } => Status::NonCanonical,
+                _ => Status::MalformedArchive,
+            };
+        }
     };
     if manifest.validate().is_err() {
         return Status::InvalidManifest;

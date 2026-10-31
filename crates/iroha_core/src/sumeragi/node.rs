@@ -10,6 +10,8 @@
 mod configuration;
 mod replay;
 pub use configuration::consensus_configuration_fingerprint;
+/// Offline replay check of a copied store with this build (`iroha3d --check-replay`).
+pub use replay::check as replay_check;
 #[cfg(test)]
 pub(crate) use replay::original_source_fixture_for_test as isolated_replay_source_fixture_for_test;
 pub(crate) use replay::{IsolatedNativeReplay, IsolatedReplayError, ReplayedNativeTransport};
@@ -615,7 +617,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
     let mut prepared = if restored == 0 {
         prepare_genesis(inputs, None)?
     } else {
-        prepare_restored(inputs, restored)?
+        prepare_restored(inputs, restored, None)?
     };
     let state = &prepared.state;
     let crypto = &prepared.crypto;
@@ -672,6 +674,16 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
     Ok(prepared)
 }
 
+/// The read-only original sources of a replay into an isolated temporary destination: the
+/// original store's lane block frames and, for a FASTPQ recovery only, the height whose source
+/// tape the replay retains.
+struct IsolatedSource {
+    /// Root of the original store's lane block frames (`<store>/lanes`), only ever read.
+    lanes: PathBuf,
+    /// Height whose FASTPQ source tape the replay retains; `None` retains none.
+    fastpq_target: Option<u64>,
+}
+
 // One original signed-genesis/bootstrap and executor owner. Isolated replay changes
 // only physical destinations and local observations; all execution checks are shared.
 #[expect(
@@ -680,7 +692,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
 )]
 fn prepare_genesis(
     inputs: PrepareInputs,
-    read_only_lane_root: Option<(PathBuf, u64)>,
+    isolated_source: Option<IsolatedSource>,
 ) -> Result<Prepared, NodeError> {
     let PrepareInputs {
         state,
@@ -720,7 +732,9 @@ fn prepare_genesis(
                 &genesis_account,
                 consensus_mode,
                 Some(&certificate),
-                read_only_lane_root.as_ref().map(|(_, height)| *height),
+                isolated_source
+                    .as_ref()
+                    .and_then(|source| source.fastpq_target),
             )?,
             fingerprint,
             instance,
@@ -739,7 +753,9 @@ fn prepare_genesis(
                 &genesis_account,
                 consensus_mode,
                 None,
-                read_only_lane_root.as_ref().map(|(_, height)| *height),
+                isolated_source
+                    .as_ref()
+                    .and_then(|source| source.fastpq_target),
             )?,
             fingerprint,
             instance,
@@ -774,7 +790,7 @@ fn prepare_genesis(
             config_fingerprint,
         },
         applied,
-        read_only_lane_root,
+        isolated_source,
     )
 }
 
@@ -789,8 +805,13 @@ struct StartupIdentity {
 
 // A State restored from an authenticated snapshot at `height` (E56). The stored signed genesis
 // supplies the instance identity and the restored native tip the applied cut; nothing is
-// re-executed here, and replay continues from the block after the tip.
-fn prepare_restored(inputs: PrepareInputs, height: u64) -> Result<Prepared, NodeError> {
+// re-executed here, and replay continues from the block after the tip. An isolated replay
+// reads lane frames from the original store and publishes only into its temporary Kura.
+fn prepare_restored(
+    inputs: PrepareInputs,
+    height: u64,
+    isolated_source: Option<IsolatedSource>,
+) -> Result<Prepared, NodeError> {
     let chain_id = inputs.state.chain_id_ref().to_string();
     let Some((block, _certificate, tip)) = startup::stored_genesis(&inputs.state)? else {
         return Err(NodeError::Input(
@@ -844,7 +865,7 @@ fn prepare_restored(inputs: PrepareInputs, height: u64) -> Result<Prepared, Node
             config_fingerprint,
         },
         (height, applied.core_hash()),
-        None,
+        isolated_source,
     )
 }
 
@@ -854,7 +875,7 @@ fn assemble_prepared(
     inputs: PrepareInputs,
     identity: StartupIdentity,
     applied: (u64, Hash32),
-    read_only_lane_root: Option<(PathBuf, u64)>,
+    isolated_source: Option<IsolatedSource>,
 ) -> Result<Prepared, NodeError> {
     let PrepareInputs {
         state,
@@ -923,12 +944,14 @@ fn assemble_prepared(
         state.ivm_execution_budget(),
         lane_authorities,
     ));
-    let isolated = read_only_lane_root.is_some();
-    let capture_target = read_only_lane_root.as_ref().map(|(_, height)| *height);
+    let isolated = isolated_source.is_some();
+    let capture_target = isolated_source
+        .as_ref()
+        .and_then(|source| source.fastpq_target);
     let lane_blocks: Arc<dyn super::lanes::merge::LaneBlockSource> =
-        if let Some((root, _)) = read_only_lane_root {
+        if let Some(IsolatedSource { lanes, .. }) = isolated_source {
             Arc::new(super::lanes::registry::LaneFrameSource::new(
-                root,
+                lanes,
                 *state.network_id_ref(),
                 chain_id.clone(),
                 crypto.clone(),

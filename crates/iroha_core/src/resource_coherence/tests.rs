@@ -25,6 +25,28 @@ use iroha_executor_data_model::permission::{
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 
 use super::*;
+fn validate_final_policy(
+    world: &impl WorldReadOnly,
+    height: u64,
+) -> Result<(), PolicyCoherenceError> {
+    super::validate_final_policy(world, height).map_err(completed_policy_rejection)
+}
+fn validate_restored_policy(
+    world: &impl WorldReadOnly,
+    height: u64,
+) -> Result<(), PolicyCoherenceError> {
+    super::validate_restored_policy(world, height).map_err(completed_policy_rejection)
+}
+fn completed_policy_rejection(
+    error: ExecutionAttemptError<PolicyCoherenceError>,
+) -> PolicyCoherenceError {
+    match error {
+        ExecutionAttemptError::Rejected(error) => error,
+        ExecutionAttemptError::Deferred(original) => {
+            panic!("unexpected local policy refusal: {original}")
+        }
+    }
+}
 use crate::{
     state::World,
     sumeragi::{
@@ -690,7 +712,46 @@ fn governed_signer_tightening_cannot_strand_original_two_signer_cleanup() {
         nexus::PrivateSettlementAbortReasonV1,
         transaction::TransactionBuilder,
     };
-    let mut chain = CertifiedTestChain::start(genesis_config(Some(2))).unwrap();
+    let mut config = genesis_config(Some(2));
+    let mut original_private =
+        crate::private_settlement::global_state::tests::prepared_world_fixture();
+    std::mem::swap(
+        &mut config.world.private_settlement_governance,
+        &mut original_private.private_settlement_governance,
+    );
+    std::mem::swap(
+        &mut config.world.private_settlement_pools,
+        &mut original_private.private_settlement_pools,
+    );
+    std::mem::swap(
+        &mut config.world.private_settlement_roots,
+        &mut original_private.private_settlement_roots,
+    );
+    std::mem::swap(
+        &mut config.world.private_settlement_nullifiers,
+        &mut original_private.private_settlement_nullifiers,
+    );
+    std::mem::swap(
+        &mut config.world.private_settlement_outputs,
+        &mut original_private.private_settlement_outputs,
+    );
+    std::mem::swap(
+        &mut config.world.private_settlement_recipient_index,
+        &mut original_private.private_settlement_recipient_index,
+    );
+    std::mem::swap(
+        &mut config.world.private_settlement_staged_locks,
+        &mut original_private.private_settlement_staged_locks,
+    );
+    std::mem::swap(
+        &mut config.world.private_settlement_receipts,
+        &mut original_private.private_settlement_receipts,
+    );
+    std::mem::swap(
+        &mut config.world.private_settlement_aborts,
+        &mut original_private.private_settlement_aborts,
+    );
+    let mut chain = CertifiedTestChain::start(config).unwrap();
     let original_cap = chain
         .state()
         .view()
@@ -761,17 +822,63 @@ fn governed_signer_tightening_cannot_strand_original_two_signer_cleanup() {
 
 #[test]
 fn signed_genesis_installs_initial_private_policy_at_the_first_successor() {
-    let mut config = genesis_config(None);
-    let mut limits = lower_limits(6 * MIB, 7 * MIB);
-    limits.private_settlement.max_participants = 16;
-    config
-        .genesis_instructions
-        .push(SchedulePrivacyConsensusPolicyUpdateV1::new(2, limits).into());
+    // The reduced generic transaction cap needs its own privacy-policy successor;
+    // the private extension does not rewrite that immutable policy owner.
+    let mut config = genesis_config(Some(2));
+    use iroha_data_model::privacy::{PrivateSettlementPolicyUpdateV1, PrivateSettlementPolicyV1};
+    let mut limits = PrivateSettlementPolicyV1::protocol_default().current_limits;
+    limits.max_participants = 16;
+    config.genesis_parameters.push(Parameter::Custom(
+        PrivateSettlementPolicyV1 {
+            pending_update: Some(PrivateSettlementPolicyUpdateV1 {
+                scheduled_at_height: 1,
+                effective_at_height: 2,
+                next_limits: limits,
+            }),
+            ..PrivateSettlementPolicyV1::protocol_default()
+        }
+        .to_custom_parameter()
+        .unwrap(),
+    ));
+    use iroha_data_model::{
+        isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1,
+        privacy::{
+            IvmPrivateNoteLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
+            PrivacyProtocolPolicyKeyV1,
+        },
+    };
+    let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+    config.genesis_instructions.push(
+        SchedulePrivacyProtocolLimitsUpdateV1::new(
+            protocol,
+            2,
+            PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
+                max_input_count: 1,
+                max_output_count: 1,
+            }),
+        )
+        .into(),
+    );
     let mut chain =
         CertifiedTestChain::start(config).expect("authenticated initial private policy");
-    let retained = *chain.state().view().world().privacy_consensus_policy();
+    let retained =
+        PrivateSettlementPolicyV1::from_parameters(chain.state().view().world().parameters())
+            .unwrap();
     assert_eq!(retained.pending_update.unwrap().next_limits, limits);
     assert_eq!(retained.pending_update.unwrap().effective_at_height, 2);
+    assert_eq!(
+        retained.protocol_closure_drain.unwrap().effective_at_height,
+        2
+    );
+    assert_eq!(
+        retained
+            .protocol_closure_drain
+            .unwrap()
+            .original_max_expiry_blocks,
+        PrivateSettlementPolicyV1::protocol_default()
+            .current_limits
+            .max_expiry_blocks
+    );
     assert_eq!(
         iroha_data_model::privacy::private_settlement_admission_deadline_v1(&retained, None),
         Some(2)
@@ -782,22 +889,78 @@ fn signed_genesis_installs_initial_private_policy_at_the_first_successor() {
         1,
     );
     assert_eq!(chain.commit(vec![payment_free_work]), vec![true]);
-    assert_eq!(
-        chain
-            .state()
-            .view()
-            .world()
-            .privacy_consensus_policy()
-            .current_limits,
-        limits
-    );
+    let activated =
+        PrivateSettlementPolicyV1::from_parameters(chain.state().view().world().parameters())
+            .unwrap();
+    assert_eq!(activated.current_limits, limits);
+    assert!(activated.pending_update.is_none());
+    assert!(activated.protocol_closure_drain.is_none());
+    let view = chain.state().view();
+    let closed = view
+        .world()
+        .privacy_protocol_policies()
+        .get(&PrivacyProtocolPolicyKeyV1::new(protocol))
+        .unwrap();
+    assert!(closed.pending_update.is_none());
     assert!(
-        chain
-            .state()
-            .view()
-            .world()
-            .privacy_consensus_policy()
-            .pending_update
-            .is_none()
+        !iroha_data_model::privacy::private_settlement_protocol_admission_open_v1(
+            &closed.current_limits
+        )
     );
+    activated.validate_protocol_policy(Some(closed)).unwrap();
+}
+
+#[test]
+fn native_cleanup_reservation_uses_only_the_matching_cuts_outstanding_locks() {
+    let mut world = scheduled_world([4 * MIB; 3]);
+    set_caps(&world, u64::from(3 * MIB), 4 * MIB);
+    set_signatures(&world, 1);
+    world.privacy_consensus_policy = mv::cell::Cell::new(PrivacyConsensusPolicyV1 {
+        current_limits: lower_limits(2 * MIB, 3 * MIB),
+        pending_update: None,
+    });
+    assert!(
+        !world
+            .view()
+            .parameters()
+            .custom()
+            .contains_key(iroha_data_model::privacy::PrivateSettlementPolicyV1::parameter_id(),)
+    );
+    validate_final_policy(&world.view(), 2)
+        .expect("unchanged baseline accepts original smaller caps");
+    validate_restored_policy(&world.view(), 2).unwrap();
+    let mut prepared = crate::private_settlement::global_state::tests::prepared_world_fixture();
+    std::mem::swap(
+        &mut world.private_settlement_staged_locks,
+        &mut prepared.private_settlement_staged_locks,
+    );
+    for result in [
+        validate_final_policy(&world.view(), 2),
+        validate_restored_policy(&world.view(), 2),
+    ] {
+        assert!(matches!(
+            result,
+            Err(PolicyCoherenceError::Effective(
+                SuccessorResourceCoherenceError::AtHeight {
+                    error: ResourceCoherenceError::PrivateSettlementCleanupSignatures { .. },
+                    ..
+                }
+            ))
+        ));
+    }
+    set_signatures(&world, 16);
+    for result in [
+        validate_final_policy(&world.view(), 2),
+        validate_restored_policy(&world.view(), 2),
+    ] {
+        assert!(matches!(
+            result,
+            Err(PolicyCoherenceError::Effective(
+                SuccessorResourceCoherenceError::AtHeight {
+                    error: ResourceCoherenceError::PrivateSettlementCleanupExceedsTransaction { .. },
+                    ..
+                }
+            ))
+        ));
+    }
 }

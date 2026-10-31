@@ -545,14 +545,15 @@ fn documentary_evidence_validation_is_separate_from_runtime_capability() {
         validate_privacy_capability_archive_v1(&archive),
         PrivacyCapabilityArchiveValidationStatusV1::Valid
     );
-    // Runtime archives retain their own nested element bound after removal of evidence.
+    // Runtime archives retain their intrinsic catalog cardinality after removal of evidence;
+    // exceeding it is an invalid manifest, not an unfinished local decoder attempt.
     let mut oversized = manifest;
     oversized.protocols =
         vec![oversized.protocols[0]; PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1 + 1];
     let hostile_archive = norito::encode_canonical(&oversized).expect("oversized runtime sequence");
     assert_eq!(
         validate_privacy_capability_archive_v1(&hostile_archive),
-        PrivacyCapabilityArchiveValidationStatusV1::DecodeResourceLimit
+        PrivacyCapabilityArchiveValidationStatusV1::InvalidManifest
     );
 }
 

@@ -1130,6 +1130,38 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
     );
 }
 #[test]
+fn capability_catalog_cardinality_keeps_intrinsic_and_local_limits_distinct() {
+    use PrivacyCapabilityArchiveValidationStatusV1 as Status;
+
+    let mut manifest = exact12_capability_manifest();
+    assert_eq!(manifest.protocols.len(), PrivacyProtocolIdV1::COUNT);
+    let archive = norito::encode_canonical(&manifest).unwrap();
+    let local_limits =
+        |rows| norito::DecodeLimits::new(rows, usize::MAX, usize::MAX, usize::MAX, usize::MAX);
+    assert_eq!(
+        norito::with_decode_limits_scope(local_limits(PrivacyProtocolIdV1::COUNT), || {
+            validate_privacy_capability_archive_v1(&archive)
+        }),
+        Status::Valid
+    );
+    assert_eq!(
+        norito::with_decode_limits_scope(local_limits(PrivacyProtocolIdV1::COUNT - 1), || {
+            validate_privacy_capability_archive_v1(&archive)
+        }),
+        Status::DecodeResourceLimit,
+        "a valid twelve-row manifest can be refused by its original enclosing allowance"
+    );
+
+    manifest.protocols.push(manifest.protocols[0]);
+    let excessive_rows = norito::encode_canonical(&manifest).unwrap();
+    assert_eq!(
+        validate_privacy_capability_archive_v1(&excessive_rows),
+        Status::InvalidManifest,
+        "the fixed catalog cardinality is an intrinsic invariant, not a local allowance"
+    );
+}
+
+#[test]
 fn all_protocol_mappings_and_typed_variants_are_exact() {
     let statements = sample_statements();
     assert_eq!(statements.len(), PrivacyProtocolIdV1::COUNT);
@@ -2489,7 +2521,6 @@ type ConsensusLimitMutationV1 = (PrivacyLimitFieldV1, fn(&mut PrivacyConsensusLi
 #[test]
 fn consensus_limit_updates_allow_each_bounded_increase_and_decrease() {
     let current = PrivacyConsensusLimitsV1 {
-        private_settlement: crate::privacy::PrivateSettlementValidityLimitsV1::protocol_default(),
         max_actions_per_transaction: 1,
         max_actions_per_block: 1,
         max_proof_bytes_per_action: 1_024,
@@ -2669,7 +2700,6 @@ fn protocol_limit_schedule_allows_both_directions_and_rejects_bad_timing_mismatc
         max_aggregation_count: 7,
     });
     let valid = PrivacyProtocolLimitsUpdateV1 {
-        private_settlement_drain_blocks: None,
         scheduled_at_height: 25,
         effective_at_height: 26,
         next_limits: next,

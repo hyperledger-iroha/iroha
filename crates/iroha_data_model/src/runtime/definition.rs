@@ -1429,7 +1429,8 @@ pub struct CompletionClosureV1 {
     /// Identity of the obligation registered through the kernel.
     #[norito(json = "crate::json_helpers::fixed_bytes_hex")]
     pub obligation: [u8; 32],
-    /// Definitions its completion needs, sorted and unique.
+    /// Definitions its completion needs, sorted and unique: active or installed definitions of
+    /// the selection, or its kernel, commitment profile or services profile.
     pub definitions: Vec<DefinitionId>,
 }
 
@@ -1512,9 +1513,13 @@ pub enum SelectionError {
     /// A binding does not resolve to an active implementation of an active interface.
     #[error("binding of {0} does not resolve to an active implementation of that interface")]
     BadBinding(String),
-    /// A restriction or completion closure names a definition outside the selection.
+    /// A restriction names a definition the selection neither activates nor installs, or a
+    /// completion closure names one the selection does not retain.
     #[error("definition {0} is restricted or retained but not in the selection")]
     Outside(DefinitionId),
+    /// A completion closure names a disabled definition: the selection strands its obligation.
+    #[error("definition {0} is disabled although a live obligation's completion needs it")]
+    ObligationStranded(DefinitionId),
     /// The selection cannot be encoded canonically.
     #[error("selection encoding failed: {0}")]
     Encoding(String),
@@ -1533,7 +1538,16 @@ impl RootSelectionV1 {
         ))
     }
 
-    /// Check the closure rules against the published definitions.
+    /// Check the closure rules against the published definitions (`live_runtime_upgrades.md`
+    /// §3.3).
+    ///
+    /// Every dependency of an active definition is active or installed, or is the root's
+    /// services profile, and every active interface has exactly one binding to an active
+    /// implementation that answers it. A restriction targets only an active or installed
+    /// definition: the kernel and the commitment and services profiles are replaced, never
+    /// restricted, and dispatch consults no restriction on them. A completion closure may also
+    /// name the kernel and both profiles, which a live obligation's completion runs and commits
+    /// under, but no disabled definition.
     ///
     /// # Errors
     /// The first rule the selection violates.
@@ -1596,8 +1610,15 @@ impl RootSelectionV1 {
 
         let installed: BTreeSet<&DefinitionId> = self.installed_storage.iter().collect();
         let active: BTreeSet<&DefinitionId> = self.active.iter().collect();
-        let contains = |id: &DefinitionId| {
-            installed.contains(id) || active.contains(id) || *id == self.services_profile
+        // What the selection installs or activates: all a restriction can target.
+        let selected = |id: &DefinitionId| installed.contains(id) || active.contains(id);
+        // Everything the selection executes and commits with. A typed dependency is never a
+        // kernel or commitment profile, so for dependencies this adds only the services profile.
+        let retained = |id: &DefinitionId| {
+            selected(id)
+                || *id == self.kernel
+                || *id == self.commitment_profile
+                || *id == self.services_profile
         };
 
         let mut interfaces = BTreeMap::new();
@@ -1631,7 +1652,7 @@ impl RootSelectionV1 {
             }
             for (kind, dependency) in descriptor.typed_dependencies() {
                 typed(&dependency, kind)?;
-                if !contains(&dependency) {
+                if !retained(&dependency) {
                     return Err(SelectionError::MissingDependency {
                         dependent: *id,
                         missing: dependency,
@@ -1666,18 +1687,31 @@ impl RootSelectionV1 {
         }
 
         for entry in &self.restrictions {
-            if !contains(&entry.definition) {
+            if !selected(&entry.definition) {
                 return Err(SelectionError::Outside(entry.definition));
             }
         }
+        let disabled = |id: &DefinitionId| {
+            self.restrictions
+                .binary_search_by(|entry| entry.definition.cmp(id))
+                .is_ok_and(|index| {
+                    matches!(
+                        self.restrictions[index].restriction,
+                        RestrictionV1::Disabled(_)
+                    )
+                })
+        };
         for closure in &self.completion_closures {
             if !strictly_increasing(&closure.definitions) {
                 return Err(SelectionError::NonCanonical(
                     "completion closure definitions",
                 ));
             }
-            if let Some(outside) = closure.definitions.iter().find(|id| !contains(id)) {
+            if let Some(outside) = closure.definitions.iter().find(|id| !retained(id)) {
                 return Err(SelectionError::Outside(*outside));
+            }
+            if let Some(stranded) = closure.definitions.iter().find(|id| disabled(id)) {
+                return Err(SelectionError::ObligationStranded(*stranded));
             }
         }
         Ok(())

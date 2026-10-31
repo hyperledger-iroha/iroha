@@ -26945,6 +26945,11 @@
         "discriminant": 2,
         "tag": "ExpectationMismatch",
         "type": "RuntimeRejectionV1::ExpectationMismatch"
+      },
+      {
+        "discriminant": 3,
+        "tag": "MalformedPayload",
+        "type": "RuntimeRejectionV1::MalformedPayload"
       }
     ]
   },
@@ -26973,6 +26978,14 @@
       {
         "name": "wire_id",
         "type": "Option<String>"
+      }
+    ]
+  },
+  "RuntimeRejectionV1::MalformedPayload": {
+    "Struct": [
+      {
+        "name": "wire_id",
+        "type": "String"
       }
     ]
   },

@@ -34869,7 +34869,7 @@
       },
       "PrivateSettlementContextProofV1": {
         "additionalProperties": false,
-        "description": "One selected context member. All batch members must carry identical complete World and native-lane preimages.",
+        "description": "One selected context member with the exact complete committed Parameters cell and native protocol row or complete-World absence proof at the same authenticated cut.",
         "properties": {
           "committee_keys": {
             "items": {
@@ -34884,12 +34884,29 @@
             "description": "Exact original canonical public SumeragiLaneState cell.",
             "x-iroha-norito-schema": "iroha_data_model::sumeragi_lanes::SumeragiLaneState"
           },
+          "parameters": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact complete original Parameters cell from the same World cut. Authenticate world.parameters before reading private_settlement_policy_v1 from custom; authenticated absence selects the immutable native V1 baseline, while malformed present payloads are refused.",
+            "x-iroha-norito-schema": "iroha_data_model::parameter::system::model::Parameters"
+          },
           "pool": {
             "$ref": "#/components/schemas/PrivateSettlementPoolCutProofV1"
+          },
+          "protocol_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrivacyProtocolPolicyV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "pool",
+          "parameters",
+          "protocol_policy",
           "lanes",
           "committee_keys"
         ],
@@ -35415,6 +35432,70 @@
           ]
         }
       },
+      "PrivateSettlementPolicyUpdateV1": {
+        "additionalProperties": false,
+        "description": "Private admission successor applied at the exact incoming effective height. Execution supplies scheduled_at_height and validates the original obligation drain before publication.",
+        "properties": {
+          "effective_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "next_limits": {
+            "$ref": "#/components/schemas/PrivateSettlementValidityLimitsV1"
+          },
+          "scheduled_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scheduled_at_height",
+          "effective_at_height",
+          "next_limits"
+        ],
+        "type": "object",
+        "x-iroha-norito-schema": "iroha_data_model::privacy::PrivateSettlementPolicyUpdateV1"
+      },
+      "PrivateSettlementPolicyV1": {
+        "additionalProperties": false,
+        "description": "Canonical payload of custom parameter private_settlement_policy_v1, bounded to 4096 JSON bytes. Authenticated absence retains the immutable native V1 baseline; a present payload must be canonical and valid. Current limits and any original protocol drain cannot be rewritten by a scheduling request.",
+        "properties": {
+          "current_limits": {
+            "$ref": "#/components/schemas/PrivateSettlementValidityLimitsV1"
+          },
+          "pending_update": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrivateSettlementPolicyUpdateV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "protocol_closure_drain": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrivateSettlementProtocolClosureDrainV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "current_limits",
+          "pending_update",
+          "protocol_closure_drain"
+        ],
+        "type": "object",
+        "x-iroha-custom-parameter-id": "private_settlement_policy_v1",
+        "x-iroha-max-json-bytes": 4096,
+        "x-iroha-norito-schema": "iroha_data_model::privacy::PrivateSettlementPolicyV1"
+      },
       "PrivateSettlementPoolCutProofV1": {
         "additionalProperties": false,
         "description": "Complete bounded World hash preimages and exact public selected pool/governance values; no restricted asset opening.",
@@ -35482,6 +35563,123 @@
           "logs_errors_events_must_use_public_allowlist": true,
           "plaintext_transaction_contents": "forbidden"
         }
+      },
+      "PrivateSettlementProtocolClosureDrainV1": {
+        "additionalProperties": false,
+        "description": "Execution-captured original expiry span bound to one exact native protocol-limit closure. The protocol identity, schedule heights and hash of the canonical next-limits frame must match its pending row. Later private-policy changes cannot reinterpret this original horizon.",
+        "properties": {
+          "effective_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "next_limits_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "original_max_expiry_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "protocol_id": {
+            "$ref": "#/components/schemas/PrivacyProtocolIdV1"
+          },
+          "scheduled_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "protocol_id",
+          "scheduled_at_height",
+          "effective_at_height",
+          "next_limits_hash",
+          "original_max_expiry_blocks"
+        ],
+        "type": "object",
+        "x-iroha-norito-schema": "iroha_data_model::privacy::PrivateSettlementProtocolClosureDrainV1"
+      },
+      "PrivateSettlementValidityLimitsV1": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_timeout_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "capsule_padding_classes": {
+            "description": "Nonzero mask of the four fixed native padding classes.",
+            "format": "uint8",
+            "maximum": 15,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "commit_timeout_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_capsule_bytes": {
+            "format": "uint64",
+            "maximum": 16777216,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_carrier_bytes": {
+            "format": "uint64",
+            "maximum": 4194304,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_expiry_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_participants": {
+            "format": "uint16",
+            "maximum": 255,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "max_proof_bytes": {
+            "format": "uint64",
+            "maximum": 8388608,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "min_auditor_approvals": {
+            "format": "uint16",
+            "maximum": 32,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "prepare_timeout_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sidecar_retention_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_participants",
+          "max_expiry_blocks",
+          "audit_timeout_blocks",
+          "prepare_timeout_blocks",
+          "commit_timeout_blocks",
+          "capsule_padding_classes",
+          "max_proof_bytes",
+          "max_capsule_bytes",
+          "max_carrier_bytes",
+          "sidecar_retention_blocks",
+          "min_auditor_approvals"
+        ],
+        "type": "object"
       },
       "ProofAttachment": {
         "additionalProperties": false,

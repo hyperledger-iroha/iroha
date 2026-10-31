@@ -298,9 +298,58 @@ instead of every compiled field. Every World root therefore differs, and a store
 history from an earlier build does not replay in this binary. The pinned history
 is regenerated and its digest recorded; it now proves the founded baseline. A
 running network does not take a fresh genesis for this cutover: it adopts the
-foundation at a governed checkpoint (`live_runtime_upgrades.md` §13), and until
-then the upgrade checkpoint import founds the two runtime fields on the
-predecessor's World. No live network was changed.
+foundation at a governed checkpoint (`live_runtime_upgrades.md` §13). The required
+adoption import must found the runtime fields on the predecessor's World; that
+import is still unimplemented. No live network was changed.
+
+The lifecycle implementation in `90ea8ea33b` completed the same declared cutover:
+`runtime_change_sets` replaced `runtime_upgrades`, `runtime_containments` was added,
+and the baseline catalog and the three pinned frames were regenerated together.
+The retained fixture's history digest is
+`61150ac3a98554758bc796d305430952d2c3ec66258251330790b3bb8cd2fdf5`.
+The inventory now records that existing capture; the fixture is unchanged from
+`90ea8ea33b`. This corrects the stale inventory digest from the earlier baseline
+capture in `e93b3f9d7f`, without regenerating history to make a replay pass.
+
+The original V1 signing schema retains its atomic-private-settlement record in
+the nested SORA Nexus policy digest and its five named provenance fields in the
+execution-policy digest. Their removal in `e1f137143e` and `3b47f8a49f` changed the
+preimage of that retained history. The single canonical encoder restores their
+original positions, types and frozen baseline values. They are immutable signing
+slots: neither current private-payment limits nor local sidecar capacities alter
+them, and deleted node-local provenance controls remain deleted. Independent byte
+goldens pin the original records. These baseline values do not reconstruct other
+historical configurations with different authenticated signing inputs.
+
+Rust ownership also does not rename an installed storage schema. The Model-owned
+`PrivacyProtocolPolicyKeyV1` keeps the sole original nominal identity
+`iroha_core::privacy_state::PrivacyProtocolPolicyKeyV1`. The ten-field
+`PrivacyConsensusLimitsV1` and three-field `PrivacyProtocolLimitsUpdateV1` retain
+their original layouts. New private-payment limits and captured closure drains
+live in the typed `private_settlement_policy_v1` custom entry of the existing
+`Parameters` cell. Authenticated absence selects its immutable native V1 baseline;
+a malformed present value is refused, and a local codec refusal retains retry
+custody. Bootstrap and replay do not insert an absent extension.
+
+The fixture remains intact and passes cold replay through reopened Kura storage
+with its original certified root and execution tip. The same regression confirms
+that replay does not rewrite any frame and Strict startup rejects a corrupted
+frame. This verifies the retained capture; the governed adoption path must still
+be completed before this candidate can upgrade a running network.
+
+The fixture contains no private-payment obligations. Resource checks preserve
+the original generic-cap and protocol-schedule behavior when the extension and
+staged locks are absent. Histories with original live obligations admitted under
+capacities below the continuation safety floor need separate qualification;
+passing this three-block fixture does not establish their replay.
+
+The handshake change in `173b737010` replaced the compatibility probe's compiled
+`gas_schedule_hash` with `host_profiles`: each immutable host profile binds its
+ABI and metering semantics, and peers must support the profiles selected by the
+committed root. The inventory anchors the metering semantics at their definition,
+`ivm::gas::schedule_hash`, which the baseline host profile binds; dormant extra
+profiles are capabilities, not an execution-semantics change or a reason to
+reset history.
 
 Classify by effect on the stored history, not by intent. When unsure, run the
 pinned-history test and the read-only probes against a store written by the

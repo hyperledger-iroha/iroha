@@ -17,13 +17,17 @@ fn baseline() -> RootSelectionV1 {
 }
 
 fn wire_id() -> &'static str {
-    iroha_data_model::isi::instruction_wire_id(&log()).expect("registered")
+    iroha_data_model::isi::wire_id_of::<Log>().expect("registered")
 }
 
 #[test]
 fn the_baseline_resolves_every_built_in_instruction() {
     let selection = baseline();
-    assert_eq!(resolve(&log(), &selection, 1, || None), Ok(()));
+    assert_eq!(
+        resolve(&log(), &selection, 1, || None),
+        Ok(Some(selection.bindings[0].implementation)),
+        "the bound implementation executes it"
+    );
     assert_eq!(selection.bindings.len(), {
         iroha_data_model::isi::registry::built_in_instruction_schemas().count()
     });
@@ -66,7 +70,7 @@ fn restrictions_stop_new_work_from_their_height() {
         }];
         assert_eq!(
             resolve(&log(), &restricted, 4, || None),
-            Ok(()),
+            Ok(Some(binding.implementation)),
             "before its height"
         );
         assert_eq!(
@@ -87,7 +91,7 @@ fn restrictions_stop_new_work_from_their_height() {
     }];
     assert_eq!(
         resolve(&log(), &deprecated, 9, || None),
-        Ok(()),
+        Ok(Some(binding.implementation)),
         "deprecation keeps execution"
     );
 }
@@ -158,4 +162,46 @@ fn a_new_world_is_founded_on_the_baseline() {
             catalog.definitions.get(id)
         );
     }
+}
+
+#[test]
+fn a_node_drafts_the_activation_of_its_release_additions() {
+    use crate::state::WorldReadOnly as _;
+    use catalog::{
+        additions::test_additions::{LOG, LOG_MODULE, LOG_WIRE_ID},
+        test_catalog,
+    };
+    let network = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x61; 32])),
+    );
+    test_catalog::with_additions(&[LOG], || {
+        let state = crate::state::State::new_for_testing(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let view = state.world_view();
+        let change = draft_addition(&view, network, LOG_MODULE, 10, [1; 32]).expect("draft");
+        let catalog = release_catalog().expect("test catalog");
+        assert_eq!(change.predecessor, catalog.baseline_id);
+        assert_eq!(change.network, network);
+        assert_eq!(change.effective_height, 10);
+        let applied = change
+            .apply(
+                &catalog.baseline,
+                &change_set::PublishedDefinitions(view.runtime_definitions()),
+            )
+            .expect("the draft applies to the committed selection");
+        assert!(
+            applied
+                .selection
+                .bindings
+                .iter()
+                .any(|binding| binding.wire_id == LOG_WIRE_ID)
+        );
+        assert!(
+            draft_addition(&view, network, "iroha.test.unknown", 10, [1; 32]).is_err(),
+            "only additions of this release are drafted"
+        );
+    });
 }

@@ -35590,7 +35590,6 @@ mod tests {
                 protocol_id: PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
                 current_limits: limits(current),
                 pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
-                    private_settlement_drain_blocks: None,
                     scheduled_at_height: 42,
                     effective_at_height: 43,
                     next_limits: limits(next),
@@ -35739,7 +35738,6 @@ mod tests {
             protocol_id: PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
             current_limits: limits,
             pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
-                private_settlement_drain_blocks: None,
                 scheduled_at_height: 42,
                 effective_at_height: 43,
                 next_limits: limits,

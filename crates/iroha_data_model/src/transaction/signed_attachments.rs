@@ -708,9 +708,12 @@ pub enum SignedAttachmentErrorV1 {
         /// Violated rule.
         rule: ActionRuleViolationV1,
     },
-    /// An action names an instruction wire identifier that is not registered.
-    #[error("action {action_index} names an unregistered instruction wire identifier")]
-    UnregisteredOperation {
+    /// An action names an instruction wire identifier that is not well formed.
+    ///
+    /// Whether the release registers the wire identifier is never checked here, so the same
+    /// payload decodes on every release (`specs/live_runtime_upgrades.md` §5.2).
+    #[error("action {action_index} names a malformed instruction wire identifier")]
+    MalformedOperationWireId {
         /// Action ordinal.
         action_index: u32,
     },

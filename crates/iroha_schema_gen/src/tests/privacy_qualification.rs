@@ -103,3 +103,83 @@ fn privacy_external_diagnostics_export_has_no_retired_deployment_activation_layo
         );
     }
 }
+
+#[test]
+fn private_settlement_extension_export_preserves_separate_baseline_layouts() {
+    use iroha_data_model::privacy::{
+        PrivacyConsensusLimitsV1, PrivacyConsensusPolicyV1, PrivacyProtocolLimitsUpdateV1,
+        PrivateSettlementPolicyUpdateV1, PrivateSettlementPolicyV1,
+        PrivateSettlementProtocolClosureDrainV1,
+    };
+    let exported = crate::build_schemas();
+    let descriptors: std::collections::BTreeMap<_, _> = exported.iter().collect();
+    for expected in [
+        PrivacyConsensusPolicyV1::schema(),
+        PrivateSettlementPolicyV1::schema(),
+        PrivateSettlementPolicyUpdateV1::schema(),
+        PrivateSettlementProtocolClosureDrainV1::schema(),
+    ] {
+        for (id, descriptor) in expected.iter() {
+            assert_eq!(
+                descriptors.get(id).copied(),
+                Some(descriptor),
+                "{}",
+                descriptor.type_name
+            );
+        }
+        assert!(find_missing_schema_references(&expected).is_empty());
+    }
+    for (metadata, expected) in [
+        (
+            exported.get::<PrivateSettlementPolicyV1>().unwrap(),
+            vec!["current_limits", "pending_update", "protocol_closure_drain"],
+        ),
+        (
+            exported.get::<PrivateSettlementPolicyUpdateV1>().unwrap(),
+            vec!["scheduled_at_height", "effective_at_height", "next_limits"],
+        ),
+        (
+            exported
+                .get::<PrivateSettlementProtocolClosureDrainV1>()
+                .unwrap(),
+            vec![
+                "protocol_id",
+                "scheduled_at_height",
+                "effective_at_height",
+                "next_limits_hash",
+                "original_max_expiry_blocks",
+            ],
+        ),
+        (
+            exported.get::<PrivacyConsensusLimitsV1>().unwrap(),
+            vec![
+                "max_actions_per_transaction",
+                "max_actions_per_block",
+                "max_proof_bytes_per_action",
+                "max_action_bytes",
+                "max_privacy_bytes_per_transaction",
+                "max_privacy_bytes_per_block",
+                "max_statement_and_encrypted_output_bytes_per_transaction",
+                "max_nullifiers_per_action",
+                "max_commitments_per_action",
+                "retained_root_count",
+            ],
+        ),
+        (
+            exported.get::<PrivacyProtocolLimitsUpdateV1>().unwrap(),
+            vec!["scheduled_at_height", "effective_at_height", "next_limits"],
+        ),
+    ] {
+        let Metadata::Struct(record) = metadata else {
+            panic!("privacy policy must retain its named record");
+        };
+        assert_eq!(
+            record
+                .declarations
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+}

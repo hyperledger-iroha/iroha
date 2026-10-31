@@ -738,10 +738,11 @@ Re-running makes a fresh genesis.
 $ iroha network apply networks/taira.toml --release 2026.10.1
 ```
 
-**Compatibility probe.** `CheckConfig --json` runs with the new binary against the real rendered config on one host and returns `{config_fingerprint, protocol_version, wire_schema_hash, nexus_policy_digest, gas_schedule_hash, execution_policy_hash, nexus_amx_context_hash}`. The tool compares these against the live network, meaning the attested `SumeragiStatus` values and the genesis commitments:
+**Compatibility probe.** `CheckConfig --json` runs with the new binary against the real rendered config on one host and returns `{config_fingerprint, protocol_version, wire_schema_hash, nexus_policy_digest, host_profiles, execution_policy_hash, nexus_amx_context_hash}`. The tool compares these against the live network, meaning the attested `SumeragiStatus` values and the genesis commitments:
 
 - `execution_policy_hash` or `nexus_amx_context_hash` differs from genesis: `requires reset`. Nodes would refuse to start: `irohad` checks both against the authenticated genesis Sumeragi context.
-- Handshake-bound values differ (config fingerprint, protocol, wire schema, nexus policy digest, gas schedule; checked by the `iroha_p2p` peer handshake): **coordinated**. A mixed cohort cannot form quorum.
+- `host_profiles` lacks a host profile the committed selection activates: **refused**. Every peer rejects the binary in the handshake (`RequiredHostProfiles`). Extra profiles are dormant capabilities and do not change the class.
+- Handshake-bound values differ (config fingerprint, protocol, wire schema, nexus policy digest; checked by the `iroha_p2p` peer handshake): **coordinated**. A mixed cohort cannot form quorum.
 - All equal: **rolling**. A `policy_digest`-only change is always rolling.
 
 **Health classification** from G1–G4:

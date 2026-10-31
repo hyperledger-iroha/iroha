@@ -28,6 +28,8 @@ mod panic_recovery;
 /// Synchronizes peer-gossip voter authority with the committed validator roster.
 #[path = "main/peers_gossiper_topology_sync.rs"]
 mod peers_gossiper_topology_sync;
+/// `--check-replay`: replay a copy of the stopped node's store with this build.
+mod replay_check;
 /// Platform-fixed local runtime-provider broker used by the stock launcher.
 mod runtime_provider_broker;
 /// Deployment-owned runtime-provider registry boundary for the standard launcher.
@@ -893,6 +895,16 @@ pub struct StartupArgs {
     /// `--check-config`).
     #[arg(long, conflicts_with = "check_config")]
     pub check_storage: bool,
+    /// Replay a copy of the stopped node's store with this build, print the result as one Norito
+    /// JSON object and exit nonzero when a block does not reproduce its certified result or the
+    /// store lacks a block body the replay needs.
+    ///
+    /// Opens the store read-only and takes its store-root lock as `--check-storage` does, copies
+    /// its blocks into a temporary directory, restores the newest snapshot there (or re-executes
+    /// signed genesis) and re-executes every later block. It never writes the store, the
+    /// snapshot directory or the tiered-state directory, and never opens runtime-only secrets.
+    #[arg(long, conflicts_with_all = ["check_config", "check_storage", "managed_listeners"])]
+    pub check_replay: bool,
     /// Require this registered account to retain `SoraCloud` deployment authority
     /// after executing the exact signed genesis during offline validation.
     #[arg(long, value_name = "ACCOUNT_ID", requires = "check_config")]
@@ -1019,6 +1031,8 @@ pub enum MainError {
     IrohaRun,
     /// `--check-storage` could not read the store or its snapshot restore dry run failed.
     CheckStorage,
+    /// `--check-replay` could not replay the store, or a replayed block diverged or lacked its body.
+    CheckReplay,
 }
 /// Read-only Torii adapter that refuses committed reputation reads whenever
 /// the supervised daemon is not ready.
@@ -1129,6 +1143,9 @@ impl std::fmt::Display for MainError {
             MainError::IrohaStart => "error.start",
             MainError::IrohaRun => "error.run",
             MainError::CheckStorage => "error.check_storage",
+            MainError::CheckReplay => {
+                return f.write_str("The node store failed the replay check with this build");
+            }
         };
         write!(f, "{}", i18n::t(key))
     }
@@ -8321,6 +8338,9 @@ fn run_main_with_config_guard(
     if args.startup.check_storage {
         return compatibility_probe::run_check_storage(&config);
     }
+    if args.startup.check_replay {
+        return replay_check::run_check_replay(&config);
+    }
     if args.startup.check_config {
         let validated_genesis = validate_config_and_genesis_for_check(
             &config,
@@ -12630,6 +12650,7 @@ mod tests {
                     check_config: false,
                     json: false,
                     check_storage: false,
+                    check_replay: false,
                     require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,
@@ -12699,6 +12720,7 @@ mod tests {
                     check_config: false,
                     json: false,
                     check_storage: false,
+                    check_replay: false,
                     require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,

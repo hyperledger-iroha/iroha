@@ -1151,7 +1151,7 @@ fn canonical_wire_matches_framed_payload() {
     assert_eq!(owned_frame, framed);
 }
 #[test]
-fn signed_block_decoders_reject_nested_instruction_type_name_alias() {
+fn signed_block_decoders_keep_a_nested_instruction_type_name_opaque() {
     let key_pair = checked_random_keypair();
     let authority = crate::account::AccountId::new(key_pair.public_key().clone());
     let transaction = TransactionBuilder::new(
@@ -1196,19 +1196,43 @@ fn signed_block_decoders_reject_nested_instruction_type_name_alias() {
     let canonical_decoded = decode_framed_signed_block(&canonical_frame)
         .expect("canonical nested instruction identifiers decode");
     assert_eq!(canonical_decoded, block);
-    let structural_error =
-        norito::codec::decode_exact_from_slice::<SignedBlock>(&alternate_block[1..])
-            .expect_err("the instruction registry rejects removed aliases directly");
-    assert!(matches!(structural_error, NoritoFrameError::Message(reason)
-        if reason == "unknown instruction wire identifier"));
+    // A concrete type name is no decode alias of the instruction it names: every release
+    // treats it as an unknown wire ID, so the block decodes alike everywhere with that
+    // envelope kept opaque and byte for byte (specs/live_runtime_upgrades.md §5.2), and
+    // execution refuses it as `definition_inactive`.
+    let alias = std::any::type_name::<crate::prelude::Log>();
+    let direct = norito::codec::decode_exact_from_slice::<SignedBlock>(&alternate_block[1..])
+        .expect("an unknown nested wire ID keeps the block decodable");
     let framed = frame_block_payload(alternate_block[0], &alternate_block[1..]);
-    let framed_error = decode_framed_signed_block(&framed)
-        .expect_err("framed V1 blocks must reject nested instruction aliases");
-    assert!(matches!(
-        framed_error.into_error(),
-        NoritoFrameError::Message(reason)
-            if reason == "unknown instruction wire identifier"
-    ));
+    let decoded = decode_framed_signed_block(&framed).expect("framed V1 block decodes");
+    assert_eq!(decoded, direct);
+    assert_ne!(
+        decoded, block,
+        "the alias never decodes as the canonical instruction"
+    );
+    let [TransactionEntrypoint::External(transaction)] =
+        decoded.payload.external_entrypoints.as_slice()
+    else {
+        panic!("one external entrypoint");
+    };
+    let crate::transaction::Executable::Instructions(instructions) = transaction.instructions()
+    else {
+        panic!("an instruction executable");
+    };
+    assert_eq!(
+        instructions
+            .iter()
+            .map(|instruction| instruction
+                .as_opaque()
+                .map(crate::isi::OpaqueInstructionV1::wire_id))
+            .collect::<Vec<_>>(),
+        vec![Some(alias)]
+    );
+    assert_eq!(
+        decoded.encode_wire().expect("re-encode the decoded block"),
+        framed,
+        "the opaque envelope re-encodes the original bytes"
+    );
 }
 /// Rebuild a canonical block payload with the selected confidential-digest hashes
 /// written as thirty-two packed bytes instead of the emitted array child.

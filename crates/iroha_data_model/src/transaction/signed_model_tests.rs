@@ -2459,14 +2459,34 @@ fn signed_transaction_versioned_roundtrip() {
     assert_eq!(decoded, signed_tx);
 }
 #[test]
-fn signed_transaction_versioned_decode_rejects_instruction_type_name_alias() {
+fn signed_transaction_versioned_decode_keeps_instruction_type_name_alias_opaque() {
     let signed_tx = sample_signed_transaction();
     let canonical = signed_tx.encode_versioned();
     let alternate = signed_transaction_with_log_type_name_alias(&canonical);
     assert_ne!(alternate, canonical);
-    let error = SignedTransaction::decode_all_versioned(&alternate)
-        .expect_err("concrete Rust type names are not canonical V1 instruction wire ids");
-    assert!(matches!(error, iroha_version::error::Error::NoritoCodec(_)));
+    // A concrete Rust type name is no decode alias: it is an unknown wire ID, whose
+    // envelope stays opaque and byte for byte (specs/live_runtime_upgrades.md §5.2).
+    let decoded = SignedTransaction::decode_all_versioned(&alternate)
+        .expect("an unknown wire ID keeps the transaction decodable");
+    assert_ne!(decoded, signed_tx);
+    assert_ne!(decoded.hash(), signed_tx.hash());
+    let Executable::Instructions(instructions) = decoded.instructions() else {
+        panic!("an instruction executable");
+    };
+    assert_eq!(
+        instructions
+            .iter()
+            .map(|instruction| instruction
+                .as_opaque()
+                .map(crate::isi::OpaqueInstructionV1::wire_id))
+            .collect::<Vec<_>>(),
+        vec![Some(std::any::type_name::<Log>())]
+    );
+    assert_eq!(decoded.encode_versioned(), alternate);
+    assert!(
+        decoded.verify_signature().is_err(),
+        "the signature covers the canonical instruction, not the opaque alias"
+    );
 }
 #[test]
 fn signed_transaction_fixed_v1_wire_binds_full_authorization_proof() {
@@ -2705,10 +2725,11 @@ fn transaction_entrypoint_versioned_roundtrip_matches_fixed_v1_wire() {
     assert_eq!(decoded, entrypoint);
 }
 #[test]
-fn transaction_entrypoint_versioned_decode_rejects_nested_instruction_type_name_alias() {
+fn transaction_entrypoint_versioned_decode_keeps_nested_instruction_type_name_alias_opaque() {
     let signed_tx = sample_signed_transaction();
     let canonical_signed = signed_tx.encode_versioned();
-    let canonical_entrypoint = TransactionEntrypoint::from(signed_tx).encode_versioned();
+    let canonical = TransactionEntrypoint::from(signed_tx);
+    let canonical_entrypoint = canonical.encode_versioned();
     assert_eq!(
         external_entrypoint_wire(&canonical_signed),
         canonical_entrypoint,
@@ -2716,9 +2737,30 @@ fn transaction_entrypoint_versioned_decode_rejects_nested_instruction_type_name_
     );
     let alternate_signed = signed_transaction_with_log_type_name_alias(&canonical_signed);
     let alternate_entrypoint = external_entrypoint_wire(&alternate_signed);
-    let error = TransactionEntrypoint::decode_all_versioned(&alternate_entrypoint)
-        .expect_err("nested instruction aliases are not canonical V1 entrypoint wires");
-    assert!(matches!(error, iroha_version::error::Error::NoritoCodec(_)));
+    // A concrete type name is no decode alias of the instruction it names: it is an unknown
+    // wire ID, whose envelope stays opaque and byte for byte (specs/live_runtime_upgrades.md
+    // §5.2).
+    let decoded = TransactionEntrypoint::decode_all_versioned(&alternate_entrypoint)
+        .expect("an unknown nested wire ID keeps the entrypoint decodable");
+    assert_ne!(decoded, canonical);
+    assert_eq!(decoded.encode_versioned(), alternate_entrypoint);
+    let TransactionEntrypoint::External(transaction) = &decoded else {
+        panic!("an external entrypoint");
+    };
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        panic!("an instruction executable");
+    };
+    assert_eq!(
+        instructions
+            .iter()
+            .map(|instruction| {
+                instruction
+                    .as_opaque()
+                    .map(crate::isi::OpaqueInstructionV1::wire_id)
+            })
+            .collect::<Vec<_>>(),
+        vec![Some(std::any::type_name::<Log>())]
+    );
 }
 #[test]
 fn signed_transaction_roundtrip_preserves_instruction_order() {

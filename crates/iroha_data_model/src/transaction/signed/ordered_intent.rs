@@ -10,12 +10,11 @@ use super::{
 };
 use crate::{
     isi::{
-        InstructionBox, instruction_wire_id,
+        InstructionBox, instruction_wire_id, is_well_formed_wire_id,
         privacy::{
             BootstrapPrivacyPgcAccountsV1, PrivacyZkX509RequestErrorV1, SubmitPrivacyProofV1,
             SubmitPrivacyZkX509CertificateV1,
         },
-        registry::is_instruction_wire_id_registered,
     },
     nexus::LanePrivacyProof,
     proof::ProofAttachment,
@@ -268,7 +267,7 @@ impl TransactionPayload {
     /// against this payload.
     ///
     /// Beyond [`SignedAttachmentsV1::validate_v1`] this checks that each named
-    /// instruction wire identifier is registered, that each invocation binding
+    /// instruction wire identifier is well formed, that each invocation binding
     /// names an item of the executable of the right kind and operation, that
     /// an execution proof carrier is declared at most once and only for a
     /// proved IVM executable, that each wrapped proof carrier is one canonical
@@ -362,8 +361,12 @@ impl TransactionPayload {
                     execution_carrier_seen = true;
                 }
                 ActionOperationV1::NativeInstruction(wire_id) => {
-                    if !is_instruction_wire_id_registered(wire_id) {
-                        return Err(SignedAttachmentErrorV1::UnregisteredOperation {
+                    // Release-independent: whether this release registers the wire ID must not
+                    // decide decodability, or a block naming an instruction a later release adds
+                    // would decode on some validators only (§5.2). Execution refuses a wire ID
+                    // no active interface answers.
+                    if !is_well_formed_wire_id(wire_id) {
+                        return Err(SignedAttachmentErrorV1::MalformedOperationWireId {
                             action_index,
                         });
                     }

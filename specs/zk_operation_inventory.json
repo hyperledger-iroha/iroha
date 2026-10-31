@@ -12023,21 +12023,6 @@
     ],
     "test_evidence": "default",
     "operations": []
-   },
-   {
-    "id": "settlement.pool_activation",
-    "selector": "node_configuration",
-    "chooses_guarantee": true,
-    "what": "Atomic private settlement has no node enable or activation prerequisite. The native IVM private-note implementation and current committed protocol limits are enforced, but the remaining node-configured profile-policy version selection and settlement bounds still affect admission.",
-    "site": {"path": "crates/iroha_core/src/state.rs", "symbol": "let config = &self.nexus.atomic_private_settlement;"},
-    "operations": ["private_settlement::RegisterAtomicPrivateSettlementPrepareV1", "private_settlement::FinalizeAtomicPrivateSettlementV1"],
-    "open_defect": {
-     "owner_task": "F.4",
-     "what": "Migrate remaining node-configured profile-policy selection, windows and settlement bounds into their committed owner; the retired enable flag and activation height are absent."
-    },
-    "references": [
-     {"inventory": "runtime_validity", "key": "entries/cfg.nexus.settlement_activation"}
-    ]
    }
   ],
   "selector_census": {

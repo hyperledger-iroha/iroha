@@ -19,12 +19,15 @@ use iroha_data_model::{
         runtime_upgrade_policy::RuntimeUpgradePolicyV1,
     },
     runtime::{
-        definition::{DefinitionDescriptorV1, DefinitionId, DefinitionLookup, RootSelectionV1},
+        definition::{
+            DefinitionDescriptorV1, DefinitionId, DefinitionLookup, RootSelectionV1,
+            StorageDescriptorV1, StorageShapeV1,
+        },
         lifecycle::{
-            ChangeSetEndorsementV1, ChangeSetId, ChangeSetRecordV1, ChangeSetStatusV1, ChangeSetV1,
-            RootScopeV1, RuntimeNoticeV1, RuntimeUpgradeActionV1, SelectionTransitionV1,
-            SignedSupportAttestationV1, check_change_set_provenance, committee_digest,
-            committee_supports,
+            AppliedChangeSet, ChangeSetEndorsementV1, ChangeSetId, ChangeSetRecordV1,
+            ChangeSetStatusV1, ChangeSetV1, RootScopeV1, RuntimeNoticeV1, RuntimeUpgradeActionV1,
+            SelectionTransitionV1, SignedSupportAttestationV1, check_change_set_provenance,
+            committee_digest, committee_supports,
         },
     },
 };
@@ -112,6 +115,7 @@ where
                     format!("scheduled change set {id} no longer applies: {error}").into(),
                 )
             })?;
+        check_transition_support(&record.change_set, &applied, &lookup)?;
         added.extend(applied.published);
         selection = applied.selection;
     }
@@ -203,10 +207,97 @@ where
         published,
         added: &staged,
     };
-    change_set
+    let applied = change_set
         .apply(&meets, &lookup)
-        .map(|applied| applied.selection)
-        .map_err(|error| Error::InvariantViolation(format!("change set {id}: {error}").into()))
+        .map_err(|error| Error::InvariantViolation(format!("change set {id}: {error}").into()))?;
+    check_transition_support(change_set, &applied, &lookup)?;
+    Ok(applied.selection)
+}
+
+/// Reject transitions whose effects this lifecycle engine cannot perform (§14.8).
+///
+/// The engine installs storage: a table starts empty and a cell starts at the initial bytes its
+/// published definition declares ([`install_cells`]). Merely recognizing every successor
+/// definition does not implement a migration cutover, a storage retirement or a retained
+/// completion capability. The rule depends only on the change set, never on this release, so
+/// proposal, attestation and activation reject the same transitions on every node; whether a
+/// node's release implements the successor is decided separately, when it attests and at
+/// activation, where an unsupported node stops instead of executing.
+fn check_transition_support(
+    change_set: &ChangeSetV1,
+    applied: &AppliedChangeSet,
+    published: &impl DefinitionLookup,
+) -> Result<(), Error> {
+    let descriptor = |id| {
+        applied
+            .published
+            .get(id)
+            .or_else(|| published.definition(id))
+    };
+    for transition in &change_set.transitions {
+        let unsupported = match transition {
+            SelectionTransitionV1::RetireStorage(_) => Some("storage migration cutover"),
+            SelectionTransitionV1::RetainCompletion(_)
+            | SelectionTransitionV1::ReleaseCompletion(_) => {
+                Some("kernel-registered completion capabilities")
+            }
+            SelectionTransitionV1::Activate(id)
+                if matches!(descriptor(id), Some(DefinitionDescriptorV1::Migration(_))) =>
+            {
+                Some("migration execution")
+            }
+            _ => None,
+        };
+        if let Some(operation) = unsupported {
+            // TODO(§5.4): implement certified cursors, write barriers and atomic cutover before
+            // admitting transitions that require these effects.
+            return Err(Error::InvariantViolation(
+                format!("runtime transition requires unimplemented {operation}").into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Write the initial value of every cell `change_set` installs (§4, "Add storage"): the bytes
+/// its published storage definition declares, decoded by the release that adds the cell.
+///
+/// A table starts empty and needs no write. A node whose release does not implement an installed
+/// cell has no installer for it and stops at the end of block start, because the successor
+/// relies on a definition its release lacks.
+///
+/// # Errors
+/// The release's installer refuses the published bytes: a defect of the release, since the
+/// catalog published exactly those bytes.
+fn install_cells(
+    wtx: &mut crate::state::WorldTransaction<'_, '_>,
+    change_set: &ChangeSetV1,
+    catalog: &crate::runtime::ReleaseCatalog,
+    height: u64,
+) -> Result<(), crate::state::StateStorageAdmissionError> {
+    for transition in &change_set.transitions {
+        let SelectionTransitionV1::InstallStorage(storage) = transition else {
+            continue;
+        };
+        let Some(DefinitionDescriptorV1::Storage(StorageDescriptorV1 {
+            shape: StorageShapeV1::Cell,
+            initial: Some(initial),
+            ..
+        })) = wtx.runtime_definitions.get(storage).cloned()
+        else {
+            continue;
+        };
+        let Some(install) = catalog.cell_installer(storage) else {
+            continue;
+        };
+        install(wtx, &initial).map_err(|reason| {
+            crate::state::StateStorageAdmissionError::UnsupportedRuntime {
+                height,
+                reason: format!("installing cell {storage} failed: {reason}"),
+            }
+        })?;
+    }
+    Ok(())
 }
 
 /// Check one validator's attestation of a scheduled change set (§6, "Attest").
@@ -311,8 +402,20 @@ pub(crate) fn activate_due(
         .map(|(id, record)| (record.change_set.effective_height, *id))
         .collect();
     due.sort_unstable();
+    let catalog = crate::runtime::release_catalog().map_err(|error| {
+        crate::state::StateStorageAdmissionError::UnsupportedRuntime {
+            height,
+            reason: error.to_string(),
+        }
+    })?;
     let holding = super::containment::holding(wtx);
-    let live = super::obligations::LiveObligations::of(wtx);
+    // Live obligations decide only whether a due change set strands them; an idle height never
+    // scans escrow or AMX State.
+    let live = if due.is_empty() {
+        super::obligations::LiveObligations::default()
+    } else {
+        super::obligations::LiveObligations::of(wtx)
+    };
     for (_, id) in due {
         let Some(mut record) = wtx.runtime_change_sets.get(&id).cloned() else {
             continue;
@@ -324,8 +427,21 @@ pub(crate) fn activate_due(
                 .apply(&current, &PublishedDefinitions(&wtx.runtime_definitions))
                 .ok()
                 .filter(|applied| {
+                    if let Err(reason) = check_transition_support(
+                        &record.change_set,
+                        applied,
+                        &PublishedDefinitions(&wtx.runtime_definitions),
+                    ) {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                        return false;
+                    }
                     // A successor that strands a live obligation never activates (§7.2).
-                    let stranded = super::obligations::stranded(&applied.selection, &live);
+                    let stranded = super::obligations::stranded(
+                        &current,
+                        &applied.selection,
+                        &PublishedDefinitions(&wtx.runtime_definitions),
+                        &live,
+                    );
                     if let Some(reason) = &stranded {
                         iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
                     }
@@ -339,6 +455,7 @@ pub(crate) fn activate_due(
                 wtx.runtime_definitions.insert(definition, descriptor);
             }
             *wtx.runtime_selection.get_mut() = applied.selection;
+            install_cells(wtx, &record.change_set, catalog, height)?;
             record.status = ChangeSetStatusV1::Activated(height);
             RuntimeUpgradeEvent::Activated(RuntimeUpgradeActivated {
                 id,
@@ -353,12 +470,6 @@ pub(crate) fn activate_due(
         wtx.emit_events(Some(event));
     }
     super::containment::resolve_taken_over(wtx, height, &holding);
-    let catalog = crate::runtime::release_catalog().map_err(|error| {
-        crate::state::StateStorageAdmissionError::UnsupportedRuntime {
-            height,
-            reason: error.to_string(),
-        }
-    })?;
     let selection = wtx.runtime_selection.get();
     if let Some(definition) = catalog.unsupported(selection) {
         let named = selection.id().map_or_else(

@@ -201,10 +201,10 @@ pub(crate) fn context(
         contexts.push(proof);
     }
     add(WorldStateSnapshotEntryV1 {
-        field_id: "world.privacy_consensus_policy".into(),
+        field_id: "world.parameters".into(),
         kind: WorldStateElementKindV1::Cell,
         key_hash: None,
-        value_hash: world_state_value_hash_v1(&template.privacy_policy).unwrap(),
+        value_hash: world_state_value_hash_v1(&template.parameters).unwrap(),
     });
     add(WorldStateSnapshotEntryV1 {
         field_id: "world.sumeragi_lanes".into(),
@@ -273,11 +273,12 @@ fn request_at_height(
         original
             .expiry_height
             .checked_add(
-                proof.contexts[0]
-                    .privacy_policy
-                    .current_limits
-                    .private_settlement
-                    .sidecar_retention_blocks,
+                iroha_data_model::privacy::PrivateSettlementPolicyV1::from_parameters(
+                    &proof.contexts[0].parameters,
+                )
+                .unwrap()
+                .current_limits
+                .sidecar_retention_blocks,
             )
             .unwrap(),
         PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1 as u64,
@@ -1954,18 +1955,24 @@ async fn committed_padding_and_retention_refuse_before_original_wallet_effects()
         let (mut proof, intent) = context(&client);
         if !insufficient_retention {
             for member in &mut proof.contexts {
+                let mut policy =
+                    iroha_data_model::privacy::PrivateSettlementPolicyV1::from_parameters(
+                        &member.parameters,
+                    )
+                    .unwrap();
+                policy.current_limits.capsule_padding_classes = 1;
                 member
-                    .privacy_policy
-                    .current_limits
-                    .private_settlement
-                    .capsule_padding_classes = 1;
-                let hash = world_state_value_hash_v1(&member.privacy_policy).unwrap();
+                    .parameters
+                    .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                        policy.to_custom_parameter().unwrap(),
+                    ));
+                let hash = world_state_value_hash_v1(&member.parameters).unwrap();
                 member
                     .pool
                     .world
                     .entries
                     .iter_mut()
-                    .find(|entry| entry.field_id == "world.privacy_consensus_policy")
+                    .find(|entry| entry.field_id == "world.parameters")
                     .unwrap()
                     .value_hash = hash;
             }

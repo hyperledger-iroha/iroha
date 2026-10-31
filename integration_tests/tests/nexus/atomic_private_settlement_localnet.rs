@@ -5005,7 +5005,6 @@ fn genesis_private_note_readiness_rejects_substituted_profiles_and_insufficient_
         protocol_id: compiled.protocol_id,
         current_limits: compiled.protocol_limits,
         pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
-            private_settlement_drain_blocks: None,
             scheduled_at_height: 1,
             effective_at_height: 2,
             next_limits: PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(

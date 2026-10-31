@@ -9,7 +9,385 @@ use crate::{
         PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1, PrivateSettlementCapsulePaddingV1,
         private_settlement_capsule_canonical_upper_bound_v1,
     },
+    parameter::{CustomParameter, CustomParameterId, Parameters},
 };
+use iroha_primitives::json::Json;
+
+/// Immutable private-payment admission policy stored in `Parameters.custom`.
+///
+/// Authenticated absence means the fixed native V1 baseline. A present value has exactly
+/// this schema; malformed values and unfinished local codec attempts never select defaults.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivateSettlementPolicyV1")]
+pub struct PrivateSettlementPolicyV1 {
+    /// Limits effective at this committed cut.
+    pub current_limits: PrivateSettlementValidityLimitsV1,
+    /// At most one future private-policy replacement.
+    pub pending_update: Option<PrivateSettlementPolicyUpdateV1>,
+    /// Original horizon of the exact pending ordinary protocol closure, if any.
+    pub protocol_closure_drain: Option<PrivateSettlementProtocolClosureDrainV1>,
+}
+
+/// A future private admission policy, separate from the frozen general privacy layout.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivateSettlementPolicyUpdateV1")]
+pub struct PrivateSettlementPolicyUpdateV1 {
+    /// Exact block admitting this schedule.
+    pub scheduled_at_height: u64,
+    /// Exact incoming block applying this successor.
+    pub effective_at_height: u64,
+    /// Complete successor private admission limits.
+    pub next_limits: PrivateSettlementValidityLimitsV1,
+}
+
+/// Captured original drain bound to one exact ordinary protocol-limit schedule.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivateSettlementProtocolClosureDrainV1")]
+pub struct PrivateSettlementProtocolClosureDrainV1 {
+    /// The native relation whose ordinary limit update closes admission.
+    pub protocol_id: PrivacyProtocolIdV1,
+    /// Exact block which admitted that protocol schedule.
+    pub scheduled_at_height: u64,
+    /// Exact incoming block applying that protocol successor.
+    pub effective_at_height: u64,
+    /// Hash of the canonical frame of the exact scheduled protocol limits.
+    pub next_limits_hash: iroha_crypto::Hash,
+    /// Expiry span captured from the private limits when the schedule was admitted.
+    pub original_max_expiry_blocks: u64,
+}
+
+/// A deterministic private-policy or captured schedule inconsistency.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PrivateSettlementPolicyValidationErrorV1 {
+    /// A current or successor private limit is malformed.
+    #[error("invalid private-settlement limits: {0}")]
+    Limits(#[from] PrivateSettlementValidityErrorV1),
+    /// A schedule has invalid or missed block heights.
+    #[error("invalid private-settlement schedule: {0}")]
+    Schedule(#[from] PrivacyPolicyValidationErrorV1),
+    /// A private update must change the effective limits.
+    #[error("private-settlement policy update is a no-op")]
+    NoChange,
+    /// A captured drain does not identify the exact native pending closure.
+    #[error("private-settlement drain differs from the pending protocol closure")]
+    ProtocolClosureMismatch,
+}
+
+/// A parameter failure retaining the original local codec refusal, when present.
+#[derive(Debug, thiserror::Error)]
+pub enum PrivateSettlementPolicyParameterErrorV1 {
+    /// Deterministic limits, schedule or closure inconsistency.
+    #[error(transparent)]
+    Invalid(#[from] PrivateSettlementPolicyValidationErrorV1),
+    /// Wrong identity, excessive payload or noncanonical JSON.
+    #[error("invalid private-settlement policy parameter: {0}")]
+    CustomParameter(&'static str),
+    /// Original decoding or encoding attempt, including its enforcing scope identity.
+    #[error(transparent)]
+    Codec(#[from] norito::core::DecodeAttemptError),
+}
+
+impl PrivateSettlementPolicyV1 {
+    /// Largest canonical parameter payload.
+    pub const MAX_PAYLOAD_BYTES: usize = 4_096;
+
+    /// Fixed native V1 meaning of authenticated parameter absence.
+    #[must_use]
+    pub const fn protocol_default() -> Self {
+        Self {
+            current_limits: PrivateSettlementValidityLimitsV1::protocol_default(),
+            pending_update: None,
+            protocol_closure_drain: None,
+        }
+    }
+
+    /// Sole identity of the private admission extension.
+    #[must_use]
+    pub fn parameter_id() -> &'static CustomParameterId {
+        static ID: std::sync::OnceLock<CustomParameterId> = std::sync::OnceLock::new();
+        ID.get_or_init(|| {
+            "private_settlement_policy_v1"
+                .parse()
+                .expect("static identity")
+        })
+    }
+
+    /// Select the explicit parameter or the immutable native absence meaning.
+    /// # Errors
+    /// A present parameter must decode and validate without any substitution.
+    pub fn from_parameters(
+        parameters: &Parameters,
+    ) -> Result<Self, PrivateSettlementPolicyParameterErrorV1> {
+        parameters
+            .custom()
+            .get(Self::parameter_id())
+            .map_or_else(|| Ok(Self::protocol_default()), Self::from_custom_parameter)
+    }
+
+    /// Decode the sole canonical payload, preserving original local codec failures.
+    /// # Errors
+    /// Wrong identity, excessive size, malformed/noncanonical JSON or invalid policy.
+    pub fn from_custom_parameter(
+        parameter: &CustomParameter,
+    ) -> Result<Self, PrivateSettlementPolicyParameterErrorV1> {
+        if parameter.id() != Self::parameter_id() {
+            return Err(PrivateSettlementPolicyParameterErrorV1::CustomParameter(
+                "another parameter identity",
+            ));
+        }
+        let payload = parameter.payload();
+        if payload.get().len() > Self::MAX_PAYLOAD_BYTES {
+            return Err(PrivateSettlementPolicyParameterErrorV1::CustomParameter(
+                "payload exceeds 4096 bytes",
+            ));
+        }
+        let value: Self = norito::core::classify_decode_attempt(|| {
+            norito::json::from_str(payload.get()).map_err(norito::json::Error::into_core_error)
+        })?;
+        let canonical = norito::core::classify_decode_attempt(|| Json::try_new(&value))?;
+        if &canonical != payload {
+            return Err(PrivateSettlementPolicyParameterErrorV1::CustomParameter(
+                "payload is not canonical JSON",
+            ));
+        }
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Encode a valid policy without losing original local codec failures.
+    /// # Errors
+    /// Invalid policy, excessive payload or original encoding failure.
+    pub fn to_custom_parameter(
+        &self,
+    ) -> Result<CustomParameter, PrivateSettlementPolicyParameterErrorV1> {
+        self.validate()?;
+        let payload = norito::core::classify_decode_attempt(|| Json::try_new(self))?;
+        if payload.get().len() > Self::MAX_PAYLOAD_BYTES {
+            return Err(PrivateSettlementPolicyParameterErrorV1::CustomParameter(
+                "payload exceeds 4096 bytes",
+            ));
+        }
+        Ok(CustomParameter::new(Self::parameter_id().clone(), payload))
+    }
+
+    /// Validate private limits and each retained schedule's intrinsic original drain.
+    /// # Errors
+    /// Malformed limits, no-op update, invalid schedule or original drain.
+    pub fn validate(&self) -> Result<(), PrivateSettlementPolicyValidationErrorV1> {
+        self.current_limits.validate()?;
+        if let Some(pending) = self.pending_update {
+            pending.validate_against(&self.current_limits)?;
+        }
+        if let Some(drain) = self.protocol_closure_drain {
+            drain.validate()?;
+        }
+        Ok(())
+    }
+
+    /// Validate both schedules against the exact committed cut.
+    /// # Errors
+    /// Invalid policy, future claimed admission or a due transition left unapplied.
+    pub fn validate_at_committed_height(
+        &self,
+        committed_height: u64,
+    ) -> Result<(), PrivateSettlementPolicyValidationErrorV1> {
+        self.validate()?;
+        for (scheduled, effective) in self
+            .pending_update
+            .iter()
+            .map(|pending| (pending.scheduled_at_height, pending.effective_at_height))
+            .chain(
+                self.protocol_closure_drain
+                    .iter()
+                    .map(|drain| (drain.scheduled_at_height, drain.effective_at_height)),
+            )
+        {
+            if scheduled > committed_height {
+                return Err(
+                    PrivacyPolicyValidationErrorV1::PendingScheduledAfterCommitted {
+                        scheduled_at_height: scheduled,
+                        committed_height,
+                    }
+                    .into(),
+                );
+            }
+            if effective <= committed_height {
+                return Err(PrivacyPolicyValidationErrorV1::PendingNotFuture {
+                    effective_at_height: effective,
+                    committed_height,
+                }
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Bind the captured original horizon to the exact optional native protocol record.
+    ///
+    /// The caller also validates that protocol record at the same committed height. A
+    /// closing update needs one matching capture; every other state forbids a capture.
+    /// # Errors
+    /// Missing, unrelated or substituted capture, or an original hashing refusal.
+    pub fn validate_protocol_policy(
+        &self,
+        protocol: Option<&PrivacyProtocolPolicyV1>,
+    ) -> Result<(), PrivateSettlementPolicyParameterErrorV1> {
+        self.validate()?;
+        let closing = protocol.and_then(|policy| {
+            policy
+                .pending_update
+                .as_ref()
+                .filter(|pending| {
+                    policy.protocol_id == PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
+                        && private_settlement_protocol_closes_v1(
+                            &policy.current_limits,
+                            &pending.next_limits,
+                        )
+                })
+                .map(|pending| (policy.protocol_id, pending))
+        });
+        match (closing, self.protocol_closure_drain) {
+            (Some((protocol_id, pending)), Some(drain)) => {
+                let expected = PrivateSettlementProtocolClosureDrainV1::capture(
+                    protocol_id,
+                    pending,
+                    drain.original_max_expiry_blocks,
+                )?;
+                if drain != expected {
+                    return Err(
+                        PrivateSettlementPolicyValidationErrorV1::ProtocolClosureMismatch.into(),
+                    );
+                }
+            }
+            (None, None) => {}
+            _ => {
+                return Err(
+                    PrivateSettlementPolicyValidationErrorV1::ProtocolClosureMismatch.into(),
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for PrivateSettlementPolicyV1 {
+    fn default() -> Self {
+        Self::protocol_default()
+    }
+}
+
+impl PrivateSettlementPolicyUpdateV1 {
+    /// Validate a successor against the original current admission horizon.
+    /// # Errors
+    /// Invalid limits, no-op, non-future activation or insufficient original drain.
+    pub fn validate_against(
+        &self,
+        current: &PrivateSettlementValidityLimitsV1,
+    ) -> Result<(), PrivateSettlementPolicyValidationErrorV1> {
+        super::policy::validate_privacy_policy_schedule_heights_v1(
+            self.scheduled_at_height,
+            self.effective_at_height,
+        )?;
+        current.validate()?;
+        self.next_limits.validate()?;
+        if *current == self.next_limits {
+            return Err(PrivateSettlementPolicyValidationErrorV1::NoChange);
+        }
+        validate_private_settlement_drain_v1(
+            self.scheduled_at_height,
+            current.max_expiry_blocks,
+            self.effective_at_height,
+        )?;
+        Ok(())
+    }
+}
+
+impl PrivateSettlementProtocolClosureDrainV1 {
+    /// Capture the exact original schedule and admission span before either owner changes.
+    /// # Errors
+    /// Wrong native protocol, invalid original drain or original canonical encoding refusal.
+    pub fn capture(
+        protocol_id: PrivacyProtocolIdV1,
+        pending: &PrivacyProtocolLimitsUpdateV1,
+        original_max_expiry_blocks: u64,
+    ) -> Result<Self, PrivateSettlementPolicyParameterErrorV1> {
+        if pending.next_limits.protocol_id() != protocol_id {
+            return Err(PrivateSettlementPolicyValidationErrorV1::ProtocolClosureMismatch.into());
+        }
+        let frame = norito::core::classify_decode_attempt(|| {
+            norito::encode_canonical(&pending.next_limits)
+        })?;
+        let capture = Self {
+            protocol_id,
+            scheduled_at_height: pending.scheduled_at_height,
+            effective_at_height: pending.effective_at_height,
+            next_limits_hash: iroha_crypto::Hash::new(frame),
+            original_max_expiry_blocks,
+        };
+        capture.validate()?;
+        Ok(capture)
+    }
+
+    /// Validate the immutable native identity and retained original expiry horizon.
+    /// # Errors
+    /// Another relation or activation before every previously admissible expiry.
+    pub fn validate(&self) -> Result<(), PrivateSettlementPolicyValidationErrorV1> {
+        if self.protocol_id != PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 {
+            return Err(PrivateSettlementPolicyValidationErrorV1::ProtocolClosureMismatch);
+        }
+        validate_private_settlement_drain_v1(
+            self.scheduled_at_height,
+            self.original_max_expiry_blocks,
+            self.effective_at_height,
+        )?;
+        Ok(())
+    }
+}
 
 /// Maximum signatures in every native V1 private-settlement carrier, including cleanup.
 ///
@@ -317,13 +695,12 @@ pub const fn private_settlement_protocol_closes_v1(
 /// keeps its original deadline even if a separate private-policy change lengthens that span.
 #[must_use]
 pub fn private_settlement_admission_deadline_v1(
-    consensus: &PrivacyConsensusPolicyV1,
+    consensus: &PrivateSettlementPolicyV1,
     protocol: Option<&PrivacyProtocolPolicyV1>,
 ) -> Option<u64> {
-    let private = consensus.pending_update.and_then(|pending| {
-        (pending.next_limits.private_settlement != consensus.current_limits.private_settlement)
-            .then_some(pending.effective_at_height)
-    });
+    let private = consensus
+        .pending_update
+        .map(|pending| pending.effective_at_height);
     let protocol = protocol.and_then(|policy| {
         policy.pending_update.and_then(|pending| {
             private_settlement_protocol_closes_v1(&policy.current_limits, &pending.next_limits)
@@ -408,6 +785,172 @@ pub fn validate_private_settlement_sponsor_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extension_absence_preserves_parameters_and_present_values_never_default() {
+        let mut parameters = Parameters::default();
+        let original_frame = norito::encode_canonical(&parameters).unwrap();
+        let baseline = PrivateSettlementPolicyV1::from_parameters(&parameters).unwrap();
+        assert_eq!(baseline, PrivateSettlementPolicyV1::protocol_default());
+        assert_eq!(
+            norito::encode_canonical(&parameters).unwrap(),
+            original_frame
+        );
+        assert!(
+            parameters
+                .custom()
+                .get(PrivateSettlementPolicyV1::parameter_id())
+                .is_none()
+        );
+
+        let parameter = baseline.to_custom_parameter().unwrap();
+        assert_eq!(
+            PrivateSettlementPolicyV1::from_custom_parameter(&parameter).unwrap(),
+            baseline
+        );
+        parameters.custom.insert(parameter);
+        assert_eq!(
+            PrivateSettlementPolicyV1::from_parameters(&parameters).unwrap(),
+            baseline
+        );
+        let frame = norito::encode_canonical(&baseline).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<PrivateSettlementPolicyV1>(&frame).unwrap(),
+            baseline
+        );
+
+        let wrong = CustomParameter::new(
+            "unrelated_policy".parse().unwrap(),
+            Json::try_new(&baseline).unwrap(),
+        );
+        assert!(PrivateSettlementPolicyV1::from_custom_parameter(&wrong).is_err());
+        for raw in [
+            "{}".to_owned(),
+            "null".to_owned(),
+            format!("\"{}\"", "x".repeat(4096)),
+        ] {
+            let malformed = CustomParameter::new(
+                PrivateSettlementPolicyV1::parameter_id().clone(),
+                Json::from_raw_json(raw).unwrap(),
+            );
+            parameters.custom.insert(malformed);
+            assert!(PrivateSettlementPolicyV1::from_parameters(&parameters).is_err());
+        }
+        let mut invalid = baseline;
+        invalid.current_limits.max_expiry_blocks = 0;
+        parameters.custom.insert(CustomParameter::new(
+            PrivateSettlementPolicyV1::parameter_id().clone(),
+            Json::try_new(&invalid).unwrap(),
+        ));
+        assert!(PrivateSettlementPolicyV1::from_parameters(&parameters).is_err());
+        assert!(invalid.to_custom_parameter().is_err());
+    }
+
+    #[test]
+    fn extension_codec_refusals_retain_original_scope_owners() {
+        let policy = PrivateSettlementPolicyV1::protocol_default();
+        let parameter = policy.to_custom_parameter().unwrap();
+        let limits = |allocated| {
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocated, usize::MAX)
+        };
+        let (decoded, usage) =
+            norito::core::with_decode_limits_measured(limits(usize::MAX), || {
+                norito::json::from_str::<PrivateSettlementPolicyV1>(parameter.payload().get())
+            });
+        assert_eq!(decoded.unwrap(), policy);
+        let demand = usage.total_allocated_bytes();
+        assert!(demand > 0);
+        for allocated in [0, demand] {
+            let error = norito::with_decode_limits_scope(limits(allocated), || {
+                PrivateSettlementPolicyV1::from_custom_parameter(&parameter)
+            })
+            .expect_err("decode or canonical rewrite must retain its local refusal");
+            let PrivateSettlementPolicyParameterErrorV1::Codec(original) = error else {
+                panic!("lost refusal: {error:?}");
+            };
+            assert_eq!(
+                original.kind(),
+                norito::core::DecodeAttemptErrorKind::EnclosingLimit
+            );
+            assert!(original.local_refusal().is_some());
+        }
+        let error = norito::with_decode_limits_scope(limits(0), || policy.to_custom_parameter())
+            .unwrap_err();
+        let PrivateSettlementPolicyParameterErrorV1::Codec(original) = error else {
+            panic!("lost encoder refusal: {error:?}");
+        };
+        assert_eq!(
+            original.kind(),
+            norito::core::DecodeAttemptErrorKind::EnclosingLimit
+        );
+        assert!(original.local_refusal().is_some());
+        assert_eq!(
+            PrivateSettlementPolicyV1::from_custom_parameter(&parameter).unwrap(),
+            policy
+        );
+    }
+
+    #[test]
+    fn extension_schedules_reject_no_op_short_drain_and_missed_boundaries() {
+        let mut policy = PrivateSettlementPolicyV1::protocol_default();
+        let mut pending = PrivateSettlementPolicyUpdateV1 {
+            scheduled_at_height: 10,
+            effective_at_height: 10 + policy.current_limits.max_expiry_blocks + 1,
+            next_limits: policy.current_limits,
+        };
+        assert_eq!(
+            pending.validate_against(&policy.current_limits),
+            Err(PrivateSettlementPolicyValidationErrorV1::NoChange)
+        );
+        pending.next_limits.max_carrier_bytes -= 1;
+        pending.validate_against(&policy.current_limits).unwrap();
+        pending.effective_at_height -= 1;
+        assert!(pending.validate_against(&policy.current_limits).is_err());
+        pending.effective_at_height += 1;
+        policy.pending_update = Some(pending);
+        policy.validate_at_committed_height(10).unwrap();
+        assert!(policy.validate_at_committed_height(9).is_err());
+        assert!(
+            policy
+                .validate_at_committed_height(pending.effective_at_height)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn original_privacy_layouts_keep_their_exact_canonical_frames() {
+        // Independently pinned from the original 90ea8ea33b layouts: ten framed u32
+        // fields, and two framed u64 heights followed by the closed unit protocol enum.
+        let limits = PrivacyConsensusLimitsV1 {
+            max_actions_per_transaction: 1,
+            max_actions_per_block: 2,
+            max_proof_bytes_per_action: 3,
+            max_action_bytes: 4,
+            max_privacy_bytes_per_transaction: 5,
+            max_privacy_bytes_per_block: 6,
+            max_statement_and_encrypted_output_bytes_per_transaction: 7,
+            max_nullifiers_per_action: 8,
+            max_commitments_per_action: 9,
+            retained_root_count: 10,
+        };
+        let limits_frame = hex::decode("4E525430000090FB35B4CE6B716EF181B8C8B4FC228300320000000000000045A4DDFD313A48AB02040100000004020000000403000000040400000004050000000406000000040700000004080000000409000000040A000000").unwrap();
+        assert_eq!(norito::encode_canonical(&limits).unwrap(), limits_frame);
+        assert_eq!(
+            norito::decode_canonical::<PrivacyConsensusLimitsV1>(&limits_frame).unwrap(),
+            limits
+        );
+        let pending = PrivacyProtocolLimitsUpdateV1 {
+            scheduled_at_height: 7,
+            effective_at_height: 8,
+            next_limits: PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1,
+        };
+        let pending_frame = hex::decode("4E5254300000F1E86538130DAD59DCBA9FF37F1B9F990017000000000000000C36AFF85B9286D9020807000000000000000808000000000000000400000000").unwrap();
+        assert_eq!(norito::encode_canonical(&pending).unwrap(), pending_frame);
+        assert_eq!(
+            norito::decode_canonical::<PrivacyProtocolLimitsUpdateV1>(&pending_frame).unwrap(),
+            pending
+        );
+    }
 
     #[test]
     fn native_policy_roundtrip_and_padding_are_exact() {
@@ -500,30 +1043,26 @@ mod tests {
         assert!(validate_private_settlement_drain_v1(1, span, 1).is_err());
         assert!(validate_private_settlement_drain_v1(2, span, 3).is_err());
         validate_private_settlement_drain_v1(2, span, 3 + span).unwrap();
-        let mut next = PrivacyConsensusLimitsV1::taira_default();
-        next.private_settlement.max_participants = 16;
-        let current = PrivacyConsensusLimitsV1::taira_default();
-        let update = PrivacyConsensusPolicyUpdateV1 {
+        let mut next = PrivateSettlementValidityLimitsV1::protocol_default();
+        next.max_participants = 16;
+        let current = PrivateSettlementValidityLimitsV1::protocol_default();
+        let update = PrivateSettlementPolicyUpdateV1 {
             scheduled_at_height: 1,
             effective_at_height: 2,
             next_limits: next,
         };
         update.validate_against(&current).unwrap();
-        let policy = PrivacyConsensusPolicyV1 {
+        let policy = PrivateSettlementPolicyV1 {
             current_limits: current,
             pending_update: Some(update),
+            protocol_closure_drain: None,
         };
         policy.validate_at_committed_height(1).unwrap();
         assert_eq!(
             private_settlement_admission_deadline_v1(&policy, None),
             Some(2)
         );
-        assert!(
-            current
-                .private_settlement
-                .validate_admission(2, 1, 2, 1, Some(2))
-                .is_err()
-        );
+        assert!(current.validate_admission(2, 1, 2, 1, Some(2)).is_err());
     }
 
     #[test]
@@ -627,26 +1166,31 @@ mod tests {
             &protocol.current_limits,
             &closed
         ));
-        let original = PrivacyConsensusPolicyV1::taira_default();
-        let original_span = original.current_limits.private_settlement.max_expiry_blocks;
+        let mut original = PrivateSettlementPolicyV1::protocol_default();
+        let original_span = original.current_limits.max_expiry_blocks;
         let activation = 10 + original_span + 1;
-        protocol.pending_update = Some(PrivacyProtocolLimitsUpdateV1 {
+        let pending = PrivacyProtocolLimitsUpdateV1 {
             scheduled_at_height: 10,
             effective_at_height: activation,
             next_limits: closed,
-            private_settlement_drain_blocks: Some(original_span),
-        });
+        };
+        protocol.pending_update = Some(pending);
+        original.protocol_closure_drain = Some(
+            PrivateSettlementProtocolClosureDrainV1::capture(protocol_id, &pending, original_span)
+                .unwrap(),
+        );
         protocol.validate_at_committed_height(20).unwrap();
-        let frame = norito::encode_canonical(&protocol).unwrap();
-        let protocol: PrivacyProtocolPolicyV1 = norito::decode_canonical(&frame).unwrap();
-        let mut later = original;
-        later.current_limits.private_settlement.max_expiry_blocks *= 2;
+        original.validate_protocol_policy(Some(&protocol)).unwrap();
+        let frame = norito::encode_canonical(&original).unwrap();
+        let mut later: PrivateSettlementPolicyV1 = norito::decode_canonical(&frame).unwrap();
+        later.current_limits.max_expiry_blocks *= 2;
+        later.validate_protocol_policy(Some(&protocol)).unwrap();
         assert_eq!(
             private_settlement_admission_deadline_v1(&later, Some(&protocol)),
             Some(activation)
         );
         assert_eq!(
-            later.current_limits.private_settlement.validate_admission(
+            later.current_limits.validate_admission(
                 2,
                 20,
                 activation,
@@ -656,10 +1200,10 @@ mod tests {
             Err(PrivateSettlementValidityErrorV1::AdmissionDrain)
         );
         let mut next = later.current_limits;
-        next.private_settlement.max_participants -= 1;
-        later.pending_update = Some(PrivacyConsensusPolicyUpdateV1 {
+        next.max_participants -= 1;
+        later.pending_update = Some(PrivateSettlementPolicyUpdateV1 {
             scheduled_at_height: 20,
-            effective_at_height: 20 + later.current_limits.private_settlement.max_expiry_blocks + 1,
+            effective_at_height: 20 + later.current_limits.max_expiry_blocks + 1,
             next_limits: next,
         });
         later.validate_at_committed_height(20).unwrap();
@@ -667,20 +1211,28 @@ mod tests {
             private_settlement_admission_deadline_v1(&later, Some(&protocol)),
             Some(activation)
         );
-        let mut malformed = protocol;
-        malformed
-            .pending_update
-            .as_mut()
-            .unwrap()
-            .private_settlement_drain_blocks = None;
-        assert!(malformed.validate().is_err());
-        let mut overflow = protocol;
+        let mut malformed = later;
+        malformed.protocol_closure_drain = None;
+        assert!(malformed.validate_protocol_policy(Some(&protocol)).is_err());
+        let mut overflow = later;
         overflow
-            .pending_update
+            .protocol_closure_drain
             .as_mut()
             .unwrap()
-            .private_settlement_drain_blocks = Some(u64::MAX);
+            .original_max_expiry_blocks = u64::MAX;
         assert!(overflow.validate().is_err());
+        for mutation in 0..4 {
+            let mut malformed = later;
+            let drain = malformed.protocol_closure_drain.as_mut().unwrap();
+            match mutation {
+                0 => drain.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
+                1 => drain.scheduled_at_height -= 1,
+                2 => drain.effective_at_height += 1,
+                _ => drain.next_limits_hash = iroha_crypto::Hash::new(b"substituted successor"),
+            }
+            assert!(malformed.validate_protocol_policy(Some(&protocol)).is_err());
+        }
+        assert!(later.validate_protocol_policy(None).is_err());
     }
 
     #[test]

@@ -12229,6 +12229,14 @@ mod decode_tests {
         world
             .smart_contract_state_mut_for_testing()
             .insert(key.clone(), original.clone());
+        let expectation_key = format!(
+            "multisig/proposal-expectation/{}/{proposal_id}",
+            iroha_crypto::HashOf::new(&account),
+        ).parse().unwrap();
+        world.smart_contract_state_mut_for_testing().insert(
+            expectation_key,
+            norito::to_bytes(&iroha_crypto::Hash::new(b"original approved execution closure")).unwrap(),
+        );
         let encoded = json::to_json(&world).unwrap();
         let ivm = IVM::new(0);
         let seed = IvmSeed {

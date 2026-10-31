@@ -1030,8 +1030,11 @@ fn active_config_at_view(
     height: u64,
     state: &iroha_core::state::StateView<'_>,
 ) -> Result<iroha_data_model::privacy::PrivateSettlementValidityLimitsV1, Response> {
-    let policy = state.world().privacy_consensus_policy();
-    let config = policy.current_limits.private_settlement;
+    let policy = iroha_data_model::privacy::PrivateSettlementPolicyV1::from_parameters(
+        state.world().parameters(),
+    )
+    .map_err(|_| private_settlement_unavailable())?;
+    let config = policy.current_limits;
     let committed_height =
         u64::try_from(state.height()).map_err(|_| private_settlement_unavailable())?;
     if committed_height != height {
@@ -1057,6 +1060,21 @@ fn active_config_at_view(
     policy
         .validate_at_committed_height(height)
         .map_err(|_| private_settlement_unavailable())?;
+    if state
+        .world()
+        .parameters()
+        .custom()
+        .get(iroha_data_model::privacy::PrivateSettlementPolicyV1::parameter_id())
+        .is_some()
+    {
+        policy
+            .validate_protocol_policy(state.world().privacy_protocol_policies().get(
+                &iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
+                    iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                ),
+            ))
+            .map_err(|_| private_settlement_unavailable())?;
+    }
     Ok(config)
 }
 
@@ -1243,10 +1261,12 @@ fn validate_phase_manifest_policy(
             iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         ),
     );
-    let deadline = iroha_data_model::privacy::private_settlement_admission_deadline_v1(
-        view.world().privacy_consensus_policy(),
-        protocol,
-    );
+    let policy = iroha_data_model::privacy::PrivateSettlementPolicyV1::from_parameters(
+        view.world().parameters(),
+    )
+    .map_err(|_| private_settlement_unavailable())?;
+    let deadline =
+        iroha_data_model::privacy::private_settlement_admission_deadline_v1(&policy, protocol);
     if manifest.validate().is_err()
         || manifest.network_id != app.state.network_id
         || config
@@ -2398,6 +2418,42 @@ mod tests {
     }
 
     #[cfg(feature = "app_api")]
+    #[test]
+    fn active_config_reads_committed_private_extension_at_its_effective_height() {
+        use iroha_core::{
+            state::World,
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        use iroha_data_model::{
+            parameter::Parameter,
+            privacy::{PrivateSettlementPolicyUpdateV1, PrivateSettlementPolicyV1},
+        };
+
+        let mut policy = PrivateSettlementPolicyV1::protocol_default();
+        let mut successor = policy.current_limits;
+        successor.max_carrier_bytes = 2 * 1024 * 1024;
+        policy.pending_update = Some(PrivateSettlementPolicyUpdateV1 {
+            scheduled_at_height: 1,
+            effective_at_height: 2,
+            next_limits: successor,
+        });
+        let mut config = TestChainConfig::new(World::default(), 1);
+        config
+            .genesis_parameters
+            .push(Parameter::Custom(policy.to_custom_parameter().unwrap()));
+        let mut chain = CertifiedTestChain::start(config).expect("signed private policy schedule");
+        assert_eq!(
+            active_config_at_view(1, &chain.state().view()).unwrap(),
+            policy.current_limits,
+        );
+        chain.commit_at(2, Vec::new());
+        assert_eq!(
+            active_config_at_view(2, &chain.state().view()).unwrap(),
+            successor
+        );
+    }
+
+    #[cfg(feature = "app_api")]
     fn terminal_read_fixture_after_admission_closure() -> (
         SharedAppState,
         iroha_data_model::nexus::PrivateSettlementReceiptV1,
@@ -2715,20 +2771,25 @@ mod tests {
         );
         assert_eq!(
             active_config_at_view(3, &current).unwrap(),
-            current
-                .world()
-                .privacy_consensus_policy()
-                .current_limits
-                .private_settlement,
+            iroha_data_model::privacy::PrivateSettlementPolicyV1::from_parameters(
+                current.world().parameters(),
+            )
+            .unwrap()
+            .current_limits,
             "the captured authenticated policy owns admission, without a local version selector"
         );
     }
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn public_receipt_preserves_unavailable_profile_and_digest_errors_without_runtime() {
+    async fn public_receipt_requires_history_and_survives_admission_closure_without_runtime() {
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
         let digest = Hash::new(b"unknown receipt bundle");
+        let uncommitted =
+            handler_bundle_receipt(State(app.clone()), Path(digest.to_string())).await;
+        assert_eq!(uncommitted.status(), StatusCode::NOT_FOUND);
+        let baseline = configured_private_settlement_chain_for_test(None);
+        Arc::get_mut(&mut app).expect("unique receipt app").state = Arc::clone(baseline.state());
         let available = handler_bundle_receipt(State(app.clone()), Path(digest.to_string())).await;
         assert_eq!(
             available.status(),
@@ -2744,9 +2805,16 @@ mod tests {
             ),
         ));
         Arc::get_mut(&mut app).expect("unique receipt app").state = Arc::clone(chain.state());
-        let unavailable =
-            handler_bundle_receipt(State(app.clone()), Path(digest.to_string())).await;
-        assert_eq!(unavailable.status(), StatusCode::NOT_FOUND);
+        assert!(
+            active_config(&app, 2).is_err(),
+            "new settlement admission is closed"
+        );
+        let pending = handler_bundle_receipt(State(app.clone()), Path(digest.to_string())).await;
+        assert_eq!(
+            pending.status(),
+            StatusCode::OK,
+            "public receipt reads survive admission closure"
+        );
         let malformed = handler_bundle_receipt(State(app), Path("invalid-digest".to_owned())).await;
         assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
     }
