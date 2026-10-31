@@ -4,9 +4,11 @@
 
 fn custom_npos_genesis_builder(include_private_input: bool) -> NetworkBuilder {
     init_instruction_registry();
-    let mut npos = SumeragiNposParameters::default();
-    npos.epoch_seed = CryptoHash::new(chain_id().into_inner().as_bytes()).into();
-    npos.max_validators = 4;
+    let npos = SumeragiNposParameters {
+        epoch_seed: CryptoHash::new(chain_id().into_inner().as_bytes()).into(),
+        max_validators: 4,
+        ..Default::default()
+    };
     NetworkBuilder::new()
         .with_peers(4)
         .with_npos_consensus()

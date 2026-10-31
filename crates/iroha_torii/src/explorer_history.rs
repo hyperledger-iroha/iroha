@@ -561,11 +561,14 @@ impl ExplorerBlockSummary {
     }
 }
 
+/// Cached block summaries keyed by height and block hash.
+type ExplorerBlockSummaryEntries = BTreeMap<(u64, [u8; 32]), Arc<ExplorerBlockSummary>>;
+
 /// Bounded summaries of committed blocks the Explorer feed has read. Committed
 /// rows are reused only when their height, hash, exact reader scope and current
 /// canonical source token all agree. Source mutation and appends invalidate reuse.
 pub struct ExplorerBlockSummaryCache {
-    entries: Mutex<BTreeMap<(u64, [u8; 32]), Arc<ExplorerBlockSummary>>>,
+    entries: Mutex<ExplorerBlockSummaryEntries>,
     capacity: usize,
 }
 

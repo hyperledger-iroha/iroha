@@ -1782,7 +1782,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         tx.payload().validate_fee_payment_intent().map_err(|err| {
             Self::signature_admission_failure(
                 tx,
-                TransactionSignatureError::InvalidFeePaymentIntent(err.to_string()),
+                &TransactionSignatureError::InvalidFeePaymentIntent(err.to_string()),
             )
         })?;
         Ok(())
@@ -1804,7 +1804,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> Result<(), AcceptTransactionFail> {
         match signature_check {
             SignatureCheck::Override(result) => {
-                return result.map_err(|error| Self::signature_admission_failure(tx, error));
+                return result.map_err(|error| Self::signature_admission_failure(tx, &error));
             }
             SignatureCheck::PrecheckedSingleEd25519 if Self::has_single_ed25519_signature(tx) => {
                 return Ok(());
@@ -1828,7 +1828,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             .map_err(|err| {
                 Self::signature_admission_failure(
                     tx,
-                    match err {
+                    &match err {
                         iroha_crypto::Error::UnsupportedImplementation(original) => {
                             TransactionSignatureError::UnsupportedImplementation(original)
                         }
@@ -1838,7 +1838,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             });
         }
         tx.verify_signature()
-            .map_err(|err| Self::signature_admission_failure(tx, err))
+            .map_err(|err| Self::signature_admission_failure(tx, &err))
     }
     fn ensure_signing_allowed(
         tx: &SignedTransaction,
@@ -2132,7 +2132,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     /// # Errors
     ///
     /// See [`AcceptTransactionFail`].
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub(crate) fn validate_with_now_with_signature_result_and_prepared_metadata(
         tx: &SignedTransaction,
         expected_network_id: &NetworkId,
@@ -2182,7 +2182,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             Some(prepared),
         )
     }
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     fn validate_with_now_and_signature_check(
         tx: &SignedTransaction,
         expected_network_id: &NetworkId,

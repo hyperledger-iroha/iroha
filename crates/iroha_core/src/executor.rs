@@ -4726,6 +4726,7 @@ fn authority_fee_asset_id(
         scope,
     ))
 }
+#[allow(clippy::too_many_arguments)]
 fn evaluate_nexus_fee_admission_payload(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -6358,7 +6359,7 @@ impl Executor {
             entry_index,
         }))
     }
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     fn execute_metered_instructions(
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -6614,7 +6615,7 @@ impl Executor {
                             self.execute_instruction_with_contract_runtime_context(
                                 state_transaction,
                                 &queued.authority,
-                                instruction,
+                                &instruction,
                                 queued.contract_runtime_context.as_ref(),
                             )?;
                         }
@@ -7217,7 +7218,7 @@ impl Executor {
         let validation_outcome = crate::validation_fee::enforce_opaque_deferred_instruction_views(
             artifacts.queued_instruction_views(),
             artifacts.queued_instruction_authority_count(),
-            artifacts.queued_instruction_views(),
+            &artifacts.queued_instruction_views(),
             state_transaction,
             runtime_origin,
         )

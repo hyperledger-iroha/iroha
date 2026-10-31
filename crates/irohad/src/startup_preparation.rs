@@ -240,8 +240,8 @@ impl PreparedStartup {
                     report.attach("lane manifest registry is not ready before snapshot restoration")
                 })?
         };
-        // Blocks at or below an upgrade checkpoint are the predecessor release's history; this
-        // release restores the World there instead of re-executing them.
+        // Blocks at or below an upgrade checkpoint are the predecessor release's history, which
+        // this release never re-executes: it restores a snapshot of its own above them.
         let upgrade_checkpoint = config
             .snapshot
             .upgrade_checkpoint
@@ -305,7 +305,7 @@ impl PreparedStartup {
                     .as_ref()
                     .map_or(0, |checkpoint| checkpoint.height);
                 return Err(Report::new(error).change_context(StartError::InitKura).attach(format!(
-                    "blocks up to the upgrade checkpoint at height {height} are the previous release's history and are never re-executed; restore needs the checkpoint snapshot or a later snapshot of this release"
+                    "blocks up to the upgrade checkpoint at height {height} are the previous release's history and are never re-executed; restore needs a snapshot of this release above the checkpoint"
                 )));
             }
             Err(error) if snapshot_failure_allows_empty_state_fallback(&error, emergency_fast) => {

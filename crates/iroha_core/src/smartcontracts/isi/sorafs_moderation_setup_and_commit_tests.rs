@@ -171,7 +171,7 @@ fn execute_initial(
     instruction: impl Into<iroha_data_model::isi::InstructionBox>,
 ) -> Result<(), InstructionExecutionError> {
     crate::executor::Executor::Initial
-        .execute_instruction(transaction, authority, instruction.into())
+        .execute_instruction(transaction, authority, &instruction.into())
         .map_err(|error| match error {
             iroha_data_model::ValidationFail::InstructionFailed(error) => error,
             other => panic!("moderation must reach its exact native handler: {other:?}"),

@@ -16,8 +16,8 @@ use iroha_data_model::{
     },
 };
 use iroha_torii_shared::resource_names_state::{
-    NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1, NATIVE_RESOURCE_NAMES_STATE_ROUTE_PREFIX_V1,
-    NativeResourceNamesStateV1, decode_unverified_native_resource_names_state_v1,
+    NATIVE_RESOURCE_NAMES_STATE_ROUTE_PREFIX_V1, NativeResourceNamesStateV1,
+    decode_unverified_native_resource_names_state_v1,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -110,9 +110,10 @@ async fn read_cut(
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await? {
         ensure!(
-            bytes.len().checked_add(chunk.len()).is_some_and(|len| len
-                <= NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1
-                && len <= ORIGINAL_MAX),
+            bytes
+                .len()
+                .checked_add(chunk.len())
+                .is_some_and(|len| len <= ORIGINAL_MAX),
             "bounded World cut required"
         );
         bytes.extend_from_slice(&chunk);

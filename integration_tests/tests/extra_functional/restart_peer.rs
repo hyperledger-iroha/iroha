@@ -332,6 +332,10 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     }
     Ok(())
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The poll receives every route-sensitive identity it digests explicitly."
+)]
 async fn wait_for_route_sensitive_state_digest(
     client: Client,
     account_id: AccountId,

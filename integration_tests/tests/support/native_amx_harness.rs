@@ -45,8 +45,7 @@ pub mod fees;
 pub mod fixture;
 #[path = "../native_amx_network/proofs.rs"]
 pub mod proofs;
-#[path = "status_poll.rs"]
-pub mod status_poll;
+use crate::status_poll;
 pub use fixture::*;
 pub use proofs::Observer;
 
@@ -102,16 +101,16 @@ pub fn submit(
                             scope,
                         )
                         .await?;
-                    let verified = verifier.verify(&proof)?;
-                    let index = verified.block().network_entrypoints().position(|entry| {
-                        matches!(entry, TransactionEntrypoint::External(signed) if signed.hash() == hash)
+                    let verified_block = verifier.verify(&proof)?;
+                    let index = verified_block.block().network_entrypoints().position(|entry| {
+                        matches!(entry, TransactionEntrypoint::External(external) if external.hash() == hash)
                     });
                     if let Some(index) = index {
-                        verified.verify_committed_transaction(
+                        verified_block.verify_committed_transaction(
                             &network_id,
-                            &proofs::evidence(verified.block(), index.try_into()?)?,
+                            &proofs::evidence(verified_block.block(), index.try_into()?)?,
                         )?;
-                        return Ok(verified);
+                        return Ok(verified_block);
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(200)).await;
@@ -199,7 +198,7 @@ pub struct ExchangeReceipt {
 }
 
 pub struct Exchange {
-    pub(crate) roots: [Root; 3],
+    pub(crate) roots: Vec<Root>,
     pub(crate) runtime: tokio::runtime::Runtime,
     pub(crate) custody: std::path::PathBuf,
 }
@@ -222,8 +221,8 @@ impl Exchange {
         Self::attach(
             global,
             runtime,
-            genesis,
-            successor,
+            &genesis,
+            &successor,
             [BankFeeProfile::Metered; 2],
             600_000,
         )
@@ -231,16 +230,12 @@ impl Exchange {
     pub(crate) fn attach(
         global: Root,
         runtime: tokio::runtime::Runtime,
-        genesis: Vec<u8>,
-        successor: Vec<u8>,
+        genesis: &[u8],
+        successor: &[u8],
         fees: [BankFeeProfile; 2],
         relay_ttl_ms: i64,
     ) -> Result<Self> {
-        let first = Root::new_with_fee_profile(
-            1,
-            Some((&global, genesis.clone(), successor.clone())),
-            fees[0],
-        )?;
+        let first = Root::new_with_fee_profile(1, Some((&global, genesis, successor)), fees[0])?;
         let second = Root::new_with_fee_profile(2, Some((&global, genesis, successor)), fees[1])?;
         runtime.block_on(first.network.start_all())?;
         runtime.block_on(second.network.start_all())?;
@@ -258,7 +253,7 @@ impl Exchange {
         let global_route = route_with_ttl(&global, custody.as_path(), relay_ttl_ms)?;
         let first_route = route_with_ttl(&first, custody.as_path(), relay_ttl_ms)?;
         let second_route = route_with_ttl(&second, custody.as_path(), relay_ttl_ms)?;
-        let mut roots = [global, first, second];
+        let mut roots = vec![global, first, second];
         roots[0].relay_layer = service(
             custody.as_path(),
             0,
@@ -401,8 +396,8 @@ impl Exchange {
         required_banks: [bool; 2],
     ) -> Result<ExchangeReceipt> {
         let mut observers = [
-            Observer::new(&self.roots[1], &self.roots[0])?,
-            Observer::new(&self.roots[2], &self.roots[0])?,
+            Box::new(Observer::new(&self.roots[1], &self.roots[0])?),
+            Box::new(Observer::new(&self.roots[2], &self.roots[0])?),
         ];
         let tx = transaction.id()?;
         let mut unavailable = [
@@ -648,7 +643,7 @@ impl Exchange {
     fn drain_heights(&self, audit_fees: bool) -> Result<[u64; 3]> {
         self.runtime.block_on(async {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
-            tokio::time::timeout_at(deadline, async {
+            Box::pin(tokio::time::timeout_at(deadline, async {
                 let mut previous = None;
                 let mut stable_since = tokio::time::Instant::now();
                 loop {
@@ -673,7 +668,7 @@ impl Exchange {
                         let mut advanced = false;
                         if audit_fees {
                             for (root, height) in self.roots.iter().zip(heights) {
-                                match fees::audit(root, height, deadline).await? {
+                                match Box::pin(fees::audit(root, height, deadline)).await? {
                                     fees::FeeCut::Exact => {},
                                     fees::FeeCut::Advanced { observed } => {
                                         eprintln!(
@@ -708,7 +703,7 @@ impl Exchange {
                     }
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }
-            })
+            }))
             .await
         })?
     }
@@ -722,7 +717,7 @@ impl Exchange {
         self.runtime.block_on(async {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
             for (root, height) in self.roots.iter().zip(heights) {
-                let cut = fees::audit(root, height, deadline).await?;
+                let cut = Box::pin(fees::audit(root, height, deadline)).await?;
                 ensure!(
                     cut == fees::FeeCut::Exact,
                     "fee audit root {} requires the exact quiescent certified tip: expected {height}, observed {cut:?}",

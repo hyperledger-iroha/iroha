@@ -1814,8 +1814,8 @@ mod app_routed_read_http_admission_tests {
         let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(
             crate::tests_runtime_handlers::world_with_account(&ALICE_ID),
         );
-        let routes = torii_visible_account_read_routes(app.as_ref(), Some(&ALICE_ID));
-        let route = collection_execution_route(app.as_ref(), &routes)
+        let visible_routes = torii_visible_account_read_routes(app.as_ref(), Some(&ALICE_ID));
+        let route = collection_execution_route(app.as_ref(), &visible_routes)
             .expect("signed accounts fixture has an execution route");
         assert!(should_execute_route_locally(app.as_ref(), route));
         let ceiling = app.query_fanout_working_set_bytes;

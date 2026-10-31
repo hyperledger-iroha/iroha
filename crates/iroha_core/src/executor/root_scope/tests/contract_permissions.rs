@@ -132,7 +132,7 @@ fn private_contract_permission_grant_and_revoke_keep_current_owner_authority() {
             );
         }
         Executor::Initial
-            .execute_instruction(&mut tx, &ALICE_ID, grant)
+            .execute_instruction(&mut tx, &ALICE_ID, &grant)
             .unwrap();
         assert!(
             crate::executor::authority_has_permission(&tx.world, &BOB_ID, &permission).unwrap()

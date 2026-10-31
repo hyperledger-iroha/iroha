@@ -13930,7 +13930,7 @@ impl<'state> StateBlock<'state> {
         .map_err(|error| {
             crate::execution_attempt::ExecutionAttemptError::Rejected(error.to_string())
         })?;
-        let mut private_changed = if let Some(pending) = private.pending_update
+        let limits_due = if let Some(pending) = private.pending_update
             && pending.effective_at_height == incoming_height
         {
             private.current_limits = pending.next_limits;
@@ -13939,13 +13939,13 @@ impl<'state> StateBlock<'state> {
         } else {
             false
         };
-        if private
+        let drain_due = private
             .protocol_closure_drain
-            .is_some_and(|drain| drain.effective_at_height == incoming_height)
-        {
+            .is_some_and(|drain| drain.effective_at_height == incoming_height);
+        if drain_due {
             private.protocol_closure_drain = None;
-            private_changed = true;
         }
+        let private_changed = limits_due || drain_due;
         // Prepare the exact retained successor before mutating either committed owner.
         // An absent extension remains absent during untouched baseline replay.
         let successor = if private_changed {
@@ -44431,7 +44431,7 @@ impl StateTransaction<'_, '_> {
         crate::validation_fee::enforce_opaque_deferred_instruction_views(
             artifacts.queued_instruction_views(),
             artifacts.queued_instruction_authority_count(),
-            artifacts.queued_instruction_views(),
+            &artifacts.queued_instruction_views(),
             self,
             None,
         )
@@ -44690,11 +44690,7 @@ impl StateTransaction<'_, '_> {
                             iroha_data_model::transaction::ExecutableBatchItem::Instruction(
                                 instruction,
                             ) => {
-                                executor.execute_instruction(
-                                    self,
-                                    authority,
-                                    instruction.clone(),
-                                )?;
+                                executor.execute_instruction(self, authority, instruction)?;
                                 executed_instructions.push(instruction.clone());
                             }
                             iroha_data_model::transaction::ExecutableBatchItem::ContractCall(
@@ -44998,7 +44994,7 @@ impl StateTransaction<'_, '_> {
                     crate::validation_fee::enforce_opaque_deferred_instruction_views(
                         artifacts.queued_instruction_views(),
                         artifacts.queued_instruction_authority_count(),
-                        artifacts.queued_instruction_views(),
+                        &artifacts.queued_instruction_views(),
                         self,
                         runtime_origin,
                     )?;
@@ -45302,7 +45298,7 @@ impl StateTransaction<'_, '_> {
                                 crate::validation_fee::enforce_opaque_deferred_instruction_views(
                                     artifacts.queued_instruction_views(),
                                     artifacts.queued_instruction_authority_count(),
-                                    artifacts.queued_instruction_views(),
+                                    &artifacts.queued_instruction_views(),
                                     self,
                                     runtime_origin,
                                 )?;
@@ -45364,7 +45360,7 @@ impl StateTransaction<'_, '_> {
     ) -> Result<ExecutionStep, ValidationFail> {
         let executor = self.world.executor.clone();
         for instruction in &instructions {
-            executor.execute_instruction(self, authority, instruction.clone())?;
+            executor.execute_instruction(self, authority, instruction)?;
         }
         Ok(instructions.into())
     }

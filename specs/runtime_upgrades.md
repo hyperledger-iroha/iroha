@@ -368,30 +368,14 @@ candidate release before it is installed ([`live_runtime_upgrades.md`](live_runt
 
 ## Adoption
 
-A running predecessor network adopts this release once, at a governed checkpoint (design §13,
-`iroha_core::state::upgrade_checkpoint`):
+Taira adopted the foundation at its upgrade checkpoint `H` with iroha a660d601da, whose one-time
+import of the predecessor's (iroha f31b64d8c5) World is deleted, with the predecessor's root rule
+(design §13). Node configuration alone authorized that import.
 
-1. **Authorize.** `iroha runtime adoption manifest --start-height A --end-height E` prints the
-   authorization in the predecessor's manifest JSON: an ABI-v1 surface the predecessor admits,
-   named `iroha:runtime:adoption:v1`, whose SBOM digest `iroha:runtime:adoption-selection:v1` is
-   this release's baseline selection. The holder of `CanManageRuntimeUpgrades` submits it with the
-   predecessor's `iroha runtime upgrade propose --file`, adding any provenance the predecessor's
-   configured policy requires.
-2. **Stop.** The predecessor admits only manifests it can activate, so it activates the
-   authorization at `A` and keeps running; validators stop together at a checkpoint `H` with
-   `A < H < E` and its signed snapshot.
-3. **Import.** With `[snapshot.upgrade_checkpoint]` locating `H`, the import rewrites the
-   predecessor's World, proves it against block `H`'s certified World root under the predecessor's
-   root rule, with the entries of the retired `runtime_upgrades` table in that root. Exactly one
-   entry must authorize this selection at `H` (activated at its start height `A`, `A < H < E`),
-   and none may be a proposal starting after `H`, which the predecessor's governance cancels
-   first; the other records are settled and leave with the table. The checkpoint block must not
-   have changed the table. Otherwise the import refuses; configuration alone never authorizes it.
-4. **Anchor.** The import builds the `AdoptionRecordV1` (network, `H` and its block hash, both
-   roots, the committee digest, the selection and the authorization's identity) and logs it.
-
-The types that read the predecessor's records reproduce its exact encoding and are deleted with
-the import once every validator has adopted.
+The checkpoint stays as the history boundary (`iroha_core::state::upgrade_checkpoint`).
+`[snapshot.upgrade_checkpoint]` names `H` and its block hash, and Kura refuses a store whose block at
+`H` has another hash. Blocks up to `H` are never re-executed or replayed: startup restores a
+snapshot of this release above `H`, and `--check-replay` refuses to start below it.
 
 ## Still open
 
@@ -412,9 +396,10 @@ Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `road
 - **Commitment and history:** complete-State commitments, which first need the node-configured
   policy cells (G1-D3, ZK delivery F.4) in committed State and a decision on how the pinned
   history meets the new root; checkpoints and the startup floor.
-- **Adoption:** recording the adoption record in committed State and every validator's
-  attestation of it, which a node starting from the anchor needs (with checkpoint bootstrap); a
-  rehearsal against a copy of Taira that proves the predecessor-record encoding end to end.
+- **Anchor:** ratifying Taira's adoption record (`AdoptionRecordV1`) in committed State through
+  governance, with every validator's attestation, which a node starting from the anchor needs
+  (with checkpoint bootstrap); then deleting the startup re-validation of Taira's signed genesis
+  policy.
 
 Parliament lifecycle parameter updates are validated, but Core still needs the frozen
 governance-clock policy and anonymous-ballot integration owned by

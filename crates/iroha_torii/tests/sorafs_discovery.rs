@@ -1623,7 +1623,7 @@ struct ToriiHarness {
 }
 // Query fixtures retain their actual original genesis or live certified chain.
 enum PinReadbackHistory {
-    Prepared(PreparedTestChainConfig),
+    Prepared(Box<PreparedTestChainConfig>),
     Running(Box<CertifiedTestChain>),
 }
 impl ToriiHarness {
@@ -2136,7 +2136,9 @@ fn build_torii_harness_with_history(
         (
             Arc::clone(&original.state),
             Arc::clone(&original.kura),
-            Some(Mutex::new(Some(PinReadbackHistory::Prepared(original)))),
+            Some(Mutex::new(Some(PinReadbackHistory::Prepared(Box::new(
+                original,
+            ))))),
         )
     } else {
         let kura = Kura::blank_kura_for_testing();
@@ -2689,7 +2691,7 @@ async fn sorafs_routes_disabled_when_cache_off() {
         .await
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_discovery_without_local_trust_starts_with_no_admitted_providers() {
@@ -2721,7 +2723,7 @@ async fn sorafs_discovery_without_local_trust_starts_with_no_admitted_providers(
             .len(),
         0
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_routes_enabled_with_native_admission() {
@@ -2760,7 +2762,7 @@ async fn sorafs_routes_enabled_with_native_admission() {
             .expect("providers array")
             .is_empty()
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_capacity_route_disabled_when_storage_off() {
@@ -2778,7 +2780,7 @@ async fn sorafs_capacity_route_disabled_when_storage_off() {
         .await
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_queues_caller_signed_transaction_when_storage_off() {
@@ -2845,7 +2847,7 @@ async fn sorafs_pin_register_queues_caller_signed_transaction_when_storage_off()
             .any(|transaction| transaction.hash() == submitted_hash),
         "the dedicated route must queue the original caller-signed transaction unchanged"
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[test]
 #[should_panic(
@@ -2905,7 +2907,7 @@ async fn sorafs_capacity_route_enabled_when_storage_on() {
             .expect("fee_ledger array")
             .is_empty()
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn retired_storage_ingest_and_fetch_are_not_mounted_and_inventory_requires_authentication() {
@@ -2961,7 +2963,7 @@ async fn retired_storage_ingest_and_fetch_are_not_mounted_and_inventory_requires
         .await
         .expect("unsigned malformed storage fetch response");
     assert_eq!(fetch_response.status(), StatusCode::NOT_FOUND);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 fn pin_register_json_body(transaction: &SignedTransaction) -> Vec<u8> {
     // The model serializer owns the inner payload. Torii's versioned ingress
@@ -3084,7 +3086,7 @@ async fn pin_register_json_fixture_roundtrips_through_the_public_http_route() {
             fixture.transaction.encode_versioned()
         );
     }
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 
 fn pin_register_http_request(body: Vec<u8>, content_type: &'static str) -> Request<Body> {
@@ -3165,7 +3167,7 @@ async fn sorafs_pin_register_route_accepts_caller_signed_transaction() {
             .any(|transaction| transaction.hash() == submitted_hash),
         "the dedicated route must queue the original caller-signed transaction unchanged"
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
@@ -3196,7 +3198,7 @@ async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
         "pin register Norito transaction failed: {status} body={}",
         String::from_utf8_lossy(&body)
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_validates_signed_manifest_bytes() {
@@ -3225,7 +3227,7 @@ async fn sorafs_pin_register_validates_signed_manifest_bytes() {
         "sorafs_pin_manifest_payload_invalid",
         "chunker descriptor mismatch",
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
@@ -3253,7 +3255,7 @@ async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
         StatusCode::BAD_REQUEST,
         "the removed secret-bearing DTO must fail closed"
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
@@ -3352,7 +3354,7 @@ async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
         "shape, network and signature adversaries must never enter the queue"
     );
     drop(state_view);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
@@ -3376,7 +3378,7 @@ async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
         .await
         .expect("router responds");
     assert_eq!(invalid_norito.status(), StatusCode::BAD_REQUEST);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 // World-only query setup is captured by an actual original native publication.
 // Successors contain the test chain's signed clock work; no empty block is fabricated.
@@ -3389,7 +3391,7 @@ fn commit_pin_readback_fixture(harness: &ToriiHarness) {
         .expect("native query history lock");
     let chain = match owner.take().expect("original native history") {
         PinReadbackHistory::Prepared(original) => Box::new(
-            CertifiedTestChain::from_prepared(original)
+            CertifiedTestChain::from_prepared(*original)
                 .expect("actual genesis executes and publishes"),
         ),
         PinReadbackHistory::Running(mut chain) => {
@@ -3736,7 +3738,7 @@ async fn sorafs_pin_manifest_rejects_noncanonical_digest_and_cursor() {
             "query={query}"
         );
     }
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_pin_manifest_distinguishes_missing_record_and_unavailable_anchor() {
@@ -3776,7 +3778,7 @@ async fn sorafs_pin_manifest_distinguishes_missing_record_and_unavailable_anchor
         pin_readback_status(&harness, &anchored_missing).await,
         StatusCode::CONFLICT
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -3910,7 +3912,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_and_fresh_alias_projection
         pin_readback_status(&harness, &stale).await,
         StatusCode::CONFLICT
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -3977,7 +3979,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_refreshing_alias() {
         .expect("proof age");
     assert!(age >= positive_ttl.saturating_sub(refresh_window));
     assert!(age <= refresh_age.saturating_add(5));
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -4039,7 +4041,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_stale_alias() {
             .iter()
             .any(|reason| reason.as_str() == Some("ExpiredTTL"))
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -4096,7 +4098,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_expired_alias() {
             .iter()
             .any(|reason| reason.as_str() == Some("HardExpired"))
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -4168,7 +4170,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_revoked_alias_project
             .get(&Name::from_str(GOVERNANCE_REFS_KEY).unwrap())
             .is_some()
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -4268,7 +4270,7 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
             .and_then(json::Value::as_str),
         Some(expected_successor_iso.as_str())
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_alias_listing_reports_governance_revocation() {
@@ -4353,7 +4355,7 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
             .and_then(json::Value::as_u64),
         Some(effective_at)
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 include!("sorafs_discovery/storage_path_fixture.rs");
 include!("sorafs_discovery/fixture_key_mismatch_test.rs");

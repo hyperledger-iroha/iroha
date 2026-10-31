@@ -237,7 +237,7 @@ fn observer_node_catches_up() -> Result<()> {
         let deadline = std::time::Instant::now() + sync_timeout;
         let peer_id = peer.id().to_string();
         let mut last_note: Option<String> = None;
-        let mut last_znote: Option<String> = None;
+        let mut last_zone_note: Option<String> = None;
         loop {
             let client = peer.client();
             let accounts = client.client().query(FindAccounts).execute_all().unwrap();
@@ -249,14 +249,14 @@ fn observer_node_catches_up() -> Result<()> {
                 last_note = Some(note.as_ref().to_string());
             }
             if let Some(znote) = alice.metadata().get(&znote_key) {
-                last_znote = Some(znote.as_ref().to_string());
+                last_zone_note = Some(znote.as_ref().to_string());
             }
-            if last_note.as_deref() == Some("v4") && last_znote.as_deref() == Some("v5") {
+            if last_note.as_deref() == Some("v4") && last_zone_note.as_deref() == Some("v5") {
                 return Ok(());
             }
             if std::time::Instant::now() >= deadline {
                 return Err(eyre!(
-                    "peer {peer_id} did not observe note=v4/znote=v5 within {sync_timeout:?} (last note={last_note:?}, znote={last_znote:?})"
+                    "peer {peer_id} did not observe note=v4/znote=v5 within {sync_timeout:?} (last note={last_note:?}, znote={last_zone_note:?})"
                 ));
             }
             std::thread::sleep(std::time::Duration::from_millis(200));

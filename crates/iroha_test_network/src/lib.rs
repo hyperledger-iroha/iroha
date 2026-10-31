@@ -12421,9 +12421,11 @@ mod tests {
     #[test]
     fn genesis_consensus_metadata_matches_shared_runtime_derivation_for_npos() {
         init_instruction_registry();
-        let mut npos = SumeragiNposParameters::default();
-        npos.max_validators = 4;
-        npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
+        let npos = SumeragiNposParameters {
+            max_validators: 4,
+            epoch_length_blocks: std::num::NonZeroU64::new(3_600).unwrap(),
+            ..Default::default()
+        };
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(4)
@@ -14355,8 +14357,10 @@ mod tests {
     }
     #[test]
     fn npos_genesis_snapshot_parser_rejects_invalid_payload() {
-        let mut invalid = SumeragiNposParameters::default();
-        invalid.epoch_seed = [0; 32];
+        let invalid = SumeragiNposParameters {
+            epoch_seed: [0; 32],
+            ..Default::default()
+        };
         let genesis = vec![vec![InstructionBox::from(SetParameter::new(
             Parameter::Custom(invalid.into_custom_parameter()),
         ))]];

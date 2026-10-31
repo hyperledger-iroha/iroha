@@ -124,13 +124,12 @@ fn native_bank_read_role_revocation_preserves_debit_after_restart() -> Result<()
 fn run_read_role_revocation(exchange: &Exchange) -> Result<()> {
     let (_, approvals) = exchange.intent(300, 0xA3)?;
     let mut approved = Vec::new();
-    for bank in 0..2 {
+    for (bank, approval) in approvals.iter().enumerate() {
         let block = submit(
             &exchange.roots[bank + 1],
             &payer(bank),
             vec![
-                Grant::account_permission(approvals[bank].permission()?, account(&relay(bank + 1)))
-                    .into(),
+                Grant::account_permission(approval.permission()?, account(&relay(bank + 1))).into(),
             ],
             &exchange.runtime,
         )?;
@@ -138,7 +137,7 @@ fn run_read_role_revocation(exchange: &Exchange) -> Result<()> {
             .runtime
             .block_on(proofs::assert_privileged_bank_approval(
                 &exchange.roots[bank + 1],
-                &approvals[bank],
+                approval,
                 &block,
             ))?;
         approved.push(block);

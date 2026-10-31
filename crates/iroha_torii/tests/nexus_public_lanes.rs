@@ -66,9 +66,7 @@ async fn nexus_public_lane_endpoints_exist() {
     let router = build_test_router(&Arc::new(state), &kura, &local_peer_id);
     let resp = fixtures::request(
         &router,
-        with_loopback_connect_info(fixtures::get_request(
-            ("/v1/nexus/public-lanes/0/validators"),
-        )),
+        with_loopback_connect_info(fixtures::get_request("/v1/nexus/public-lanes/0/validators")),
     )
     .await
     .unwrap();
@@ -76,7 +74,7 @@ async fn nexus_public_lane_endpoints_exist() {
     fixtures::response_body(resp, "public lane endpoint response").await;
     let resp = fixtures::request(
         &router,
-        with_loopback_connect_info(fixtures::get_request(("/v1/nexus/public-lanes/0/stake"))),
+        with_loopback_connect_info(fixtures::get_request("/v1/nexus/public-lanes/0/stake")),
     )
     .await
     .unwrap();
@@ -95,9 +93,7 @@ async fn nexus_public_lane_endpoints_list_records() {
     let router = build_test_router(&Arc::new(state), &kura, &local_peer_id);
     let resp = fixtures::request(
         &router,
-        with_loopback_connect_info(fixtures::get_request(
-            ("/v1/nexus/public-lanes/0/validators"),
-        )),
+        with_loopback_connect_info(fixtures::get_request("/v1/nexus/public-lanes/0/validators")),
     )
     .await
     .unwrap();
@@ -114,7 +110,7 @@ async fn nexus_public_lane_endpoints_list_records() {
     );
     let resp = fixtures::request(
         &router,
-        with_loopback_connect_info(fixtures::get_request(("/v1/nexus/public-lanes/0/stake"))),
+        with_loopback_connect_info(fixtures::get_request("/v1/nexus/public-lanes/0/stake")),
     )
     .await
     .unwrap();

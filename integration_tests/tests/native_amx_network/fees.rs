@@ -31,7 +31,7 @@ pub async fn audit(root: &Root, height: u64, deadline: tokio::time::Instant) -> 
         (2..=128).contains(&height),
         "fee audit exceeded the fixture's finite history bound"
     );
-    tokio::time::timeout_at(deadline, async {
+    Box::pin(tokio::time::timeout_at(deadline, async {
         // The ordinary query supplies only an original value. It becomes evidence only
         // after its exact canonical preimage matches the independently authenticated cut.
         let definition = root
@@ -153,7 +153,7 @@ pub async fn audit(root: &Root, height: u64, deadline: tokio::time::Instant) -> 
             }
         }
         Ok(FeeCut::Exact)
-    })
+    }))
     .await
     .map_err(|_| eyre!("fee audit deadline exceeded for root {} at expected height {height}", root.index))?
 }

@@ -81,7 +81,7 @@ fn wait_for_role_permission_state(
                         return;
                     }
                 } else {
-                    last_observed = "role not found".to_owned();
+                    "role not found".clone_into(&mut last_observed);
                 }
             }
             Err(err) => {

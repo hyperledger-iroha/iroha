@@ -856,7 +856,7 @@ fn signed_imported_wrong_returns_roll_back_child_root_and_real_xor_principal() {
             &fixture,
             &before,
             (label, valid),
-            signed,
+            &signed,
             child_hash,
             child_ordinal,
             &mut cache,

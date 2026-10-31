@@ -1342,7 +1342,7 @@ async fn wait_for_tx_applied(
                                 if let Some(block_height) = pipeline_status_block_height(&payload) {
                                     return Ok(block_height);
                                 }
-                                last_kind = "Applied without block_height".to_owned();
+                                "Applied without block_height".clone_into(&mut last_kind);
                             }
                             "Rejected" => {
                                 return Err(eyre!(
@@ -1642,6 +1642,10 @@ async fn wait_for_contract_applied_height(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The snapshot mirrors each lifecycle flag of the Torii contract JSON one-to-one."
+)]
 struct ContractLifecycleSnapshot {
     version: u64,
     active: bool,

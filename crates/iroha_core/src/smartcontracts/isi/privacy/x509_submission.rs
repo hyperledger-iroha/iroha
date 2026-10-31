@@ -132,7 +132,7 @@ pub(super) fn execute_x509_after_admission(
         statement,
         &snapshot,
         selected_key,
-        effect,
+        &effect,
         statement_digest,
         expected_action_index,
         encoded_action_bytes,

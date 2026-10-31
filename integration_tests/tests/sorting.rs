@@ -145,7 +145,7 @@ where
 }
 fn wait_for_sorted_asset_definitions(
     client: &Client,
-    sorting: Sorting,
+    sorting: &Sorting,
     included_asset_definitions: &HashSet<AssetDefinitionId>,
     expected_asset_definitions: &[AssetDefinitionId],
 ) -> Result<Vec<AssetDefinition>> {
@@ -192,7 +192,7 @@ fn wait_for_sorted_asset_definitions(
 }
 fn wait_for_sorted_accounts(
     client: &Client,
-    sorting: Sorting,
+    sorting: &Sorting,
     included_accounts: &HashSet<AccountId>,
     expected_accounts: &[AccountId],
 ) -> Result<Vec<Account>> {
@@ -238,7 +238,7 @@ fn wait_for_sorted_accounts(
 }
 fn wait_for_sorted_domains(
     client: &Client,
-    sorting: Sorting,
+    sorting: &Sorting,
     included_domains: &HashSet<DomainId>,
     expected_domains: &[DomainId],
 ) -> Result<Vec<Domain>> {
@@ -323,7 +323,7 @@ fn correct_sorting_of_entities() -> Result<()> {
     let expected_asset_definitions = asset_definitions.iter().rev().cloned().collect::<Vec<_>>();
     let res = wait_for_sorted_asset_definitions(
         &test_client,
-        Sorting::by_metadata_key(sort_by_metadata_key.clone()),
+        &Sorting::by_metadata_key(sort_by_metadata_key.clone()),
         &included_asset_definitions,
         &expected_asset_definitions,
     )?;
@@ -361,7 +361,7 @@ fn correct_sorting_of_entities() -> Result<()> {
     let expected_accounts = accounts.iter().rev().cloned().collect::<Vec<_>>();
     let res = wait_for_sorted_accounts(
         &test_client,
-        Sorting::by_metadata_key(sort_by_metadata_key.clone()),
+        &Sorting::by_metadata_key(sort_by_metadata_key.clone()),
         &included_accounts,
         &expected_accounts,
     )?;
@@ -397,7 +397,7 @@ fn correct_sorting_of_entities() -> Result<()> {
     let expected_domains = domains.iter().rev().cloned().collect::<Vec<_>>();
     let res = wait_for_sorted_domains(
         &test_client,
-        Sorting::by_metadata_key(sort_by_metadata_key.clone()),
+        &Sorting::by_metadata_key(sort_by_metadata_key.clone()),
         &included_domains,
         &expected_domains,
     )?;
@@ -433,7 +433,7 @@ fn correct_sorting_of_entities() -> Result<()> {
     let expected_domains = vec![domains[1].clone(), domains[0].clone(), domains[2].clone()];
     let res = wait_for_sorted_domains(
         &test_client,
-        Sorting::by_metadata_key(sort_by_metadata_key),
+        &Sorting::by_metadata_key(sort_by_metadata_key),
         &included_domains,
         &expected_domains,
     )?;
@@ -558,7 +558,7 @@ fn sort_only_elements_which_have_sorting_key() -> Result<()> {
         .collect::<Vec<_>>();
     let _ = wait_for_sorted_accounts(
         &test_client,
-        Sorting::by_metadata_key(sort_by_metadata_key),
+        &Sorting::by_metadata_key(sort_by_metadata_key),
         &included_accounts,
         &accounts,
     )

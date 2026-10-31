@@ -782,7 +782,7 @@ fn prepare_genesis(
             genesis_account,
             consensus_mode,
         },
-        StartupIdentity {
+        &StartupIdentity {
             instance,
             root_scope,
             tip,
@@ -857,7 +857,7 @@ fn prepare_restored(
         })?;
     assemble_prepared(
         inputs,
-        StartupIdentity {
+        &StartupIdentity {
             instance,
             root_scope,
             tip,

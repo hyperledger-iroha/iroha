@@ -36,8 +36,7 @@ use iroha_test_network::{Network, NetworkBuilder};
 use iroha_test_samples::ALICE_ID;
 use sha2::{Digest as _, Sha256};
 
-#[path = "support/status_poll.rs"]
-mod status_poll;
+use crate::status_poll;
 
 #[path = "native_payment_network/concurrent_gateways.rs"]
 mod concurrent_gateways;

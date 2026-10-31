@@ -249,6 +249,17 @@ where
 {
     decode_state_with_current(bytes, label, None, None)
 }
+#[cfg(test)]
+fn decode_state_for_current<T>(
+    bytes: &[u8],
+    label: &str,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<T, InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    decode_state_with_current(bytes, label, Some(current), None)
+}
 fn decode_state_with_current<T>(
     bytes: &[u8],
     label: &str,

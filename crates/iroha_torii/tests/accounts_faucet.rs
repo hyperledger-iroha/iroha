@@ -1,6 +1,5 @@
 //! Torii account faucet tests.
 #![cfg(feature = "app_api")]
-use crate::fixtures;
 use axum::{body::to_bytes, http::Request, response::Response};
 use http::StatusCode;
 use iroha_core::{
@@ -964,11 +963,10 @@ async fn accounts_faucet_repeated_claims_do_not_spend_without_local_authority() 
     let user_asset_id = AssetId::new(asset_definition_id.clone(), user_id.clone());
     assert!(view.world().asset(&user_asset_id).is_err());
     let authority_asset_id = AssetId::new(asset_definition_id, authority_id);
-    let authority_balance = view
-        .world()
-        .asset(&authority_asset_id)
-        .map(|asset| asset.value().as_ref().to_string())
-        .unwrap_or_else(|_| "0".to_owned());
+    let authority_balance = view.world().asset(&authority_asset_id).map_or_else(
+        |_| "0".to_owned(),
+        |asset| asset.value().as_ref().to_string(),
+    );
     assert_eq!(authority_balance, "50000");
     app.shutdown().await;
 }

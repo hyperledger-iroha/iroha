@@ -490,7 +490,7 @@ async fn candidate_testing_borrowed_and_user_executor_dispatch_cannot_inherit_di
                     0 => crate::executor::Executor::Initial.execute_instruction(
                         &mut tx,
                         signed.authority(),
-                        instruction.clone(),
+                        &instruction,
                     ),
                     1 => crate::executor::Executor::Initial.execute_borrowed_overlay_instruction(
                         &mut tx,
@@ -498,11 +498,7 @@ async fn candidate_testing_borrowed_and_user_executor_dispatch_cannot_inherit_di
                         instruction,
                         None,
                     ),
-                    _ => denying.execute_instruction(
-                        &mut tx,
-                        signed.authority(),
-                        instruction.clone(),
-                    ),
+                    _ => denying.execute_instruction(&mut tx, signed.authority(), &instruction),
                 };
                 if dispatch == 2 {
                     assert!(matches!(

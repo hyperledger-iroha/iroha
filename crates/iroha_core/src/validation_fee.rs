@@ -1444,7 +1444,7 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
                 .map(move |instruction| (authority, instruction))
         }),
         groups.len(),
-        ordered
+        &ordered
             .iter()
             .map(|(authority, instruction)| (authority, instruction)),
         stx,

@@ -398,7 +398,7 @@ fn linked_fi_controller_requires_current_owner_consent_frame_and_beneficial_exce
         Executor::Initial.execute_instruction_with_contract_runtime_context(
             tx,
             &context.contract_subject,
-            value.into(),
+            &value.into(),
             frame,
         )
     };

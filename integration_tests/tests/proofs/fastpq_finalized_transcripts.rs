@@ -249,7 +249,7 @@ fn certified_tip(network: &Network, client: &Client, height: u64) -> Result<Veri
             NonZeroU64::new(next).expect("positive bounded height"),
             verifier.root_scope(),
         )?;
-        let verified = verifier.verify(&proof)?;
+        let verified_block = verifier.verify(&proof)?;
         let members: BTreeSet<_> = proof
             .committee
             .iter()
@@ -260,7 +260,7 @@ fn certified_tip(network: &Network, client: &Client, height: u64) -> Result<Veri
             "finality committee differs from provisioned validators"
         );
         if next > 1 {
-            let certificate = verified
+            let certificate = verified_block
                 .block()
                 .commit_certificate()
                 .ok_or_else(|| eyre!("certified successor lacks embedded certificate"))?;
@@ -287,11 +287,15 @@ fn certified_tip(network: &Network, client: &Client, height: u64) -> Result<Veri
             Instant::now() < deadline,
             "contiguous native finality exceeded deadline"
         );
-        tip = Some(verified);
+        tip = Some(verified_block);
     }
     tip.ok_or_else(|| eyre!("empty verified prefix"))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The transcript check receives each verified block, transaction and balance input explicitly."
+)]
 fn check_transcript(
     network: &Network,
     verified: &VerifiedSumeragiBlock,

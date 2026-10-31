@@ -165,9 +165,7 @@ async fn wait_for_invoice_status(
                         .execute_all().map_or_else(|err| format!("trigger query failed: {err}"), |triggers| {
                             triggers
                                 .into_iter()
-                                .find(|trigger| trigger.id() == &trigger_id)
-                                .map(|trigger| format!("{:?}", trigger.action()))
-                                .unwrap_or_else(|| "missing".to_string())
+                                .find(|trigger| trigger.id() == &trigger_id).map_or_else(|| "missing".to_string(), |trigger| format!("{:?}", trigger.action()))
                         });
                     let latest_block = client
                         .client().query(FindBlockHeaders)

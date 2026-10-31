@@ -131,7 +131,7 @@ pub fn before_payout(
         network,
         output,
         submitter,
-        transaction,
+        &transaction,
         &outgoing_disabled(),
         expected_balances,
         "reserve-outgoing-disabled",

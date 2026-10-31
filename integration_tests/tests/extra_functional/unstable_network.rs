@@ -372,7 +372,7 @@ enum GenesisPeer {
     Nth(usize),
 }
 fn scaled_timeout(base: Duration, peer_count: usize) -> Duration {
-    let scale = peer_count.div_ceil(4).max(1) as u32;
+    let scale = u32::try_from(peer_count.div_ceil(4).max(1)).unwrap_or(u32::MAX);
     base.saturating_mul(scale)
 }
 fn non_faulty_sync_timeout(
@@ -504,11 +504,11 @@ async fn start_network_under_relay(
                 let trusted_peers = relay.trusted_peers_for(&peer.id());
                 let trusted_peers_list = trusted_peers
                     .iter()
-                    .map(|peer| peer.to_string())
+                    .map(std::string::ToString::to_string)
                     .collect::<Vec<_>>();
                 let mut trusted_peers_pop = Vec::new();
                 let mut seen = HashSet::new();
-                for trusted in trusted_peers.iter() {
+                for trusted in &trusted_peers {
                     let peer_id = trusted.id();
                     if !seen.insert(peer_id.clone()) {
                         continue;
@@ -545,8 +545,9 @@ async fn start_network_under_relay(
                 let genesis = Some(genesis_block.clone());
                 async move {
                     if start_stage > 0 {
-                        let delay = Duration::from_millis(200)
-                            .checked_mul(start_stage as u32)
+                        let delay = u32::try_from(start_stage)
+                            .ok()
+                            .and_then(|stage| Duration::from_millis(200).checked_mul(stage))
                             .unwrap_or(Duration::from_secs(u64::MAX));
                         if delay > Duration::ZERO {
                             tokio::time::sleep(delay).await;
@@ -927,33 +928,33 @@ async fn block_after_genesis_is_synced() -> Result<()> {
 }
 // ======= ACTUAL TESTS BEGIN HERE =======
 struct UnstableNetwork {
-    n_peers: usize,
-    n_faulty_peers: usize,
-    n_rounds: usize,
+    peers: usize,
+    faulty_peers: usize,
+    rounds: usize,
 }
 impl UnstableNetwork {
     async fn run(self) -> Result<()> {
-        if !is_valid_committee_size(self.n_peers) {
+        if !is_valid_committee_size(self.peers) {
             return Err(eyre!(
                 "expected an exact revision-4 3f + 1 committee in 4..=31, got {} peers",
-                self.n_peers
+                self.peers
             ));
         }
-        if self.n_peers <= self.n_faulty_peers {
+        if self.peers <= self.faulty_peers {
             return Err(eyre!(
                 "expected more peers than faulty peers (peers={}, faulty={})",
-                self.n_peers,
-                self.n_faulty_peers
+                self.peers,
+                self.faulty_peers
             ));
         }
-        let commit_quorum = iroha_sumeragi::types::quorum(self.n_peers);
-        let fault_budget = Self::fault_budget_for_peer_count(self.n_peers);
-        if self.n_faulty_peers > fault_budget {
+        let commit_quorum = iroha_sumeragi::types::quorum(self.peers);
+        let fault_budget = Self::fault_budget_for_peer_count(self.peers);
+        if self.faulty_peers > fault_budget {
             return Err(eyre!(
                 "faulty peers ({}) exceed commit quorum budget ({}) for {} peers (commit quorum {})",
-                self.n_faulty_peers,
+                self.faulty_peers,
                 fault_budget,
-                self.n_peers,
+                self.peers,
                 commit_quorum
             ));
         }
@@ -987,7 +988,7 @@ impl UnstableNetwork {
         .await?;
         let init_blocks = 1;
         let preexisting_faulty_ids =
-            Self::wait_for_initial_sync_budget(&network, init_blocks, self.n_faulty_peers).await?;
+            Self::wait_for_initial_sync_budget(&network, init_blocks, self.faulty_peers).await?;
         let peers = network.peers();
         let initial_non_empty = peers
             .iter()
@@ -1000,7 +1001,7 @@ impl UnstableNetwork {
             asset_definition_id: &asset_definition_id,
             account_id: &account_id,
         };
-        for i in 0..self.n_rounds {
+        for i in 0..self.rounds {
             self.execute_round(
                 i,
                 &round_ctx,
@@ -1011,15 +1012,9 @@ impl UnstableNetwork {
             )
             .await?;
         }
-        let expected_height =
-            round_ctx.initial_non_empty + u64::try_from(self.n_rounds).unwrap_or(0);
-        Self::assert_total_supply(
-            &network,
-            &asset_definition_id,
-            self.n_rounds,
-            expected_height,
-        )
-        .await?;
+        let expected_height = round_ctx.initial_non_empty + u64::try_from(self.rounds).unwrap_or(0);
+        Self::assert_total_supply(&network, &asset_definition_id, self.rounds, expected_height)
+            .await?;
         Ok(())
     }
     fn fault_budget_for_peer_count(peer_count: usize) -> usize {
@@ -1093,7 +1088,7 @@ impl UnstableNetwork {
             candidates
                 .iter()
                 .filter(|peer| !seen.contains(*peer))
-                .choose_multiple(&mut rng, remaining)
+                .sample(&mut rng, remaining)
                 .into_iter()
                 .cloned(),
         );
@@ -1102,7 +1097,7 @@ impl UnstableNetwork {
     fn build_network(&self, asset_definition_id: &AssetDefinitionId) -> Network {
         let builder = NetworkBuilder::new()
             .with_auto_populated_trusted_peers()
-            .with_peers(self.n_peers)
+            .with_peers(self.peers)
             .with_default_block_cadence()
             // Slow gossip slightly so the relay toggles mirror the higher RTT budget of
             // the default consensus pipeline.
@@ -1165,12 +1160,13 @@ impl UnstableNetwork {
             let mut ready = 0usize;
             let mut lagging = Vec::new();
             for peer in network.peers().iter().filter(|peer| peer.is_running()) {
-                let non_empty = match peer.status().await {
-                    Ok(status) => BlockHeight::from(status).non_empty,
-                    Err(_) => peer
-                        .best_effort_block_height()
-                        .map_or(0, |height| height.non_empty),
-                };
+                let non_empty = peer.status().await.map_or_else(
+                    |_| {
+                        peer.best_effort_block_height()
+                            .map_or(0, |height| height.non_empty)
+                    },
+                    |status| BlockHeight::from(status).non_empty,
+                );
                 if non_empty >= target_height {
                     ready += 1;
                 } else {
@@ -1220,11 +1216,7 @@ impl UnstableNetwork {
         peers: &[NetworkPeer],
         preferred_faulty_ids: &HashSet<PeerId>,
     ) -> Result<()> {
-        iroha_logger::info!(
-            round = round_index + 1,
-            total = self.n_rounds,
-            "Begin round"
-        );
+        iroha_logger::info!(round = round_index + 1, total = self.rounds, "Begin round");
         let target_height = ctx.initial_non_empty + (round_index as u64) + 1;
         let chain_id = network.chain_id();
         let peer_ids: Vec<_> = peers.iter().map(NetworkPeer::id).collect();
@@ -1239,12 +1231,11 @@ impl UnstableNetwork {
             .first()
             .cloned()
             .expect("topology always has a leader");
-        let fault_budget = Self::fault_budget_for_peer_count(self.n_peers);
-        let fault_round_seed =
-            Self::fault_round_seed(round_index, self.n_faulty_peers, fault_budget);
+        let fault_budget = Self::fault_budget_for_peer_count(self.peers);
+        let fault_round_seed = Self::fault_round_seed(round_index, self.faulty_peers, fault_budget);
         let faulty_ids: HashSet<_> = Self::select_faulty_peer_ids(
             &peer_ids,
-            self.n_faulty_peers,
+            self.faulty_peers,
             fault_round_seed,
             &chain_id,
             target_height,
@@ -1259,10 +1250,10 @@ impl UnstableNetwork {
             .collect();
         let sync_timeout = scaled_timeout(network.sync_timeout(), peers.len());
         let relay_pause =
-            non_faulty_sync_timeout(sync_timeout, network.block_cadence(), self.n_faulty_peers);
+            non_faulty_sync_timeout(sync_timeout, network.block_cadence(), self.faulty_peers);
         let min_ttl = sync_timeout.saturating_add(Duration::from_secs(300));
-        let submit_while_partitioned = self.n_faulty_peers <= 1;
-        let stagger_faults = self.n_faulty_peers > 1;
+        let submit_while_partitioned = self.faulty_peers <= 1;
+        let stagger_faults = self.faulty_peers > 1;
         let primary_peer = peers
             .iter()
             .find(|peer| peer.id() == leader_id)
@@ -1350,7 +1341,7 @@ impl UnstableNetwork {
         if stagger_faults {
             let max_stagger_pause = network.block_cadence().max(Duration::from_secs(2));
             let per_peer_pause = relay_pause
-                .checked_div(u32::try_from(self.n_faulty_peers).unwrap_or(1))
+                .checked_div(u32::try_from(self.faulty_peers).unwrap_or(1))
                 .unwrap_or(Duration::from_secs(1))
                 .max(Duration::from_millis(200))
                 .min(max_stagger_pause);
@@ -1519,7 +1510,7 @@ impl UnstableNetwork {
         let supply_deadline = supply_start + sync_timeout;
         let initial_resubmit_at =
             supply_start + initial_resubmit_delay(sync_timeout, network.block_cadence());
-        let allow_resubmit = allow_supply_resubmit(self.n_faulty_peers);
+        let allow_resubmit = allow_supply_resubmit(self.faulty_peers);
         let supply_peers: Vec<_> = peers
             .iter()
             .filter(|peer| !faulty_ids.contains(&peer.id()))
@@ -1590,12 +1581,12 @@ impl UnstableNetwork {
                 next_resubmit_at = Instant::now() + submit_retry_backoff(attempt);
             }
             if now >= supply_deadline {
-                if allow_round_supply_deadline_slip(self.n_faulty_peers) {
+                if allow_round_supply_deadline_slip(self.faulty_peers) {
                     iroha_logger::warn!(
                         ?expected_supply,
                         ?last_seen,
                         ?last_height,
-                        faulty_peers = self.n_faulty_peers,
+                        faulty_peers = self.faulty_peers,
                         target_height,
                         "round supply did not converge before deadline; continuing and relying on final supply assertion"
                     );
@@ -1778,8 +1769,7 @@ mod tests {
         let height = 3_u64;
         let rotated = topology_for_permissioned_round(&peer_ids, &chain_id, height, 0);
         let preferred = rotated
-            .iter()
-            .nth(1)
+            .get(1)
             .expect("test roster should have a safe preferred peer")
             .clone();
         let preferred_faulty_ids = HashSet::from([preferred.clone()]);
@@ -1918,9 +1908,9 @@ mod tests {
 #[tokio::test]
 async fn unstable_network_4_peers_1_fault() -> Result<()> {
     UnstableNetwork {
-        n_peers: 4,
-        n_faulty_peers: 1,
-        n_rounds: 5,
+        peers: 4,
+        faulty_peers: 1,
+        rounds: 5,
     }
     .run()
     .await
@@ -1928,9 +1918,9 @@ async fn unstable_network_4_peers_1_fault() -> Result<()> {
 #[tokio::test]
 async fn unstable_network_7_peers_1_fault() -> Result<()> {
     UnstableNetwork {
-        n_peers: 7,
-        n_faulty_peers: 1,
-        n_rounds: 3,
+        peers: 7,
+        faulty_peers: 1,
+        rounds: 3,
     }
     .run()
     .await
@@ -1938,9 +1928,9 @@ async fn unstable_network_7_peers_1_fault() -> Result<()> {
 #[tokio::test]
 async fn unstable_network_7_peers_2_faults() -> Result<()> {
     UnstableNetwork {
-        n_peers: 7,
-        n_faulty_peers: 2,
-        n_rounds: 3,
+        peers: 7,
+        faulty_peers: 2,
+        rounds: 3,
     }
     .run()
     .await
@@ -1948,11 +1938,11 @@ async fn unstable_network_7_peers_2_faults() -> Result<()> {
 #[tokio::test]
 async fn unstable_network_10_peers_3_faults() -> Result<()> {
     UnstableNetwork {
-        n_peers: 10,
-        n_faulty_peers: 3,
+        peers: 10,
+        faulty_peers: 3,
         // Keep this high-fault scenario to two rounds to reduce host-load flakiness in the
         // grouped `network_functional` harness while still exercising repeated partition recovery.
-        n_rounds: 2,
+        rounds: 2,
     }
     .run()
     .await
@@ -1960,9 +1950,9 @@ async fn unstable_network_10_peers_3_faults() -> Result<()> {
 #[tokio::test]
 async fn unstable_network_13_peers_4_faults() -> Result<()> {
     UnstableNetwork {
-        n_peers: 13,
-        n_faulty_peers: 4,
-        n_rounds: 1,
+        peers: 13,
+        faulty_peers: 4,
+        rounds: 1,
     }
     .run()
     .await
@@ -1970,9 +1960,9 @@ async fn unstable_network_13_peers_4_faults() -> Result<()> {
 #[tokio::test]
 async fn unstable_network_rejects_non_revision4_committee_geometry() {
     let error = UnstableNetwork {
-        n_peers: 5,
-        n_faulty_peers: 1,
-        n_rounds: 1,
+        peers: 5,
+        faulty_peers: 1,
+        rounds: 1,
     }
     .run()
     .await

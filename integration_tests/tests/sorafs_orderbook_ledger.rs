@@ -314,10 +314,10 @@ fn observe(
         channels,
         receipts,
         events,
+        status,
         parent,
         child,
         balances,
-        status,
         provider_owner,
     })
 }

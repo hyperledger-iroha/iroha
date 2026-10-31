@@ -12111,38 +12111,30 @@ pub struct Snapshot {
     pub verification_public_key: Option<PublicKey>,
     /// Optional private key used to sign snapshots (defaults to node identity key).
     pub signing_private_key: Option<PrivateKey>,
-    /// Last block executed by the previous node release of this running network.
+    /// Last block this running network's predecessor release executed.
     #[config(nested)]
     pub upgrade_checkpoint: SnapshotUpgradeCheckpoint,
 }
-/// Last block executed by the previous node release of a running network.
+/// Last block a running network's predecessor release executed before the network adopted the
+/// live-upgrade foundation there (`specs/live_runtime_upgrades.md` §13).
 ///
-/// A release whose execution writes differ from its predecessor's cannot re-execute the history
-/// the predecessor certified. With a checkpoint it restores the World at `height` from the
-/// predecessor's signed snapshot, proves that World against the block's certified World root and
-/// executes from the next block on. Blocks at or below the checkpoint are never re-executed.
-///
-/// The checkpoint only locates the block; it authorizes nothing. The import also requires the
-/// predecessor's certified World to hold the governance record that authorizes this release to
-/// adopt at `height` (`specs/live_runtime_upgrades.md` §13, `iroha runtime adoption manifest`).
+/// Blocks at or below the checkpoint are the predecessor's history: this release never
+/// re-executes or replays them, and restores a snapshot of its own above the checkpoint. The
+/// node refuses to start when the block it stores at `height` has another hash.
 #[derive(Debug, Clone, Default, ReadConfig)]
 pub struct SnapshotUpgradeCheckpoint {
-    /// Height of the last block the previous release executed.
+    /// Height of the last block the predecessor release executed.
     pub height: Option<u64>,
     /// Hex hash (64 digits) of that block.
     pub block_hash: Option<String>,
-    /// Public key that signed the checkpoint snapshot when another validator produced it.
-    pub signer: Option<PublicKey>,
 }
 /// A validated [`SnapshotUpgradeCheckpoint`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UpgradeCheckpoint {
-    /// Height of the last block the previous release executed.
+    /// Height of the last block the predecessor release executed.
     pub height: u64,
     /// Hash of that block.
     pub block_hash: [u8; 32],
-    /// Signer of the checkpoint snapshot when it is not the node's own snapshot key.
-    pub signer: Option<PublicKey>,
 }
 impl SnapshotUpgradeCheckpoint {
     /// The configured checkpoint, or `None` when this network has none.
@@ -12152,14 +12144,7 @@ impl SnapshotUpgradeCheckpoint {
     /// re-executed), or the hash is not 64 hex digits.
     pub fn checkpoint(&self) -> core::result::Result<Option<UpgradeCheckpoint>, String> {
         let (height, block_hash) = match (self.height, self.block_hash.as_deref()) {
-            (None, None) => {
-                if self.signer.is_some() {
-                    return Err(
-                        "snapshot.upgrade_checkpoint.signer needs height and block_hash".to_owned(),
-                    );
-                }
-                return Ok(None);
-            }
+            (None, None) => return Ok(None),
             (Some(height), Some(block_hash)) => (height, block_hash),
             _ => {
                 return Err(
@@ -12177,7 +12162,6 @@ impl SnapshotUpgradeCheckpoint {
         Ok(Some(UpgradeCheckpoint {
             height,
             block_hash: bytes,
-            signer: self.signer.clone(),
         }))
     }
 }
@@ -12191,7 +12175,6 @@ mod upgrade_checkpoint_tests {
         SnapshotUpgradeCheckpoint {
             height,
             block_hash: block_hash.map(str::to_owned),
-            signer: None,
         }
     }
 
@@ -12208,7 +12191,6 @@ mod upgrade_checkpoint_tests {
             .expect("configured");
         assert_eq!(parsed.height, 5518);
         assert_eq!(hex::encode(parsed.block_hash), HASH);
-        assert_eq!(parsed.signer, None);
     }
 
     #[test]
@@ -12222,11 +12204,6 @@ mod upgrade_checkpoint_tests {
                 .is_err()
         );
         assert!(checkpoint(Some(5518), Some("zz")).checkpoint().is_err());
-        let signer_only = SnapshotUpgradeCheckpoint {
-            signer: Some(iroha_crypto::KeyPair::random().public_key().clone()),
-            ..checkpoint(None, None)
-        };
-        assert!(signer_only.checkpoint().is_err());
     }
 }
 impl Snapshot {

@@ -42227,13 +42227,14 @@ ingress,
         iroha_logger::info!(addr = %torii_address, "starting Torii HTTP server");
         // Bind before launching any background service. A bind failure must leave no detached
         // Torii workers behind in the caller's runtime.
-        let listener = match prebound_listener {
-            Some(listener) => adopt_torii_tcp_listener(&torii_address, listener),
-            None => bind_torii_tcp_listener(torii_address.clone()),
-        }
-        .change_context(Error::StartServer)
-        .attach("failed to bind to the specified address")
-        .attach_with(|| self.address.clone().into_attachment())?;
+        let listener = prebound_listener
+            .map_or_else(
+                || bind_torii_tcp_listener(torii_address.clone()),
+                |listener| adopt_torii_tcp_listener(&torii_address, listener),
+            )
+            .change_context(Error::StartServer)
+            .attach("failed to bind to the specified address")
+            .attach_with(|| self.address.clone().into_attachment())?;
         let https = match https {
             Some(prepared) => Some(
                 prepared

@@ -229,7 +229,7 @@ mod sorafs_pop_registry_admission {
             &instruction
         ));
         Executor::Initial
-            .execute_instruction(transaction, authority, instruction)
+            .execute_instruction(transaction, authority, &instruction)
             .expect("exact governed PoP operation reaches native validation");
     }
 
@@ -253,7 +253,7 @@ mod sorafs_pop_registry_admission {
         ));
         let before = stored(transaction);
         let error = Executor::Initial
-            .execute_instruction(transaction, authority, instruction)
+            .execute_instruction(transaction, authority, &instruction)
             .expect_err("Initial must preserve native PoP rejection");
         assert!(
             matches!(error, ValidationFail::InstructionFailed(

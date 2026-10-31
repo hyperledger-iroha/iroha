@@ -283,7 +283,7 @@ pub fn check_replay(config: &Config) -> ReportResult<ReplayCheckReportV1, MainEr
         Err(error) => {
             if let Some(checkpoint) = &checkpoint {
                 return Err(Report::new(error).change_context(MainError::CheckReplay).attach(format!(
-                        "blocks up to the upgrade checkpoint at height {} are the previous release's history and are never re-executed; replay needs the checkpoint snapshot or a later snapshot of this release",
+                        "blocks up to the upgrade checkpoint at height {} are the previous release's history and are never re-executed; replay needs a snapshot of this release above the checkpoint",
                         checkpoint.height
                     )));
             }

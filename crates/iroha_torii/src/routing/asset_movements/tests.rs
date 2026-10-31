@@ -1098,9 +1098,9 @@ impl ChainFixture {
         let current = self.chain.committed(self.chain.height());
         let next_time =
             u64::try_from(current.block().header().creation_time().as_millis()).unwrap() + 1_000;
-        let signed = self.chain.sign(signer, instructions, next_time);
-        let tx_hash = signed.hash_as_entrypoint().to_string();
-        let outcomes = self.chain.commit_at(next_time, vec![signed]);
+        let signed_transaction = self.chain.sign(signer, instructions, next_time);
+        let tx_hash = signed_transaction.hash_as_entrypoint().to_string();
+        let outcomes = self.chain.commit_at(next_time, vec![signed_transaction]);
         assert_eq!(outcomes.len(), 1);
         Submission {
             tx_hash,

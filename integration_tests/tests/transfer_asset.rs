@@ -163,7 +163,7 @@ fn generate_two_ids() -> (AccountId, AccountId) {
     (alice_id, mouse_id)
 }
 fn create_mouse(mouse_id: AccountId) -> Register<Account> {
-    Register::account(Account::new(mouse_id.clone()))
+    Register::account(Account::new(mouse_id))
 }
 fn asset_definition_id_for(context: &str) -> (AssetDefinitionId, String) {
     let name = format!("camomile_{context}");

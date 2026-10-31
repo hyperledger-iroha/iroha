@@ -472,12 +472,17 @@ fn assert_single_invalid_request(body: &Value) {
         Some(-32600)
     );
 }
-async fn list_all_tool_names(app: &axum::Router) -> Vec<String> {
-    let mut cursor: Option<String> = None;
-    let mut seen_cursors = BTreeSet::new();
-    let mut names = Vec::new();
-    for _ in 0..TOOL_LIST_PAGE_LIMIT {
-        let payload = if let Some(cursor_value) = cursor.clone() {
+/// One `tools/list` request, continuing from `cursor` when present.
+fn tools_list_request(cursor: Option<&str>) -> Value {
+    cursor.map_or_else(
+        || {
+            norito::json!({
+                "jsonrpc": "2.0",
+                "id": "tools-page",
+                "method": "tools/list"
+            })
+        },
+        |cursor_value| {
             norito::json!({
                 "jsonrpc": "2.0",
                 "id": "tools-page",
@@ -486,13 +491,15 @@ async fn list_all_tool_names(app: &axum::Router) -> Vec<String> {
                     "cursor": cursor_value
                 }
             })
-        } else {
-            norito::json!({
-                "jsonrpc": "2.0",
-                "id": "tools-page",
-                "method": "tools/list"
-            })
-        };
+        },
+    )
+}
+async fn list_all_tool_names(app: &axum::Router) -> Vec<String> {
+    let mut cursor: Option<String> = None;
+    let mut seen_cursors = BTreeSet::new();
+    let mut names = Vec::new();
+    for _ in 0..TOOL_LIST_PAGE_LIMIT {
+        let payload = tools_list_request(cursor.as_deref());
         let (status, body) = post_mcp(app, payload).await;
         assert_eq!(status, StatusCode::OK);
         let result = body.get("result").expect("tools/list result");
@@ -517,22 +524,7 @@ async fn list_all_tools(app: &axum::Router) -> Vec<Value> {
     let mut seen_cursors = BTreeSet::new();
     let mut tools = Vec::new();
     for _ in 0..TOOL_LIST_PAGE_LIMIT {
-        let payload = if let Some(cursor_value) = cursor.clone() {
-            norito::json!({
-                "jsonrpc": "2.0",
-                "id": "tools-page",
-                "method": "tools/list",
-                "params": {
-                    "cursor": cursor_value
-                }
-            })
-        } else {
-            norito::json!({
-                "jsonrpc": "2.0",
-                "id": "tools-page",
-                "method": "tools/list"
-            })
-        };
+        let payload = tools_list_request(cursor.as_deref());
         let (status, body) = post_mcp(app, payload).await;
         assert_eq!(status, StatusCode::OK);
         let result = body.get("result").expect("tools/list result");
@@ -553,22 +545,7 @@ async fn find_tool(app: &axum::Router, target_name: &str) -> Value {
     let mut cursor: Option<String> = None;
     let mut seen_cursors = BTreeSet::new();
     for _ in 0..TOOL_LIST_PAGE_LIMIT {
-        let payload = if let Some(cursor_value) = cursor.clone() {
-            norito::json!({
-                "jsonrpc": "2.0",
-                "id": "tools-page",
-                "method": "tools/list",
-                "params": {
-                    "cursor": cursor_value
-                }
-            })
-        } else {
-            norito::json!({
-                "jsonrpc": "2.0",
-                "id": "tools-page",
-                "method": "tools/list"
-            })
-        };
+        let payload = tools_list_request(cursor.as_deref());
         let (status, body) = post_mcp(app, payload).await;
         assert_eq!(status, StatusCode::OK);
         let result = body.get("result").expect("tools/list result");
@@ -583,7 +560,7 @@ async fn find_tool(app: &axum::Router, target_name: &str) -> Value {
         }
         let next_cursor = checked_next_tools_cursor(result, cursor.as_deref(), &mut seen_cursors);
         assert!(
-            !next_cursor.is_none(),
+            next_cursor.is_some(),
             "tool {target_name} not found in tools/list"
         );
         cursor = next_cursor;
@@ -2993,6 +2970,8 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
 }
 #[tokio::test]
 async fn mcp_jsonrpc_canonical_target_proof_accepts_exact_request_and_rejects_wrong_binding() {
+    const TOOL: &str = "iroha.gov.protected_namespaces.list";
+    const TARGET: &str = "/v1/gov/protected-namespaces";
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -3000,8 +2979,6 @@ async fn mcp_jsonrpc_canonical_target_proof_accepts_exact_request_and_rejects_wr
     cfg.torii.mcp.expose_operator_routes = true;
     let authority_key_pair = cfg.common.key_pair.clone();
     let app = build_router(cfg);
-    const TOOL: &str = "iroha.gov.protected_namespaces.list";
-    const TARGET: &str = "/v1/gov/protected-namespaces";
     let arguments = authenticated_mcp_target_arguments(
         &app,
         &authority_key_pair,

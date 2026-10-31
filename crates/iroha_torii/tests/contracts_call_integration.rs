@@ -85,63 +85,59 @@ fn contract_call_noop_program() -> Vec<u8> {
         .expect("compile contract call no-op test program")
 }
 fn contract_call_dispatch_program() -> Vec<u8> {
-    let src = format!(
-        r"
-seiyaku ContractCallDispatchTest {{ permission CanEnactGovernance;
+    let src = r"
+seiyaku ContractCallDispatchTest { permission CanEnactGovernance;
 
   state int call_amount;
   state AssetDefinitionId call_asset;
 
-  hajimari(AssetDefinitionId asset_definition_id) {{
+  hajimari(AssetDefinitionId asset_definition_id) {
     call_amount = 0;
     call_asset = asset_definition_id;
-  }}
+  }
 
-  kotoage fn credit_by_payload(int amount) authorize(CanEnactGovernance) {{
+  kotoage fn credit_by_payload(int amount) authorize(CanEnactGovernance) {
     call_amount = amount;
-  }}
+  }
 
-  kotoage fn record_asset_by_payload(AssetDefinitionId asset_definition_id) authorize(CanEnactGovernance) {{
+  kotoage fn record_asset_by_payload(AssetDefinitionId asset_definition_id) authorize(CanEnactGovernance) {
     call_asset = asset_definition_id;
-  }}
+  }
 
-  view fn call_state() authorize(anyone) -> (int, AssetDefinitionId) {{
+  view fn call_state() authorize(anyone) -> (int, AssetDefinitionId) {
     return (call_amount, call_asset);
-  }}
-}}
-"
-    );
+  }
+}
+".to_string();
     kotodama_lang::compiler::Compiler::new()
         .compile_source(&src)
         .expect("compile contract call dispatch test program")
 }
 fn contract_call_declared_state_program() -> Vec<u8> {
-    let src = format!(
-        r"
-seiyaku ContractCallDeclaredStateTest {{ permission CanEnactGovernance;
+    let src = r"
+seiyaku ContractCallDeclaredStateTest { permission CanEnactGovernance;
 
   state int CallAmount;
   state AssetDefinitionId CallAsset;
 
-  hajimari(AssetDefinitionId asset_definition_id) {{
+  hajimari(AssetDefinitionId asset_definition_id) {
     CallAmount = 0;
     CallAsset = asset_definition_id;
-  }}
+  }
 
-  kotoage fn credit_by_payload(int amount) authorize(CanEnactGovernance) {{
+  kotoage fn credit_by_payload(int amount) authorize(CanEnactGovernance) {
     CallAmount = amount;
-  }}
+  }
 
-  kotoage fn record_asset_by_payload(AssetDefinitionId asset_definition_id) authorize(CanEnactGovernance) {{
+  kotoage fn record_asset_by_payload(AssetDefinitionId asset_definition_id) authorize(CanEnactGovernance) {
     CallAsset = asset_definition_id;
-  }}
+  }
 
-  view fn declared_state() authorize(anyone) -> (int, AssetDefinitionId) {{
+  view fn declared_state() authorize(anyone) -> (int, AssetDefinitionId) {
     return (CallAmount, CallAsset);
-  }}
-}}
-"
-    );
+  }
+}
+".to_string();
     kotodama_lang::compiler::Compiler::new()
         .compile_source(&src)
         .expect("compile contract call declared state test program")
@@ -171,45 +167,43 @@ seiyaku ContractCallDeclaredStateWithIsiTest { permission CanEnactGovernance;
         .expect("compile contract call declared state with isi test program")
 }
 fn contract_call_declared_state_with_mint_program() -> Vec<u8> {
-    let src = format!(
-        r"
-seiyaku ContractCallDeclaredStateWithMintTest {{ permission CanEnactGovernance;
+    let src = r"
+seiyaku ContractCallDeclaredStateWithMintTest { permission CanEnactGovernance;
 
   state int CallAmount;
 
-  hajimari() {{
+  hajimari() {
     CallAmount = 0;
-  }}
+  }
 
   kotoage fn write_with_mint(int amount,
                            AccountId user,
-                           AssetDefinitionId asset_definition_id) authorize(CanEnactGovernance) {{
+                           AssetDefinitionId asset_definition_id) authorize(CanEnactGovernance) {
     ledger::asset::mint(account: user, asset_definition: asset_definition_id, amount: 1);
     CallAmount = amount;
-  }}
+  }
 
-  view fn declared_state() authorize(anyone) -> int {{
+  view fn declared_state() authorize(anyone) -> int {
     return CallAmount;
-  }}
-}}
+  }
+}
 "
-    );
+    .to_string();
     kotodama_lang::compiler::Compiler::new()
         .compile_source(&src)
         .expect("compile contract call declared state with mint test program")
 }
 fn contract_call_n3x_like_program() -> Vec<u8> {
-    let src = format!(
-        r"
-seiyaku ContractCallN3xLikeTest {{ permission CanEnactGovernance;
+    let src = r"
+seiyaku ContractCallN3xLikeTest { permission CanEnactGovernance;
 
-  error enum HubError {{
+  error enum HubError {
     NotInitialized = 1,
     EmptyHub = 2,
     InvalidAmount = 3,
     InsufficientSupply = 4,
     ZeroRedemption = 5
-  }}
+  }
 
   state int HubInitialized;
   state quantity BasketUsdt;
@@ -217,27 +211,27 @@ seiyaku ContractCallN3xLikeTest {{ permission CanEnactGovernance;
   state quantity BasketKusd;
   state quantity TotalN3x;
 
-  fn init_impl() {{
+  fn init_impl() {
     HubInitialized = 1;
     BasketUsdt = 0;
     BasketUsdc = 0;
     BasketKusd = 0;
     TotalN3x = 0;
-  }}
+  }
 
-  hajimari() {{
+  hajimari() {
     init_impl();
-  }}
+  }
 
-  kotoage fn init_hub() authorize(CanEnactGovernance) {{
+  kotoage fn init_hub() authorize(CanEnactGovernance) {
     init_impl();
-  }}
+  }
 
   fn deposit_impl(AccountId user,
                   AssetDefinitionId asset,
                   quantity usdt_in,
                   quantity usdc_in,
-                  quantity kusd_in) {{
+                  quantity kusd_in) {
     require(HubInitialized == 1, HubError::NotInitialized);
     let minted = usdt_in + usdc_in + kusd_in;
     ledger::asset::mint(account: user, asset_definition: asset, amount: minted);
@@ -245,13 +239,13 @@ seiyaku ContractCallN3xLikeTest {{ permission CanEnactGovernance;
     BasketUsdc = BasketUsdc + usdc_in;
     BasketKusd = BasketKusd + kusd_in;
     TotalN3x = TotalN3x + minted;
-  }}
+  }
 
   kotoage fn deposit_like(AccountId user,
                         AssetDefinitionId asset_definition_id,
                         quantity usdt_in,
                         quantity usdc_in,
-                        quantity kusd_in) authorize(CanEnactGovernance) {{
+                        quantity kusd_in) authorize(CanEnactGovernance) {
     deposit_impl(
       user: user,
       asset: asset_definition_id,
@@ -259,11 +253,11 @@ seiyaku ContractCallN3xLikeTest {{ permission CanEnactGovernance;
       usdc_in: usdc_in,
       kusd_in: kusd_in
     );
-  }}
+  }
 
   kotoage fn burn_like(AccountId user,
                      AssetDefinitionId asset_definition_id,
-                     quantity n3x_amount) authorize(CanEnactGovernance) {{
+                     quantity n3x_amount) authorize(CanEnactGovernance) {
     let total = TotalN3x;
     require(total > 0, HubError::EmptyHub);
     require(n3x_amount > 0, HubError::InvalidAmount);
@@ -279,14 +273,14 @@ seiyaku ContractCallN3xLikeTest {{ permission CanEnactGovernance;
     BasketUsdc = BasketUsdc - usdc_out;
     BasketKusd = BasketKusd - kusd_out;
     TotalN3x = total - n3x_amount;
-  }}
+  }
 
-  view fn state_snapshot() authorize(anyone) -> (int, quantity, quantity, quantity, quantity) {{
+  view fn state_snapshot() authorize(anyone) -> (int, quantity, quantity, quantity, quantity) {
     return (HubInitialized, BasketUsdt, BasketUsdc, BasketKusd, TotalN3x);
-  }}
-}}
+  }
+}
 "
-    );
+    .to_string();
     kotodama_lang::compiler::Compiler::new()
         .compile_source(&src)
         .expect("compile contract call n3x-like test program")
@@ -883,7 +877,7 @@ async fn contracts_call_prepares_exact_payload_and_requires_durable_admission() 
     );
     execute_prepared_contract_in_test_overlay(&state, &prepared, 3);
 
-    app.shutdown().await;
+    Box::pin(app.shutdown()).await;
 }
 #[tokio::test]
 async fn contracts_view_omits_unverified_source_path_from_vm_diagnostic() {
@@ -924,7 +918,7 @@ async fn contracts_view_omits_unverified_source_path_from_vm_diagnostic() {
             .is_some_and(json::Value::is_null),
         "deployable artifacts exclude compiler source maps; a verified hash-keyed sidecar is required"
     );
-    app.shutdown().await;
+    Box::pin(app.shutdown()).await;
 }
 #[tokio::test]
 async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
@@ -1004,7 +998,7 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
             ),
         ]))
     );
-    app.shutdown().await;
+    Box::pin(app.shutdown()).await;
 }
 #[tokio::test]
 async fn contracts_call_honors_requested_entrypoint_and_payload() {
@@ -1091,7 +1085,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
             json::Value::String(asset_literal.to_owned()),
         ]))
     );
-    app.shutdown().await;
+    Box::pin(app.shutdown()).await;
 }
 #[tokio::test]
 async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
@@ -1175,7 +1169,7 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
             json::Value::String("1".to_owned()),
         ]))
     );
-    app.shutdown().await;
+    Box::pin(app.shutdown()).await;
 }
 #[tokio::test]
 async fn contracts_call_configure_roundtrips_account_id_map_state() {
@@ -1255,7 +1249,7 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
         paused.get("result").and_then(json::Value::as_str),
         Some("0")
     );
-    app.shutdown().await;
+    Box::pin(app.shutdown()).await;
 }
 #[tokio::test]
 async fn contracts_call_persists_declared_state_fields_across_calls() {
@@ -1335,7 +1329,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         Some(asset_literal),
         "unexpected declared asset from view",
     );
-    app.shutdown().await;
+    Box::pin(app.shutdown()).await;
 }
 #[tokio::test]
 async fn contracts_call_persists_declared_state_after_emitting_isi() {
@@ -1386,7 +1380,7 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
             .expect("view int result"),
         "7"
     );
-    app.shutdown().await;
+    Box::pin(app.shutdown()).await;
 }
 #[tokio::test]
 async fn contracts_call_persists_declared_state_after_mint_asset() {
@@ -1467,7 +1461,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
             .expect("view int result"),
         "7"
     );
-    app.shutdown().await;
+    Box::pin(app.shutdown()).await;
 }
 #[tokio::test]
 async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
@@ -1563,7 +1557,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     assert_eq!(snapshot.get(2).and_then(json::Value::as_str), Some("2"));
     assert_eq!(snapshot.get(3).and_then(json::Value::as_str), Some("3"));
     assert_eq!(snapshot.get(4).and_then(json::Value::as_str), Some("6"));
-    app.shutdown().await;
+    Box::pin(app.shutdown()).await;
 }
 #[tokio::test]
 async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
@@ -1678,5 +1672,5 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     assert_eq!(snapshot.get(2).and_then(json::Value::as_str), Some("0"));
     assert_eq!(snapshot.get(3).and_then(json::Value::as_str), Some("0"));
     assert_eq!(snapshot.get(4).and_then(json::Value::as_str), Some("0"));
-    app.shutdown().await;
+    Box::pin(app.shutdown()).await;
 }

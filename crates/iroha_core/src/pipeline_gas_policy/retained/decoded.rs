@@ -114,6 +114,7 @@ impl ReservedParameterGraph {
 
     /// Move exact values and ledgers after checking every original pool.
     /// Refusal returns every original leaf and the unused shell intact.
+    #[cfg(test)]
     pub(in crate::pipeline_gas_policy) fn finish(
         self,
         parts: DecodedParameterParts,
@@ -149,27 +150,18 @@ impl ReservedParameterGraph {
             let (gas, gas_custody) = parts.gas.into_allocation_parts();
             let (fraud, fraud_custody) = parts.fraud.into_allocation_parts();
             let (zk, zk_custody) = parts.zk.into_allocation_parts();
-            let (root_fees, root_fee_custody) = match parts.root_fees {
-                Some(value) => {
-                    let (value, custody) = value.into_allocation_parts();
-                    (Some(value), Some(custody))
-                }
-                None => (None, None),
-            };
-            let (crypto, crypto_custody) = match parts.crypto {
-                Some(value) => {
-                    let (value, custody) = value.into_allocation_parts();
-                    (Some(value), Some(custody))
-                }
-                None => (None, None),
-            };
-            let (staking, staking_custody) = match parts.staking {
-                Some(value) => {
-                    let (value, custody) = value.into_allocation_parts();
-                    (Some(value), Some(custody))
-                }
-                None => (None, None),
-            };
+            let (root_fees, root_fee_custody) = parts
+                .root_fees
+                .map(|value| value.into_allocation_parts())
+                .unzip();
+            let (crypto, crypto_custody) = parts
+                .crypto
+                .map(|value| value.into_allocation_parts())
+                .unzip();
+            let (staking, staking_custody) = parts
+                .staking
+                .map(|value| value.into_allocation_parts())
+                .unzip();
             ParameterGraph {
                 value: StateParameters {
                     parameters,

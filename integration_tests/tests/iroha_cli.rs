@@ -544,6 +544,10 @@ async fn wait_for_soracloud_status_payload(
     )
     .await
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The poll forwards each Soracloud CLI argument and its readiness predicate explicitly."
+)]
 async fn wait_for_soracloud_hf_status_payload(
     cwd: &Path,
     config: &ProgramConfig,
@@ -2104,9 +2108,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     // of exercising queued-window promotion.
     let now_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
     let promote_after_ms = u128::from(current_window_expires_at_ms).saturating_add(250);
-    let wait_ms = promote_after_ms
-        .saturating_sub(now_ms)
-        .min(u128::from(u64::MAX)) as u64;
+    let wait_ms = u64::try_from(promote_after_ms.saturating_sub(now_ms)).unwrap_or(u64::MAX);
     tokio::time::sleep(Duration::from_millis(wait_ms)).await;
     let promote = run_soracloud_command(
         dir.path(),

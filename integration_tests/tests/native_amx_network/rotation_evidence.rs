@@ -429,7 +429,7 @@ pub(super) fn rejected_replay(
         let mut verifier = root.verifier()?;
         let deadline = tokio::time::Instant::now() + WAIT;
         loop {
-            let height = amx::status_poll::read_until(deadline, || async {
+            let height = crate::status_poll::read_until(deadline, || async {
                 client.client().status().get().await.map_err(Into::into)
             }).await?.blocks;
             ensure!(height <= 128);

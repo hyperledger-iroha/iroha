@@ -465,8 +465,14 @@ fn build_interval_in_cache_scope(
                                 NativeFinalityProofRefusal::UnverifiedCommittee(height),
                             ));
                         }
-                        OwnedProof::from_native_frame(raw, header, members, budget, limits.deadline)
-                            .map_err(NativeFinalityProofIntervalError::from)
+                        OwnedProof::from_native_frame(
+                            raw,
+                            &header,
+                            members,
+                            budget,
+                            limits.deadline,
+                        )
+                        .map_err(NativeFinalityProofIntervalError::from)
                     },
                 )?;
                 progress()?;

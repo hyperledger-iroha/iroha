@@ -38,12 +38,14 @@ fn customer() -> AccountId {
 }
 
 fn global_root() -> Result<amx::Root> {
-    let mut npos = SumeragiNposParameters::default();
-    npos.epoch_length_blocks = NonZeroU64::new(EPOCH).unwrap();
-    npos.max_validators = 7;
-    npos.min_self_bond = 1_000_u64.into();
-    npos.evidence_horizon_blocks = EPOCH * 2;
-    npos.slashing_delay_blocks = 1;
+    let npos = SumeragiNposParameters {
+        epoch_length_blocks: NonZeroU64::new(EPOCH).unwrap(),
+        max_validators: 7,
+        min_self_bond: 1_000_u64.into(),
+        evidence_horizon_blocks: EPOCH * 2,
+        slashing_delay_blocks: 1,
+        ..Default::default()
+    };
     npos.validate().map_err(|error| eyre!(error))?;
     let api_token = amx::listener_credential()?;
     let mut builder = NetworkBuilder::new()
@@ -167,8 +169,11 @@ fn install_genesis_custody(
         network.start_all().await?;
         let bundle = network.native_genesis_provisioning_bundle()?;
         ensure!(bundle.block_hash == hash);
-        let dkg =
-            run_disposable_genesis_dkg(network, finality_limits(), 5, |height, _, deadline| {
+        let dkg = Box::pin(run_disposable_genesis_dkg(
+            network,
+            finality_limits(),
+            5,
+            |height, _, deadline| {
                 let admin = admin.clone();
                 async move {
                     advance_exact_genesis_phase_with_workload(
@@ -185,8 +190,9 @@ fn install_genesis_custody(
                     })
                     .await
                 }
-            })
-            .await?;
+            },
+        ))
+        .await?;
         let install: Vec<InstructionBox> =
             norito::json::from_slice(&fs::read(&dkg.install_instruction_path)?)?;
         ensure!(install.len() == 1);
@@ -295,8 +301,8 @@ fn prepare_rotation_exchange() -> Result<Box<RotationSetup>> {
     let global = global_root()?;
     let customer_journal = global.network.env_dir().join("rotation-customer-workflows");
     let workload = rotation_payments::CustomerWorkload::new(
-        global.pins.clone(),
-        global.genesis_wire.clone(),
+        &global.pins,
+        &global.genesis_wire,
         customer_asset(),
         customer(),
         amx::fee_intent(),
@@ -338,8 +344,8 @@ fn prepare_rotation_exchange() -> Result<Box<RotationSetup>> {
     let exchange = amx::Exchange::attach(
         global,
         runtime,
-        genesis,
-        successor,
+        &genesis,
+        &successor,
         [
             amx::BankFeeProfile::Metered,
             amx::BankFeeProfile::UnfundedRelay,
@@ -447,7 +453,7 @@ fn freeze_original_rotation_payment(
     let global_client = exchange.roots[0].client(&amx::relay(0));
     let global_tip = exchange
         .runtime
-        .block_on(amx::status_poll::read_once(
+        .block_on(crate::status_poll::read_once(
             global_client.client().torii_request_timeout(),
             || async {
                 global_client
@@ -782,7 +788,7 @@ fn assert_final_customer_effects(
             .block_header
             .height()
             .get();
-        let final_block = evidence::global_at(&exchange.roots[0], height).await?;
+        let final_block = Box::pin(evidence::global_at(&exchange.roots[0], height)).await?;
         let world = cut.world_snapshot.authenticate(&final_block)?;
         ensure!(
             world.schema_hash()

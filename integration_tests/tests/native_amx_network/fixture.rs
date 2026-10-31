@@ -3,7 +3,7 @@
 use super::*;
 use iroha_config::base::toml::WriteExt as _;
 use iroha_data_model::{
-    block::consensus::{RootFeePolicy, SumeragiGenesisContextParameters},
+    block::consensus::SumeragiGenesisContextParameters,
     isi::{Grant, Mint, Register},
     parameter::Parameter,
     sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1},
@@ -179,13 +179,13 @@ pub fn account(key: &KeyPair) -> AccountId {
     AccountId::new(key.public_key().clone())
 }
 pub fn genesis_key(index: usize) -> KeyPair {
-    key(0x70 + index as u8)
+    key(0x70 + u8::try_from(index).expect("fixture root index fits one byte"))
 }
 pub fn payer(index: usize) -> KeyPair {
-    key(0x81 + index as u8)
+    key(0x81 + u8::try_from(index).expect("fixture bank index fits one byte"))
 }
 pub fn relay(index: usize) -> KeyPair {
-    key(0x91 + index as u8)
+    key(0x91 + u8::try_from(index).expect("fixture root index fits one byte"))
 }
 pub fn fee_asset() -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(
@@ -238,12 +238,12 @@ pub struct Root {
     clients: std::collections::BTreeMap<AccountId, iroha::blocking::Client>,
 }
 impl Root {
-    pub fn new(index: usize, parent: Option<(&Root, Vec<u8>, Vec<u8>)>) -> Result<Self> {
+    pub fn new(index: usize, parent: Option<(&Root, &[u8], &[u8])>) -> Result<Self> {
         Self::new_with_fee_profile(index, parent, BankFeeProfile::Metered)
     }
     pub fn new_with_fee_profile(
         index: usize,
-        parent: Option<(&Root, Vec<u8>, Vec<u8>)>,
+        parent: Option<(&Root, &[u8], &[u8])>,
         fees: BankFeeProfile,
     ) -> Result<Self> {
         let chain = ChainId::try_from(format!("native-amx-independent-root-{index}"))?;
@@ -356,13 +356,13 @@ impl Root {
                 )
                 .into(),
             );
-            let (global, executed_genesis, successor) = parent.as_ref().unwrap();
+            let (global, executed_genesis, successor) = parent.unwrap();
             instructions.push(
                 RegisterAmxParticipantV1 {
                     dataspace: DATASPACES[bank],
                     global_chain_id: global.network.chain_id().clone(),
-                    global_genesis: executed_genesis.clone(),
-                    global_successor: successor.clone(),
+                    global_genesis: executed_genesis.to_vec(),
+                    global_successor: successor.to_vec(),
                 }
                 .into(),
             );
@@ -443,7 +443,7 @@ impl Root {
             .with_base_seed(format!("native-amx-independent-processes-{index}"))
             .with_genesis_keypair(selected_key.clone())
             .with_block_cadence(Duration::from_millis(CADENCE_MS))
-            .with_peer_startup_timeout(Duration::from_secs(20 * 60))
+            .with_peer_startup_timeout(Duration::from_mins(20))
             .with_genesis_block(move |_, entries| {
                 let builder = GenesisBuilder::new_without_executor(
                     selected_chain.clone(),
@@ -459,7 +459,7 @@ impl Root {
                 .expect("explicit fixture staking policy")
                 .with_block_cadence_ms(NonZeroU64::new(CADENCE_MS).unwrap())
                 .set_topology(entries)
-                .with_sumeragi_context_parameters(context.clone());
+                .with_sumeragi_context_parameters(context);
                 let builder = parameters
                     .clone()
                     .into_iter()
@@ -661,7 +661,7 @@ impl Root {
             peer.start_checked(
                 self.network
                     .config_layers_for_peer(peer)
-                    .chain(with_relay.then(|| Cow::Borrowed(&self.relay_layer))),
+                    .chain(with_relay.then_some(Cow::Borrowed(&self.relay_layer))),
                 None,
             )
             .await
@@ -735,7 +735,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn route_with_ttl(root: &Root, directory: &Path, ttl_ms: i64) -> Result<Table> {
+pub fn route_with_ttl(root: &Root, directory: &Path, ttl_ms: i64) -> Result<Table> {
     let signer = relay(root.index);
     let key_path = directory.join(format!("relay-{}.key", root.index));
     write_private(
@@ -790,7 +790,7 @@ pub(crate) fn route_with_ttl(root: &Root, directory: &Path, ttl_ms: i64) -> Resu
     Ok(route)
 }
 
-pub(crate) fn service(directory: &Path, index: usize, routes: Vec<Table>) -> Table {
+pub fn service(directory: &Path, index: usize, routes: Vec<Table>) -> Table {
     Table::new()
         .write(
             ["amx_relay", "journal_dir"],
@@ -809,7 +809,7 @@ pub(crate) fn service(directory: &Path, index: usize, routes: Vec<Table>) -> Tab
 }
 
 // Listener admission is runtime-only, independent of account and consensus keys.
-pub(crate) fn listener_credential() -> Result<iroha::secrecy::SecretString> {
+pub fn listener_credential() -> Result<iroha::secrecy::SecretString> {
     Ok(iroha::secrecy::SecretString::new(hex::encode(
         Sha256::digest(
             KeyPair::try_random_with_algorithm(Algorithm::Ed25519)?

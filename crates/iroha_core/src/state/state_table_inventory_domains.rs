@@ -1436,14 +1436,6 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Name,
-        reason: "Name and SBOM-digest label of the predecessor runtime-upgrade manifest that authorizes a governed adoption (specs/live_runtime_upgrades.md §13): they select which predecessor record the import accepts and which digest names the adopted selection; the record's entry is proved by the predecessor's certified World root, and neither label computes a State digest",
-        literals: &[
-            r"iroha:runtime:adoption-selection:v1",
-            r"iroha:runtime:adoption:v1",
-        ],
-    },
-    OtherDomains {
-        usage: Use::Name,
         reason: "Exact wire identities of the runtime lifecycle instructions that are not governance proposals (specs/live_runtime_upgrades.md §6, §7.1): a validator's support attestation of a scheduled change set and the emergency panel's containment, including their built-in dispatch entries. They select instruction layouts; the attestation's and endorsements' own signature domains authenticate them, and the identifiers compute no State digest",
         literals: &[
             r"iroha.runtime.contain.v1",

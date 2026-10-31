@@ -3412,9 +3412,11 @@ pub mod tests {
                     register_receipt_prepare(&mut private_state, &receipt)
                         .expect("original registered obligation");
                 }
-                let mut nexus = iroha_config::parameters::actual::Nexus::default();
-                nexus.lane_catalog = lane_catalog.clone();
-                nexus.dataspace_catalog = dataspaces.clone();
+                let mut nexus = iroha_config::parameters::actual::Nexus {
+                    lane_catalog: lane_catalog.clone(),
+                    dataspace_catalog: dataspaces.clone(),
+                    ..iroha_config::parameters::actual::Nexus::default()
+                };
                 nexus.atomic_private_settlement.sidecar_max_total_bytes =
                     NonZeroU64::new(local_cap).expect("positive local capacity");
                 nexus.atomic_private_settlement.sidecar_max_records =

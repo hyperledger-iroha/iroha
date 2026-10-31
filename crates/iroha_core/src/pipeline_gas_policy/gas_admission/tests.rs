@@ -82,15 +82,17 @@ fn admitted_gas_protocol_defaults_charge_only_original_technical_text() {
 
 #[test]
 fn admitted_gas_complete_projection_matches_ordinary_and_preserves_source() {
-    let mut expected = Gas::default();
-    expected.accepted_assets = vec![asset(1), asset(2)];
-    expected.units_per_gas = vec![GasRate {
-        asset: asset(2),
-        units_per_gas: 0,
-        twap_local_per_xor: "12.125".parse().unwrap(),
-        liquidity: GasLiquidity::Tier3,
-        volatility: GasVolatility::Dislocated,
-    }];
+    let expected = Gas {
+        accepted_assets: vec![asset(1), asset(2)],
+        units_per_gas: vec![GasRate {
+            asset: asset(2),
+            units_per_gas: 0,
+            twap_local_per_xor: "12.125".parse().unwrap(),
+            liquidity: GasLiquidity::Tier3,
+            volatility: GasVolatility::Dislocated,
+        }],
+        ..Gas::default()
+    };
     let mut source = Parameters::default();
     for value in super::super::parameters_for_testing(expected.clone()) {
         source.set_parameter(value);

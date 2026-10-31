@@ -213,7 +213,7 @@ pub(crate) fn evaluate_cache_decision(
                 );
                 push_reason(&mut decision, reason, CacheDecisionOutcome::Hold);
             }
-            None => {
+            Some(_) | None => {
                 push_reason(&mut decision, reason, CacheDecisionOutcome::Refuse);
             }
         }

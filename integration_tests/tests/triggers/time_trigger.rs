@@ -201,7 +201,7 @@ async fn time_trigger_scenarios() -> Result<()> {
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let result = async {
+        let result = Box::pin(async {
             let Some(network) = sandbox::start_network_async_or_skip(
                 NetworkBuilder::new().with_default_block_cadence(),
                 stringify!(time_trigger_scenarios),
@@ -216,7 +216,7 @@ async fn time_trigger_scenarios() -> Result<()> {
             pre_commit_trigger_should_be_executed_scenario(&network, &test_client).await?;
             mint_nft_for_every_user_every_1_sec_scenario(&network, &test_client).await?;
             Ok(())
-        }
+        })
         .await;
         match result {
             Ok(()) => return Ok(()),
@@ -488,12 +488,6 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
             gen_account_in("wonderland").0,
             gen_account_in("wonderland").0,
         ];
-        let register_accounts = accounts
-            .iter()
-            .skip(1)
-            .cloned()
-            .map(|account_id| Register::account(Account::new(account_id.clone())))
-            .collect::<Vec<_>>();
         let mut target_height = network
             .peers()
             .iter()
@@ -501,8 +495,10 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
             .map(|height| height.total)
             .max()
             .unwrap_or(0);
-        let register_accounts = register_accounts
-            .into_iter()
+        let register_accounts = accounts
+            .iter()
+            .skip(1)
+            .map(|account_id| Register::account(Account::new(account_id.clone())))
             .map(InstructionBox::from)
             .collect::<Vec<_>>();
         submit_all_with_context(

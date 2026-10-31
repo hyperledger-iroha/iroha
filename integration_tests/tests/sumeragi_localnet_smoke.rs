@@ -282,7 +282,7 @@ fn route_probe_fee_is_bounded_by_the_funded_canonical_asset() {
         &route_fee_asset_definition_id()
     );
     assert_eq!(limit.max_amount(), &Quantity::from(10_000_u32));
-    assert!(10_000 < ROUTE_VALIDATOR_FEE_SEED_AMOUNT);
+    const { assert!(10_000 < ROUTE_VALIDATOR_FEE_SEED_AMOUNT) };
 }
 fn checked_localnet_smoke_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
     KeyPair::try_from_seed(seed, algorithm).expect("derive localnet smoke fixture key")
@@ -589,9 +589,9 @@ fn realistic_ram_lfe_email_address(index: u64, rng_seed: u64) -> String {
         DOMAINS[usize::try_from(rng.next_u64() % DOMAINS.len() as u64).unwrap_or_default()];
     format!(
         "notice.{:08x}.{:08x}+{:08}@{domain}",
-        (index >> 32) as u32,
-        index as u32,
-        rng.next_u64() as u32,
+        index >> 32,
+        index & u64::from(u32::MAX),
+        rng.next_u64() & u64::from(u32::MAX),
     )
 }
 fn diagnostic_identifier_receipt(
@@ -862,33 +862,33 @@ fn verify_realistic_transfer_balances(
 #[ignore = "long-running 4-peer localnet regression (30 TPS for 2 hours)"]
 #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
 async fn permissioned_localnet_realistic_30tps_2h() -> Result<()> {
-    run_realistic_30tps_localnet(
+    Box::pin(run_realistic_30tps_localnet(
         Realistic30TpsConsensusMode::Permissioned,
         stringify!(permissioned_localnet_realistic_30tps_2h),
         None,
-    )
+    ))
     .await
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "long-running 4-peer localnet regression (30 TPS for 2 hours, NPoS)"]
 #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
 async fn npos_localnet_realistic_30tps_2h() -> Result<()> {
-    run_realistic_30tps_localnet(
+    Box::pin(run_realistic_30tps_localnet(
         Realistic30TpsConsensusMode::Npos,
         stringify!(npos_localnet_realistic_30tps_2h),
         None,
-    )
+    ))
     .await
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "long-running 4-peer NPoS localnet regression (30 TPS for 2 hours, rotating validator outage)"]
 #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
 async fn npos_localnet_realistic_30tps_2h_rotating_validator_outage() -> Result<()> {
-    run_realistic_30tps_localnet(
+    Box::pin(run_realistic_30tps_localnet(
         Realistic30TpsConsensusMode::Npos,
         stringify!(npos_localnet_realistic_30tps_2h_rotating_validator_outage),
         Some(Realistic30TpsRotatingFaultConfig::from_env()?),
-    )
+    ))
     .await
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1009,7 +1009,7 @@ impl Realistic30TpsRotatingFaultConfig {
     fn requires_bounded_convergence(&self) -> bool {
         self.strict_rotation_convergence
     }
-    fn convergence_progress_timeout(&self) -> Duration {
+    const fn convergence_progress_timeout() -> Duration {
         Duration::from_secs(REALISTIC_30TPS_CONVERGENCE_BOUND_SECS)
     }
     fn convergence_total_bound(&self) -> Option<Duration> {
@@ -1262,7 +1262,7 @@ impl Realistic30TpsRotatingFaultController {
                     network,
                     current_peer,
                     current_fault,
-                    self.config.convergence_progress_timeout(),
+                    Realistic30TpsRotatingFaultConfig::convergence_progress_timeout(),
                     self.config.convergence_total_bound(),
                 )
                 .await
@@ -1383,7 +1383,7 @@ impl Realistic30TpsRotatingFaultController {
                     network,
                     peer_index,
                     healed_fault,
-                    self.config.convergence_progress_timeout(),
+                    Realistic30TpsRotatingFaultConfig::convergence_progress_timeout(),
                     self.config.convergence_total_bound(),
                 )
                 .await
@@ -2290,9 +2290,11 @@ async fn run_realistic_30tps_localnet(
                 );
         });
     if consensus_mode.is_npos() {
-        let mut npos = SumeragiNposParameters::default();
-        npos.max_validators = 4;
-        npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
+        let npos = SumeragiNposParameters {
+            max_validators: 4,
+            epoch_length_blocks: std::num::NonZeroU64::new(3_600).unwrap(),
+            ..Default::default()
+        };
         builder = builder.with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos.into_custom_parameter(),
         )));
@@ -2317,7 +2319,7 @@ async fn run_realistic_30tps_localnet(
                 ));
         }
     }
-    let result: Result<()> = async {
+    let result: Result<()> = Box::pin(async {
         let Some(network) = sandbox::start_network_async_or_skip(builder, test_name).await?
         else {
             return Ok(());
@@ -2892,7 +2894,7 @@ async fn run_realistic_30tps_localnet(
         }
         network.shutdown().await;
         run_result
-    }
+    })
     .await;
     if let Some(previous_ttl) = previous_ttl {
         set_env_var("IROHA_TEST_CLIENT_TTL_MS", previous_ttl);
@@ -2910,7 +2912,7 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn permissioned_idle_chain_advances_only_for_external_or_internal_work() -> Result<()> {
-    idle_chain::run().await
+    Box::pin(idle_chain::run()).await
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()> {
@@ -3068,7 +3070,7 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
                 .write(["network", "p2p_queue_cap_low"], 65536_i64)
                 .write(["network", "disconnect_on_post_overflow"], false);
         });
-    let result: Result<()> = async {
+    let result: Result<()> = Box::pin(async {
         let Some(network) = sandbox::start_network_async_or_skip(
             builder,
             stringify!(permissioned_localnet_reaches_100_blocks),
@@ -3246,7 +3248,7 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         );
         network.shutdown().await;
         Ok(())
-    }
+    })
     .await;
     if let Some(previous_ttl) = previous_ttl {
         set_env_var("IROHA_TEST_CLIENT_TTL_MS", previous_ttl);
@@ -3302,7 +3304,7 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                 .write(["network", "p2p_queue_cap_low"], 65536_i64)
                 .write(["network", "disconnect_on_post_overflow"], false);
         });
-    let result: Result<()> = async {
+    let result: Result<()> = Box::pin(async {
         let Some(network) = sandbox::start_network_async_or_skip(
             builder,
             stringify!(permissioned_localnet_soak_thousands),
@@ -3398,11 +3400,7 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
             "not all peers reached target non-empty height {target_height}: {after_statuses:?}"
         );
         let elapsed = soak_start.elapsed();
-        let secs_per_block = if target_blocks == 0 {
-            0.0
-        } else {
-            elapsed.as_secs_f64() / target_blocks as f64
-        };
+        let secs_per_block = seconds_per_block(elapsed, target_blocks);
         eprintln!(
             "localnet soak summary: target_blocks={target_blocks}, elapsed={elapsed:?}, secs_per_block={secs_per_block:.3}"
         );
@@ -3412,7 +3410,7 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
         );
         network.shutdown().await;
         Ok(())
-    }
+    })
     .await;
     if let Some(previous_ttl) = previous_ttl {
         set_env_var("IROHA_TEST_CLIENT_TTL_MS", previous_ttl);
@@ -3491,7 +3489,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                 .write(["torii", "tx_burst_per_authority"], 0_i64)
                 .write(["torii", "api_high_load_tx_threshold"], 262_144_i64);
         });
-    let result: Result<()> = async {
+    let result: Result<()> = Box::pin(async {
         let Some(network) = sandbox::start_network_async_or_skip(
             builder,
             stringify!(permissioned_localnet_throughput_10k_tps),
@@ -3949,7 +3947,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         }
         network.shutdown().await;
         run_result
-    }
+    })
     .await;
     if let Some(previous_ttl) = previous_ttl {
         set_env_var("IROHA_TEST_CLIENT_TTL_MS", previous_ttl);
@@ -4034,7 +4032,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                 .write(["torii", "tx_burst_per_authority"], 0_i64)
                 .write(["torii", "api_high_load_tx_threshold"], 262_144_i64);
         });
-    let result: Result<()> = async {
+    let result: Result<()> = Box::pin(async {
         let Some(network) = sandbox::start_network_async_or_skip(
             builder,
             stringify!(npos_localnet_throughput_10k_tps),
@@ -4483,7 +4481,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         }
         network.shutdown().await;
         run_result
-    }
+    })
     .await;
     if let Some(previous_ttl) = previous_ttl {
         set_env_var("IROHA_TEST_CLIENT_TTL_MS", previous_ttl);
@@ -4610,34 +4608,39 @@ async fn collect_sumeragi_statuses(
             .cloned()
             .ok_or_else(|| eyre!("test-network client is missing its operator key"))?;
         let operator = client.client().operator_client(operator_key)?;
-        if let Ok(response) = tokio::time::timeout(
-            status_timeout, operator.consensus().diagnostics(),
-        ).await {
-            response
-                .map_err(|err| {
+        tokio::time::timeout(status_timeout, operator.consensus().diagnostics())
+            .await
+            .map_or_else(
+                |_| {
                     eprintln!(
-                        "sumeragi status request failed for peer {}: {err:?} (best_effort={:?}, stdout={:?})",
+                        "sumeragi status request timed out for peer {} after {:?} (best_effort={:?}, stdout={:?})",
                         peer.mnemonic(),
+                        status_timeout,
                         peer.best_effort_block_height(),
                         peer.latest_stdout_log_path()
                     );
-                    err
-                })
-                .wrap_err_with(|| format!("sumeragi status request failed for peer {}", peer.mnemonic()))
-        } else {
-            eprintln!(
-                "sumeragi status request timed out for peer {} after {:?} (best_effort={:?}, stdout={:?})",
-                peer.mnemonic(),
-                status_timeout,
-                peer.best_effort_block_height(),
-                peer.latest_stdout_log_path()
-            );
-            Err(eyre!(
-                "sumeragi status request timed out after {:?} for peer {}",
-                status_timeout,
-                peer.mnemonic()
-            ))
-        }
+                    Err(eyre!(
+                        "sumeragi status request timed out after {:?} for peer {}",
+                        status_timeout,
+                        peer.mnemonic()
+                    ))
+                },
+                |response| {
+                    response
+                        .map_err(|err| {
+                            eprintln!(
+                                "sumeragi status request failed for peer {}: {err:?} (best_effort={:?}, stdout={:?})",
+                                peer.mnemonic(),
+                                peer.best_effort_block_height(),
+                                peer.latest_stdout_log_path()
+                            );
+                            err
+                        })
+                        .wrap_err_with(|| {
+                            format!("sumeragi status request failed for peer {}", peer.mnemonic())
+                        })
+                },
+            )
     }))
     .await
 }
@@ -5020,7 +5023,7 @@ async fn realistic_30tps_rotating_fault_config_reads_rotate_interval_override() 
     assert!(config.strict_rotation_convergence);
     assert!(config.requires_bounded_convergence());
     assert_eq!(
-        config.convergence_progress_timeout(),
+        Realistic30TpsRotatingFaultConfig::convergence_progress_timeout(),
         Duration::from_secs(REALISTIC_30TPS_CONVERGENCE_BOUND_SECS)
     );
     assert_eq!(
@@ -6616,7 +6619,7 @@ fn sumeragi_snapshot_value_maps_fields() {
     let Value::Object(map) = value else {
         panic!("expected object");
     };
-    assert!(map.get("commit_qc_height").is_none());
+    assert!(!map.contains_key("commit_qc_height"));
     assert_eq!(map.get("tx_queue_retained_bytes"), Some(&Value::from(5)));
     assert_eq!(
         map.get("tx_queue_saturated_by_bytes"),
@@ -6866,9 +6869,6 @@ impl ThroughputStatusSummary {
         statuses: &[StatusSnapshot],
         tolerated_lagging: usize,
     ) -> Self {
-        if statuses.is_empty() || tolerated_lagging == 0 {
-            return Self::from_statuses(statuses);
-        }
         fn low_watermark_after_lagging<I>(values: I, tolerated_lagging: usize) -> u64
         where
             I: IntoIterator<Item = u64>,
@@ -6879,6 +6879,9 @@ impl ThroughputStatusSummary {
             }
             values.sort_unstable();
             values[tolerated_lagging.min(values.len().saturating_sub(1))]
+        }
+        if statuses.is_empty() || tolerated_lagging == 0 {
+            return Self::from_statuses(statuses);
         }
         let mut summary = Self::from_statuses(statuses);
         summary.min_blocks = low_watermark_after_lagging(
@@ -6897,6 +6900,11 @@ impl ThroughputStatusSummary {
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    clippy::struct_field_names,
+    reason = "The snapshot mirrors the `tx_queue_*` diagnostics status fields one-to-one."
+)]
 struct SumeragiStatusSnapshot {
     tx_queue_depth: u64,
     tx_queue_capacity: u64,
@@ -8170,6 +8178,10 @@ fn rate_summary(start: &[u64], end: &[u64], elapsed: Duration) -> (f64, f64) {
     }
     (sum / count as f64, max_rate)
 }
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "Diagnostic rates use test-sized counts, which f64 represents exactly below 2^53."
+)]
 fn rate_per_second(count: u64, elapsed: Duration) -> f64 {
     let secs = elapsed.as_secs_f64();
     if secs <= 0.0 {
@@ -8180,6 +8192,10 @@ fn rate_per_second(count: u64, elapsed: Duration) -> f64 {
 fn duration_millis_u64(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "Diagnostic block counts are test-sized, which f64 represents exactly below 2^53."
+)]
 fn seconds_per_block(elapsed: Duration, blocks: u64) -> f64 {
     if blocks == 0 {
         return 0.0;

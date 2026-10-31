@@ -239,10 +239,14 @@ fn inputs(
         &activation.certificates,
     )?;
     ensure!(verified.fee == 3, "exact fee payout");
-    installed.verifier().verify_package_proofs(
-        &claim_value.payment.send,
-        iroha_pasta::msm::MemoryBudget::default(),
-    )?;
+    #[expect(
+        clippy::default_trait_access,
+        reason = "The verifier's `MemoryBudget` lives in `iroha_pasta`, which this test crate does not depend on."
+    )]
+    let budget = Default::default();
+    installed
+        .verifier()
+        .verify_package_proofs(&claim_value.payment.send, budget)?;
     Ok(Inputs {
         scheme,
         manifest,
@@ -344,6 +348,10 @@ fn missing_request(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The fee stage receives its network, runtime, custody root and each authenticated prior-stage output explicitly."
+)]
 fn execute(
     network: &Network,
     rt: &Runtime,
@@ -600,7 +608,7 @@ fn execute_four_validator_fee_continuation() -> Result<()> {
     );
     ensure!(root.is_absolute(), "absolute fee output required");
     private_directory(&root)?;
-    let deadline = Instant::now() + Duration::from_secs(7 * 24 * 60 * 60);
+    let deadline = Instant::now() + Duration::from_hours(7 * 24);
     let genesis_owner = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)?;
     // Ordinary genesis permission grants the diagnostic reader, not monetary authority.
     let builder = network_builder()

@@ -62,12 +62,12 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
     }
     assets_url.query_pairs_mut().append_pair("limit", "1");
     let assets_endpoint = assets_url.as_str().to_owned();
-    let assets_uri = signing_uri(&assets_url)?;
+    let assets_signing_uri = signing_uri(&assets_url)?;
     let assets_nonce = "app-api-canonical-auth-get";
     let assets_msg = canonical_network_request_signature_message(
         &network_id,
         &Method::GET,
-        &assets_uri,
+        &assets_signing_uri,
         &[],
         timestamp_ms,
         assets_nonce,

@@ -119,7 +119,7 @@ mod sorafs_market_admission {
         };
         let before = snapshot(transaction);
         let error = Executor::Initial
-            .execute_instruction(transaction, authority, instruction)
+            .execute_instruction(transaction, authority, &instruction)
             .expect_err("native market handler must reject unauthorized or invalid action");
         assert!(
             matches!(error, ValidationFail::InstructionFailed(InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(ref message))) if message.contains(marker)),
@@ -190,7 +190,7 @@ mod sorafs_market_admission {
             "CanSetSorafsPricing",
         );
         Executor::Initial
-            .execute_instruction(&mut transaction, &ALICE_ID, activation)
+            .execute_instruction(&mut transaction, &ALICE_ID, &activation)
             .expect("governance activates native orderbook policy");
         let matching: InstructionBox = MatchSorafsOrderbook::new(digest, 0, 1).into();
         reject_unchanged(
@@ -213,7 +213,7 @@ mod sorafs_market_admission {
             "governed authority",
         );
         Executor::Initial
-            .execute_instruction(&mut transaction, &ALICE_ID, maintenance)
+            .execute_instruction(&mut transaction, &ALICE_ID, &maintenance)
             .expect("governed matcher performs native maintenance");
 
         let owner = ALICE_ID.to_string().into_bytes();
@@ -323,7 +323,7 @@ mod sorafs_market_admission {
             "CanSetSorafsReservePolicy",
         );
         Executor::Initial
-            .execute_instruction(&mut transaction, &ALICE_ID, activation)
+            .execute_instruction(&mut transaction, &ALICE_ID, &activation)
             .expect("governance activates native reserve policy");
         let registration: InstructionBox = RegisterSorafsReserveAccount::new(
             ReserveProviderTermsV1 {
@@ -352,7 +352,7 @@ mod sorafs_market_admission {
             );
         }
         Executor::Initial
-            .execute_instruction(&mut transaction, &ALICE_ID, registration)
+            .execute_instruction(&mut transaction, &ALICE_ID, &registration)
             .expect("operations account registers the provider reserve partition");
         let movement: InstructionBox = RequestSorafsReserveMovement::new(
             [0xD1; 32],
@@ -413,17 +413,17 @@ mod sorafs_market_admission {
             );
         }
         Executor::Initial
-            .execute_instruction(&mut transaction, &BOB_ID, movement.clone())
+            .execute_instruction(&mut transaction, &BOB_ID, &movement)
             .expect("provider submits native reserve request");
         reject_unchanged(&mut transaction, &BOB_ID, movement, "already recorded");
         Executor::Initial
-            .execute_instruction(&mut transaction, &ALICE_ID, movement_decision)
+            .execute_instruction(&mut transaction, &ALICE_ID, &movement_decision)
             .expect("governed decision resolves the request");
         Executor::Initial
-            .execute_instruction(&mut transaction, &BOB_ID, appeal(3))
+            .execute_instruction(&mut transaction, &BOB_ID, &appeal(3))
             .expect("provider submits native reserve appeal");
         Executor::Initial
-            .execute_instruction(&mut transaction, &ALICE_ID, appeal_decision.clone())
+            .execute_instruction(&mut transaction, &ALICE_ID, &appeal_decision)
             .expect("governed decision resolves the appeal");
         reject_unchanged(
             &mut transaction,

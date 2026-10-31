@@ -1,5 +1,6 @@
 #![cfg(feature = "app_api")]
 //! Integration tests exercising the SNS registrar API surface.
+use crate::fixtures as torii_fixtures;
 use axum::{
     Router,
     body::Body,
@@ -18,8 +19,6 @@ use iroha_data_model::{
 use iroha_model_base::metadata::Metadata;
 use iroha_torii::test_utils;
 use norito::codec::Encode as _;
-#[path = "fixtures.rs"]
-mod torii_fixtures;
 struct SeededDomainRecord {
     literal: String,
     status: NameStatus,
@@ -93,7 +92,7 @@ async fn request_empty(
     .expect("json response")
 }
 async fn get(app: &Router, uri: impl AsRef<str>) -> axum::response::Response {
-    torii_fixtures::request(app, torii_fixtures::get_request((uri.as_ref())))
+    torii_fixtures::request(app, torii_fixtures::get_request(uri.as_ref()))
         .await
         .expect("get response")
 }

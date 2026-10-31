@@ -55,6 +55,10 @@ struct Android {
 }
 #[derive(JsonDeserialize)]
 #[norito(deny_unknown_fields)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Field names are the provisioning request's canonical JSON keys."
+)]
 struct Request {
     schema: String,
     issuer_request: Original,

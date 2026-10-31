@@ -159,10 +159,10 @@ fn custom_retention_refusal_releases_the_already_copied_graph_prefix() {
     let source = authored();
     let mut plan = Plan::default();
     visit_graph(&source, &mut |layout| plan.add(layout)).unwrap();
-    let plain = plan.bytes
+    let graph_bytes = plan.bytes
         + array::<AllocationCharge>(plan.count).unwrap().size()
         + ChargedShared::<ParameterGraph>::allocation_layout().size();
-    let pool = AllocationBudget::new(plain);
+    let pool = AllocationBudget::new(graph_bytes);
     assert!(matches!(
         RetainedStateParameters::try_copy(&source, &pool),
         Err(ParameterRetentionError::Custom(_))

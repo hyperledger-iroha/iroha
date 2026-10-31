@@ -155,11 +155,7 @@ fn wait_for_assets(
         match client.client().query(FindAssets::new()).execute_all() {
             Ok(assets) => {
                 let all_match = expected.iter().all(|(asset_id, expected_value)| {
-                    let observed = asset_value(&assets, asset_id);
-                    match expected_value {
-                        Some(value) => observed.as_ref() == Some(value),
-                        None => observed.is_none(),
-                    }
+                    asset_value(&assets, asset_id).as_ref() == expected_value.as_ref()
                 });
                 last_observed = expected
                     .iter()

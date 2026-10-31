@@ -153,8 +153,14 @@ impl QueryExecutionBudget {
         units_per_item: u64,
         units_per_byte: u64,
     ) -> Self {
-        let max_items = max_units.checked_div(units_per_item).unwrap_or(u64::MAX);
-        let max_bytes = max_units.checked_div(units_per_byte).unwrap_or(u64::MAX);
+        let max_items = match max_units.checked_div(units_per_item) {
+            Some(items) => items,
+            None => u64::MAX,
+        };
+        let max_bytes = match max_units.checked_div(units_per_byte) {
+            Some(bytes) => bytes,
+            None => u64::MAX,
+        };
         Self {
             max_items,
             max_bytes,

@@ -6447,7 +6447,7 @@ pub(crate) mod valid {
                 if is_genesis_block {
                     if let Some(Err(fail)) = prechecked_signature_result {
                         return Some(BlockValidationError::from(
-                            AcceptedTransaction::signature_admission_failure(tx, fail),
+                            AcceptedTransaction::signature_admission_failure(tx, &fail),
                         ));
                     }
                     return AcceptedTransaction::validate_genesis_with_now(

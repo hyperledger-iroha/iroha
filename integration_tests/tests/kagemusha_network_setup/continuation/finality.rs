@@ -13,20 +13,20 @@ pub(super) fn same_four_validator_decision(
 ) -> Result<VerifiedSumeragiBlock> {
     // This rechecks both witnesses cryptographically against the retained prefix. It binds
     // the Iroha block hash, core header/R, committee, schedule, beacon and executed body.
-    let verified = verifier.verify_same_decision(retained, candidate)?;
+    let verified_block = verifier.verify_same_decision(retained, candidate)?;
     ensure!(
         retained.committee.len() == 4 && candidate.committee.len() == 4,
         "exact four-seat retained decision required"
     );
-    if verified.height() > 1 {
-        let certificate = verified
+    if verified_block.height() > 1 {
+        let certificate = verified_block
             .block()
             .commit_certificate()
             .ok_or_else(|| eyre!("missing retained decision certificate"))?;
         let qc: iroha_sumeragi::message::Qc = canonical(certificate.commit_qc())?;
         ensure!(qc.signers.count_ones() == 3, "exact quorum required");
     }
-    Ok(verified)
+    Ok(verified_block)
 }
 
 #[test]

@@ -62,7 +62,7 @@ fn cbdc_manifest_entry(
             max_amount: Some(Quantity::from(max_amount)),
             window: AllowanceWindow::PerDay,
         }),
-        notes: notes.map(|notes| notes.into()),
+        notes: notes.map(std::convert::Into::into),
     }
 }
 async fn decode_unsigned_transaction_draft(

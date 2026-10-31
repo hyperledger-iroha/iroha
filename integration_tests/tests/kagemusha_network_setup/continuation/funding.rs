@@ -265,7 +265,7 @@ pub(super) fn run(
             "a previous authenticated certificate must not authorize the live Load receipt"
         );
         let event_path = finality.event_proof;
-        let verified = verify_finalized_kagemusha_wallet_load_event_v1(
+        let verified_load = verify_finalized_kagemusha_wallet_load_event_v1(
             &block,
             &event_path,
             network.network_id(),
@@ -273,7 +273,7 @@ pub(super) fn run(
             &receipt,
         )?;
         ensure!(
-            verified.receipt() == &receipt,
+            verified_load.receipt() == &receipt,
             "authenticated receipt differs"
         );
         let mut foreign_receipt = receipt;

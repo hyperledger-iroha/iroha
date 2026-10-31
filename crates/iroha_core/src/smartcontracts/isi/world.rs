@@ -22913,7 +22913,7 @@ AccountEvent::PermissionRemoved(change))
             }
             .into();
             let error = Executor::Initial
-                .execute_instruction(&mut stx, &ALICE_ID, instruction)
+                .execute_instruction(&mut stx, &ALICE_ID, &instruction)
                 .expect_err("header-shaped genesis cannot grant native instruction authority");
             let ValidationFail::NotPermitted(message) = error else {
                 panic!("header-only genesis must fail at its source authority boundary");
@@ -22966,7 +22966,7 @@ AccountEvent::PermissionRemoved(change))
                     .transaction_for_original_genesis_testing(source, index, &ALICE_ID, &register)
                     .expect("authenticate the exact original verifier registration");
                 Executor::Initial
-                    .execute_instruction(&mut transaction, &ALICE_ID, register.clone())
+                    .execute_instruction(&mut transaction, &ALICE_ID, &register)
                     .expect("the original signed genesis admits verifier registration");
                 assert_eq!(transaction.world.verifying_keys.get(&id), Some(&record));
                 assert_eq!(
@@ -23037,7 +23037,7 @@ AccountEvent::PermissionRemoved(change))
                 .into(),
             ] {
                 let error = Executor::Initial
-                    .execute_instruction(&mut transaction, &ALICE_ID, instruction)
+                    .execute_instruction(&mut transaction, &ALICE_ID, &instruction)
                     .expect_err("a manager grant cannot create a post-genesis governed lifecycle");
                 assert!(matches!(error, ValidationFail::NotPermitted(message)
                     if message == "administrative instruction requires an explicit governed lifecycle"));
@@ -32540,7 +32540,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 }
                 .into();
                 let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), bad_instr)
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), &bad_instr)
                     .expect_err("lead time guard must reject");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, "lead-time", "expected lead-time rejection, got {msg}");
@@ -32557,7 +32557,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     record: ok_record.clone(),
                 }
                 .into();
-                exec.execute_instruction(&mut stx, &ALICE_ID.clone(), ok_instr)
+                exec.execute_instruction(&mut stx, &ALICE_ID.clone(), &ok_instr)
                     .expect("register consensus key");
                 let stored = stx
                     .world
@@ -32599,7 +32599,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             }
             .into();
             let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), &instr)
                 .expect_err("disallowed algorithm must be rejected");
             let msg = smart_contract_error_message(err);
             assert_eq!(
@@ -32634,7 +32634,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record,
             }
             .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), &instr)
                 .expect("register consensus key");
             assert_eq!(
                 stx.world.consensus_keys.get(&id).map(|entry| &entry.id),
@@ -32682,7 +32682,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     record,
                 }
                 .into();
-                exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                exec.execute_instruction(&mut stx, &ALICE_ID.clone(), &instr)
                     .expect("BLS consensus key should be accepted");
             }
             // Ed25519 is filtered out by the config allowlist.
@@ -32708,7 +32708,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 }
                 .into();
                 let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), &instr)
                     .expect_err("disallowed algorithm must be rejected");
                 let msg = smart_contract_error_message(err);
                 assert_eq!(
@@ -32760,7 +32760,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             };
             let instr: InstructionBox = consensus_keys::RegisterConsensusKey { id, record }.into();
             let err = Executor::default()
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), &instr)
                 .expect_err("empty algorithm allowlist must reject");
             assert_eq!(
                 smart_contract_error_message(err),
@@ -32794,7 +32794,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: record_a,
             }
             .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr_a)
+            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), &instr_a)
                 .expect("register initial key");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
@@ -32818,7 +32818,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: record_b.clone(),
             }
             .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), rotate_instr)
+            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), &rotate_instr)
                 .expect("rotate consensus key");
             let prev = stx
                 .world
@@ -34325,7 +34325,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                 .expect_err("missing circuit index should reject proof");
             match err {
                 ValidationFail::InstructionFailed(
@@ -34359,7 +34359,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                 .expect_err("missing envelope should reject proof");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "OpenVerifyEnvelope", "unexpected msg: {msg}");
@@ -34383,7 +34383,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                     .expect_err("protocol name must reject before registry lookup");
                 let msg = smart_contract_error_message(err);
                 let expected_message = if backend == "groth16/bls12-377" {
@@ -34409,7 +34409,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                     .expect_err(
                         "production-claim proof backend must reject before registry lookup",
                     );
@@ -34455,7 +34455,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                     .expect_err("non-admitted verifier record tag must reject");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, "verifying key backend mismatch", "unexpected msg for {}: {msg}", backend_tag.canonical_label());
@@ -34489,7 +34489,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                 .expect_err("missing verifying key should reject generic VerifyProof");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "registered verifying key reference", "unexpected msg: {msg}");
@@ -34537,7 +34537,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                 .expect_err("missing verifying key bytes should reject proof");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "verifying key bytes missing", "unexpected msg: {msg}");
@@ -34584,7 +34584,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+            crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                 .expect("an invalid proof must run backend verification and record rejection");
             let record = stx_verify
                 .world
@@ -34635,7 +34635,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                 .expect_err("wrong envelope backend tag should reject");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "OpenVerifyEnvelope backend tag mismatch", "unexpected msg: {msg}");
@@ -34732,7 +34732,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                     .expect_err("metadata mismatch must reject");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, expected_msg, "expected {expected_msg:?}, got {msg:?}");
@@ -34786,7 +34786,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                 .expect_err("duplicate proof record must reject");
             assert!(
                 matches!(
@@ -34858,7 +34858,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                     .expect_err("registry invariant must reject");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, expected_msg, "expected {expected_msg:?}, got {msg:?}");
@@ -34906,7 +34906,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                 .expect_err("missing gas schedule should reject proof");
             match err {
                 ValidationFail::InstructionFailed(

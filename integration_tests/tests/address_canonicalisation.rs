@@ -56,7 +56,7 @@ fn install_network_parallelism_override() {
     static NETWORK_PARALLELISM_GUARD: OnceLock<sandbox::NetworkParallelismGuard> = OnceLock::new();
     // Keep this suite bounded and avoid over-admitting network starts when the underlying
     // file-permit lock only allows a single concurrent network.
-    let suite_parallelism = effective_file_permit_parallelism_limit().min(2).max(1);
+    let suite_parallelism = effective_file_permit_parallelism_limit().clamp(1, 2);
     NETWORK_PARALLELISM_GUARD
         .get_or_init(|| sandbox::override_network_parallelism(None, Some(suite_parallelism)));
 }
@@ -419,10 +419,10 @@ fn explorer_account_qr_url(base: &reqwest::Url, account_literal: &str) -> reqwes
 }
 #[tokio::test]
 async fn accounts_listing_emits_i105_identifiers() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(accounts_listing_emits_i105_identifiers),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -461,10 +461,10 @@ async fn accounts_listing_emits_i105_identifiers() -> Result<()> {
 }
 #[tokio::test]
 async fn accounts_query_accepts_i105_filter_literals() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(accounts_query_accepts_i105_filter_literals),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -501,10 +501,10 @@ async fn accounts_query_accepts_i105_filter_literals() -> Result<()> {
 }
 #[tokio::test]
 async fn accounts_listing_filter_rejects_dotted_i105_literals() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(accounts_listing_filter_rejects_dotted_i105_literals),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -547,10 +547,10 @@ async fn accounts_listing_filter_rejects_dotted_i105_literals() -> Result<()> {
 }
 #[tokio::test]
 async fn accounts_query_rejects_dotted_i105_filter_literals() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(accounts_query_rejects_dotted_i105_filter_literals),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -590,10 +590,10 @@ async fn accounts_query_rejects_dotted_i105_filter_literals() -> Result<()> {
 }
 #[tokio::test]
 async fn accounts_listing_supports_i105_response() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(accounts_listing_supports_i105_response),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -631,10 +631,10 @@ async fn accounts_listing_supports_i105_response() -> Result<()> {
 }
 #[tokio::test]
 async fn accounts_query_supports_i105_response() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(accounts_query_supports_i105_response),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -671,10 +671,10 @@ async fn accounts_query_supports_i105_response() -> Result<()> {
 }
 #[tokio::test]
 async fn account_path_endpoints_reject_i105_literals() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(account_path_endpoints_reject_i105_literals),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -723,10 +723,10 @@ async fn account_path_endpoints_reject_i105_literals() -> Result<()> {
 }
 #[tokio::test]
 async fn account_path_endpoints_reject_selector_prefixed_literals() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(account_path_endpoints_reject_selector_prefixed_literals),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -775,10 +775,10 @@ async fn account_path_endpoints_reject_selector_prefixed_literals() -> Result<()
 }
 #[tokio::test]
 async fn account_path_endpoints_reject_public_key_literals() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(account_path_endpoints_reject_public_key_literals),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -827,10 +827,10 @@ async fn account_path_endpoints_reject_public_key_literals() -> Result<()> {
 }
 #[tokio::test]
 async fn asset_holders_get_supports_i105_response() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(asset_holders_get_supports_i105_response),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -880,10 +880,10 @@ async fn asset_holders_get_supports_i105_response() -> Result<()> {
 }
 #[tokio::test]
 async fn asset_holders_query_rejects_dotted_i105_filter_literals() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(asset_holders_query_rejects_dotted_i105_filter_literals),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -935,10 +935,10 @@ async fn asset_holders_query_rejects_dotted_i105_filter_literals() -> Result<()>
 }
 #[tokio::test]
 async fn account_transactions_get_returns_i105_literals() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(account_transactions_get_returns_i105_literals),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -1074,10 +1074,10 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
 }
 #[tokio::test]
 async fn account_transactions_query_returns_i105_literals() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(account_transactions_query_returns_i105_literals),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -1204,10 +1204,10 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn explorer_transactions_emit_i105_literals() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(explorer_transactions_emit_i105_literals),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -1319,10 +1319,10 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn explorer_instructions_emit_i105_literals() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(explorer_instructions_emit_i105_literals),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -1433,10 +1433,10 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
 }
 #[tokio::test]
 async fn explorer_account_qr_defaults_to_i105_for_discriminant() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(explorer_account_qr_defaults_to_i105),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -1499,10 +1499,10 @@ async fn explorer_account_qr_defaults_to_i105_for_discriminant() -> Result<()> {
 }
 #[tokio::test]
 async fn explorer_account_qr_accepts_i105_hint() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(explorer_account_qr_accepts_i105_hint),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -1538,10 +1538,10 @@ async fn explorer_account_qr_accepts_i105_hint() -> Result<()> {
 }
 #[tokio::test]
 async fn accounts_query_rejects_selector_prefixed_filter_literals() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(accounts_query_rejects_selector_prefixed_filter_literals),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -1581,10 +1581,10 @@ async fn accounts_query_rejects_selector_prefixed_filter_literals() -> Result<()
 }
 #[tokio::test]
 async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(accounts_query_rejects_public_key_filter_literals),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -1638,10 +1638,10 @@ async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() 
         .with_min_peers(4)
         .with_genesis_instruction(Register::domain(Domain::new(domain_id.clone())))
         .with_genesis_instruction(Register::account(account));
-    let Some(network) = start_network_async_or_skip(
+    let Some(network) = Box::pin(start_network_async_or_skip(
         builder,
         stringify!(accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals),
-    )
+    ))
     .await?
     else {
         return Ok(());
@@ -1762,9 +1762,11 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     for isi in setup_instructions {
         builder = builder.with_genesis_instruction(isi);
     }
-    let Some(network) =
-        start_network_async_or_skip(builder, stringify!(repo_agreements_emit_i105_literals))
-            .await?
+    let Some(network) = Box::pin(start_network_async_or_skip(
+        builder,
+        stringify!(repo_agreements_emit_i105_literals),
+    ))
+    .await?
     else {
         return Ok(());
     };
@@ -1935,9 +1937,11 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
     let mut builder = NetworkBuilder::new();
     builder = builder.with_genesis_instruction(set_registration);
     builder = builder.with_genesis_instruction(set_feedback);
-    let Some(network) =
-        start_network_async_or_skip(builder, stringify!(kaigi_endpoints_emit_i105_literals))
-            .await?
+    let Some(network) = Box::pin(start_network_async_or_skip(
+        builder,
+        stringify!(kaigi_endpoints_emit_i105_literals),
+    ))
+    .await?
     else {
         return Ok(());
     };

@@ -49471,7 +49471,7 @@ nonce: u32,
         .with_metadata(metadata)
         .with_instructions(instructions)
         ;
-        builder.set_creation_time(Duration::from_secs(4000000000));
+        builder.set_creation_time(Duration::from_secs(4_000_000_000));
         builder.set_ttl(Duration::from_secs(3_600));
         builder.set_nonce(NonZeroU32::new(nonce).expect("non-zero fixture nonce"));
         builder.sign(signer)

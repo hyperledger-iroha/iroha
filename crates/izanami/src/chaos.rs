@@ -10876,14 +10876,13 @@ mod tests {
         );
         assert_eq!(staking.stake_escrow_account_id, expected_gas);
         assert_eq!(staking.slash_sink_account_id, expected_gas);
-        for path in [&["pipeline", "gas", "tech_account_id"][..]] {
-            let actual = layers.iter().rev().find_map(|layer| read_str(layer, path));
-            assert_eq!(
-                actual.as_deref(),
-                Some(expected_gas_account.as_str()),
-                "config override for {path:?} should use deterministic Izanami gas account"
-            );
-        }
+        let path = &["pipeline", "gas", "tech_account_id"][..];
+        let actual = layers.iter().rev().find_map(|layer| read_str(layer, path));
+        assert_eq!(
+            actual.as_deref(),
+            Some(expected_gas_account.as_str()),
+            "config override for {path:?} should use deterministic Izanami gas account"
+        );
         Ok(())
     }
     #[test]

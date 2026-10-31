@@ -83,10 +83,10 @@ pub(super) fn read_original(
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
         ensure!(
             before.uid() == rustix::process::geteuid().as_raw()
-                && before.mode() & 0o077 == 0
+                && before.mode().trailing_zeros() >= 6
                 && before.nlink() == 1,
             "private single-link original required"
         );
@@ -249,13 +249,13 @@ fn prefix(network: &Network, through: u64) -> Result<Vec<SumeragiFinalityProof>>
                 NonZeroU64::new(height).unwrap(),
                 verifier.root_scope(),
             )?;
-            let verified = verifier.verify(&proof)?;
+            let verified_block = verifier.verify(&proof)?;
             ensure!(
                 proof.height() == height && proof.committee.len() == 4,
                 "exact ordered four-seat history"
             );
             if height > 1 {
-                let cert = verified
+                let cert = verified_block
                     .block()
                     .commit_certificate()
                     .ok_or_else(|| eyre!("missing certificate"))?;

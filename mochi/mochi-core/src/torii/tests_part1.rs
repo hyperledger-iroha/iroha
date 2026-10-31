@@ -131,6 +131,10 @@ async fn raw_chunked_response(chunks: Vec<Vec<u8>>) -> Option<(Response, JoinHan
         .expect("read raw chunked response headers");
     Some((response, server))
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "The tungstenite handshake callback fixes the `ErrorResponse` type it returns."
+)]
 async fn accept_canonical_norito_websocket(stream: TcpStream) -> WebSocketStream<TcpStream> {
     tokio_tungstenite::accept_hdr_async(
         stream,

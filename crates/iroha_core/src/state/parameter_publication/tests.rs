@@ -469,7 +469,7 @@ fn actual_handshake_rejections_keep_payload_and_semantic_context_after_classific
         )),
         None,
         true,
-        format!("invalid signed consensus handshake metadata payload: {old_payload_error}"),
+        &format!("invalid signed consensus handshake metadata payload: {old_payload_error}"),
     );
     let metadata = ConsensusHandshakeMetadata {
         mode: SumeragiConsensusMode::Npos,
@@ -486,7 +486,7 @@ fn actual_handshake_rejections_keep_payload_and_semantic_context_after_classific
         )),
         None,
         true,
-        format!("invalid signed consensus handshake metadata: {old_semantic_error}"),
+        &format!("invalid signed consensus handshake metadata: {old_semantic_error}"),
     );
 }
 
@@ -504,7 +504,7 @@ fn actual_npos_rejections_keep_incoming_installed_and_zero_context_after_classif
         Parameter::Custom(malformed.clone()),
         None,
         false,
-        format!("invalid signed NPoS parameter payload: {old_incoming_error}"),
+        &format!("invalid signed NPoS parameter payload: {old_incoming_error}"),
     );
     let old_installed_error =
         SumeragiNposParameters::from_custom_parameter(&malformed).unwrap_err();
@@ -512,16 +512,17 @@ fn actual_npos_rejections_keep_incoming_installed_and_zero_context_after_classif
         Parameter::Custom(SumeragiNposParameters::default().into_custom_parameter()),
         Some(Parameter::Custom(malformed)),
         false,
-        old_installed_error.to_string(),
+        &old_installed_error.to_string(),
     );
-    let mut zero = SumeragiNposParameters::default();
-    zero.finality_margin_blocks = 0;
+    let zero = SumeragiNposParameters {
+        finality_margin_blocks: 0,
+        ..SumeragiNposParameters::default()
+    };
     assert_actual_policy_rejection(
         Parameter::Custom(zero.into_custom_parameter()),
         None,
         false,
-        "SumeragiNposParameters.reconfig.finality_margin_blocks must be greater than zero"
-            .to_owned(),
+        "SumeragiNposParameters.reconfig.finality_margin_blocks must be greater than zero",
     );
 }
 

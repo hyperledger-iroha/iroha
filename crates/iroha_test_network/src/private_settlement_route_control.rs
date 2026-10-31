@@ -286,10 +286,8 @@ fn decode_lower_hex_32(value: &str) -> Option<[u8; 32]> {
         return None;
     }
     let mut decoded = [0_u8; 32];
-    for (output, pair) in decoded.iter_mut().zip(bytes.chunks_exact(2)) {
-        let high = decode_lower_hex_nibble(pair[0])?;
-        let low = decode_lower_hex_nibble(pair[1])?;
-        *output = (high << 4) | low;
+    for (output, [high, low]) in decoded.iter_mut().zip(bytes.as_chunks::<2>().0) {
+        *output = (decode_lower_hex_nibble(*high)? << 4) | decode_lower_hex_nibble(*low)?;
     }
     Some(decoded)
 }

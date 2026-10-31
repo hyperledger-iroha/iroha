@@ -4231,6 +4231,8 @@ impl Kura {
         }
         Self::sync_bound_progress_mutation_directories_result(namespace, kind)
     }
+    // Windows native sidecar transactions call this; other targets only test it.
+    #[cfg(any(windows, test))]
     fn sync_bound_progress_mutation_directories(
         namespace: &BoundProgressNamespace,
         kind: &str,

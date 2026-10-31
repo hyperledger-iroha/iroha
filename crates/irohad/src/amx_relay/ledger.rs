@@ -340,8 +340,14 @@ impl RelayLedger {
             custody.handoff_effect,
         )?;
         let ledger = self.clone();
-        let (output, _custody) =
-            iroha::client::run_native_worker(permit, custody, move || work(ledger)).await?;
+        // The worker future owns the native custody; keep it on the heap so every
+        // caller's future carries a pointer instead of the custody state.
+        let (output, _custody) = Box::pin(iroha::client::run_native_worker(
+            permit,
+            custody,
+            move || work(ledger),
+        ))
+        .await?;
         Ok(output)
     }
 

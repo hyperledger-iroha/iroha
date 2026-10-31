@@ -3,7 +3,8 @@
 //! The local tree is a synthetic proof statement, not a ledger-authorized asset
 //! root. Only `VerifyProof` records are submitted; this does not move value or
 //! revive retired confidential-transfer instructions.
-use super::{fetch_proof_snapshot, proof_fixtures::corrupt_native_proof};
+use super::fetch_proof_snapshot;
+use crate::proof_fixtures::corrupt_native_proof;
 use eyre::{Report, Result, ensure};
 use integration_tests::sandbox;
 use iroha_core_zk::{

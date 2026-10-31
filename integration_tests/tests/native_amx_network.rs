@@ -2,6 +2,10 @@
 use eyre::{Result, ensure, eyre};
 use iroha_data_model::sumeragi_amx::AmxOutcomeV1;
 #[path = "support/native_amx_harness.rs"]
+#[expect(
+    dead_code,
+    reason = "The AMX harness is shared with the committee-rotation test crate, which uses the rotation-only helpers."
+)]
 mod harness;
 #[path = "native_amx_network/read_roles.rs"]
 mod read_roles;
@@ -63,7 +67,7 @@ fn run_silent_bank_lifecycle(exchange: &Exchange) -> Result<()> {
     let client = exchange.roots[0].client(&relay(0));
     let before = exchange
         .runtime
-        .block_on(status_poll::read_once(
+        .block_on(crate::status_poll::read_once(
             client.client().torii_request_timeout(),
             || async { client.client().status().get().await.map_err(Into::into) },
         ))?

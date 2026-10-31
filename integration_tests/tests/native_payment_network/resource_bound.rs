@@ -158,7 +158,7 @@ fn sized_request(
 
 fn require_fixed_parameters(parameters: &Parameters) -> Result<()> {
     ensure!(parameters.transaction().max_tx_bytes().get() == SIGNED_FRAME_CAP as u64);
-    ensure!(parameters.sumeragi().max_block_bytes.get() == BLOCK_PAYLOAD_CAP as u32);
+    ensure!(u32::try_from(BLOCK_PAYLOAD_CAP) == Ok(parameters.sumeragi().max_block_bytes.get()));
     ensure!(
         iroha_data_model::parameter::system::BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES == 65_536
     );
@@ -555,7 +555,7 @@ fn fixed_maximum_payment_and_rejection_survive_http_rs16_kura_and_receipt_recove
                 )?;
                 let verified = trusted.verify(&proof)?;
                 exact_payment(&verified, hash)?;
-                let expected_context = &mut contexts[(height - 2) as usize];
+                let expected_context = &mut contexts[usize::try_from(height - 2)?];
                 ensure!(
                     expected_context.is_none_or(|expected| expected == verified.context_id()),
                     "validators disagree on certified decision"

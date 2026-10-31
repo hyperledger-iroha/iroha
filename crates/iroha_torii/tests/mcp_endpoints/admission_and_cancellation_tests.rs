@@ -358,7 +358,7 @@ async fn mcp_rate_limited_cancellation_fallback_rejects_inexact_bodies() {
     Box::pin(assert_invalid_fallback_consumes_control(
         "malformed-json",
         malformed_token,
-        authenticated_mcp_request_bytes("{".as_bytes().to_vec(), malformed_token),
+        authenticated_mcp_request_bytes(b"{".to_vec(), malformed_token),
     ))
     .await;
 }
@@ -421,7 +421,7 @@ async fn mcp_authenticated_rejections_do_not_refund_the_initial_ordinary_debit()
     Box::pin(assert_initial_ordinary_debit_is_not_refunded(
         authenticated_rate_limited_mcp_config([malformed_token.to_owned()], 1),
         malformed_token,
-        authenticated_mcp_request_bytes("{".as_bytes().to_vec(), malformed_token),
+        authenticated_mcp_request_bytes(b"{".to_vec(), malformed_token),
         StatusCode::BAD_REQUEST,
     ))
     .await;

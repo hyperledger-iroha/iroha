@@ -66,7 +66,7 @@ async fn zk_verify_and_attachments_endpoints_exposed_by_default() {
     for retired_path in ["/v1/zk/verify", "/v1/zk/submit-proof"] {
         let resp = fixtures::request(
             &app,
-            fixtures::post_json_request((retired_path), axum::body::Body::from("{}")),
+            fixtures::post_json_request(retired_path, axum::body::Body::from("{}")),
         )
         .await
         .unwrap();
@@ -81,7 +81,7 @@ async fn zk_verify_and_attachments_endpoints_exposed_by_default() {
         torii.state.network_id_ref(),
         &account_id,
         &cfg.common.key_pair,
-        fixtures::get_request(("/v1/zk/attachments")),
+        fixtures::get_request("/v1/zk/attachments"),
         &[],
     );
     let resp = fixtures::request(&app, request).await.unwrap();
@@ -94,7 +94,7 @@ async fn zk_verify_and_attachments_endpoints_exposed_by_default() {
         torii.state.network_id_ref(),
         &account_id,
         &cfg.common.key_pair,
-        fixtures::get_request(("/v1/zk/attachments/placeholder-id")),
+        fixtures::get_request("/v1/zk/attachments/placeholder-id"),
         &[],
     );
     let resp = app.router().oneshot(request).await.unwrap();
@@ -118,8 +118,8 @@ async fn zk_attachments_endpoints_report_unavailable_when_disabled() {
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::with([domain], [account], []));
     let app = attachment_router(&torii, &cfg);
     for request in [
-        fixtures::get_request(("/v1/zk/attachments")),
-        fixtures::get_request(("/v1/zk/attachments/count")),
+        fixtures::get_request("/v1/zk/attachments"),
+        fixtures::get_request("/v1/zk/attachments/count"),
         fixtures::get_request(&(format!("/v1/zk/attachments/{}", "0".repeat(64)))),
         Request::builder()
             .method("DELETE")
@@ -156,7 +156,7 @@ async fn zk_attachments_count_and_delete_endpoints_exposed_for_signed_requests()
         torii.state.network_id_ref(),
         &account_id,
         &cfg.common.key_pair,
-        fixtures::get_request(("/v1/zk/attachments/count")),
+        fixtures::get_request("/v1/zk/attachments/count"),
         &[],
     );
     let count_resp = fixtures::request(&app, count_request).await.unwrap();
@@ -211,10 +211,7 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
         torii.state.network_id_ref(),
         &account_id,
         &cfg.common.key_pair,
-        fixtures::post_json_request(
-            ("/v1/zk/attachments"),
-            axum::body::Body::from(body.to_vec()),
-        ),
+        fixtures::post_json_request("/v1/zk/attachments", axum::body::Body::from(body.to_vec())),
         body,
     );
     let signed_headers = signed_request.headers().clone();
@@ -310,8 +307,8 @@ async fn zk_attachments_endpoints_require_signed_headers_when_enabled() {
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
     let app = attachment_router(&torii, &cfg);
     for request in [
-        fixtures::get_request(("/v1/zk/attachments")),
-        fixtures::get_request(("/v1/zk/attachments/count")),
+        fixtures::get_request("/v1/zk/attachments"),
+        fixtures::get_request("/v1/zk/attachments/count"),
         Request::builder()
             .method("DELETE")
             .uri(format!("/v1/zk/attachments/{}", "0".repeat(64)))

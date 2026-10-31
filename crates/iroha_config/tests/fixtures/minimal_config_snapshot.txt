@@ -1121,7 +1121,6 @@ Root {
         upgrade_checkpoint: SnapshotUpgradeCheckpoint {
             height: None,
             block_hash: None,
-            signer: None,
         },
     },
     telemetry_profile: Operator,

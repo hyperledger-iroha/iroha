@@ -2145,7 +2145,6 @@ impl Queue {
     }
     /// Reconstruct refreshed manifests from the static baseline and committed additions.
     fn refreshed_lane_manifest_registry(
-        &self,
         registry_cfg: &LaneRegistry,
         state: &State,
     ) -> Result<LaneManifestRegistryHandle, LaneLifecycleError> {
@@ -2167,7 +2166,7 @@ impl Queue {
         registry_cfg: LaneRegistry,
         state: Arc<State>,
     ) {
-        let initial = match self.refreshed_lane_manifest_registry(&registry_cfg, &state) {
+        let initial = match Self::refreshed_lane_manifest_registry(&registry_cfg, &state) {
             Ok(registry) => registry,
             Err(err) => {
                 iroha_logger::warn!(reason = %err, "refusing to install incomplete initial lane-manifest snapshot");
@@ -2186,7 +2185,7 @@ impl Queue {
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             ticker.tick().await;
-            let registry = match self.refreshed_lane_manifest_registry(&registry_cfg, &state) {
+            let registry = match Self::refreshed_lane_manifest_registry(&registry_cfg, &state) {
                 Ok(registry) => registry,
                 Err(err) => {
                     iroha_logger::warn!(reason = %err, "refusing lane-manifest hot reload without exact active-lane coverage");

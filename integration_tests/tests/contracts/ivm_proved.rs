@@ -62,8 +62,8 @@ fn counter_artifact() -> Vec<u8> {
     .expect("compile the real zero-argument counter with the ZK mode bit")
 }
 
-fn bounded_client(client: Client) -> Client {
-    integration_tests::sync::rebind_blocking_client(&client, |configured| {
+fn bounded_client(client: &Client) -> Client {
+    integration_tests::sync::rebind_blocking_client(client, |configured| {
         configured.transaction_status_timeout = OBSERVATION_TIMEOUT;
         configured.torii_request_timeout = Duration::from_secs(90);
         configured.transaction_ttl = Some(Duration::from_mins(11));
@@ -279,6 +279,10 @@ async fn committed_rejection_on_peer(
     .map_err(|_| eyre!("authenticated rejection details exceeded the shared deadline"))?
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Each rejected case receives its network, client, contract identity, fee and proved inputs explicitly."
+)]
 async fn rejected_unchanged_everywhere(
     network: &Network,
     http: &reqwest::Client,
@@ -293,7 +297,7 @@ async fn rejected_unchanged_everywhere(
     // prior request. Routing may forward admission to an authoritative peer;
     // this does not establish which validator performed the local execution.
     for (index, peer) in network.peers().iter().enumerate() {
-        let client = bounded_client(peer.client());
+        let client = bounded_client(&peer.client());
         let transaction = transaction(
             &client,
             Executable::IvmProved(proved.clone()),
@@ -316,7 +320,7 @@ async fn rejected_unchanged_everywhere(
         if evidence == RejectionEvidence::Committed {
             for observer in network.peers() {
                 committed_rejection_on_peer(
-                    &bounded_client(observer.client()),
+                    &bounded_client(&observer.client()),
                     &transaction,
                     EXECUTION_UNAVAILABLE,
                 )
@@ -326,7 +330,7 @@ async fn rejected_unchanged_everywhere(
     }
     // An independently Applied barrier rules out stalled validators. Its own
     // ordinary log effect is unrelated to the counter under test.
-    let client = bounded_client(network.client());
+    let client = bounded_client(&network.client());
     let label_owned = label.to_owned();
     let hash = read_on_dedicated_thread(move || {
         client.submit(
@@ -394,7 +398,7 @@ async fn run() -> Result<()> {
         "expected exactly four validators"
     );
     network.ensure_blocks(1).await?;
-    let client = bounded_client(network.client());
+    let client = bounded_client(&network.client());
     let http = integration_tests::http::client();
     let artifact = counter_artifact();
     let parsed = ivm::ProgramMetadata::parse(&artifact)?;

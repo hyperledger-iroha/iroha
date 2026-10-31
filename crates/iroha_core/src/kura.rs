@@ -417,8 +417,8 @@ pub struct Kura {
     _store_root_lock_file: Option<std::fs::File>,
     /// Retains the temporary storage directory used by isolated Kura instances.
     temp_store_dir: Option<tempfile::TempDir>,
-    /// Last block of this chain that the previous node release executed, when this release took
-    /// over the running network there (`state::upgrade_checkpoint`).
+    /// Last block of this chain that its predecessor release executed, when the chain adopted the
+    /// live-upgrade foundation there (`state::upgrade_checkpoint`).
     upgrade_checkpoint: std::sync::OnceLock<crate::state::upgrade_checkpoint::UpgradeCheckpointV1>,
 }
 #[derive(Debug)]
@@ -6794,22 +6794,31 @@ impl Kura {
     pub const fn emergency_fast_startup_enabled(&self) -> bool {
         self.auxiliary_history_deferred
     }
-    /// Record the upgrade checkpoint of this chain before any State is restored from it.
+    /// Record the upgrade checkpoint of this chain before any State is restored.
     ///
     /// # Errors
-    /// A different checkpoint was already recorded.
+    /// The block stored at the checkpoint height has another hash, or a different checkpoint was
+    /// already recorded.
     pub fn set_upgrade_checkpoint(
         &self,
         checkpoint: &crate::state::upgrade_checkpoint::UpgradeCheckpointV1,
     ) -> Result<(), &'static str> {
-        let recorded = self.upgrade_checkpoint.get_or_init(|| checkpoint.clone());
+        let stored = usize::try_from(checkpoint.height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .and_then(|height| self.get_block_hash(height));
+        if stored.is_some_and(|stored| stored != checkpoint.block_hash) {
+            return Err("the block stored at the upgrade checkpoint height has another hash");
+        }
+        let recorded = self.upgrade_checkpoint.get_or_init(|| *checkpoint);
         if recorded == checkpoint {
             Ok(())
         } else {
             Err("Kura already records a different upgrade checkpoint")
         }
     }
-    /// The upgrade checkpoint of this chain, when this release took it over from a predecessor.
+    /// The upgrade checkpoint of this chain, when it adopted the foundation from a predecessor
+    /// release: blocks at or below it are never re-executed.
     pub fn upgrade_checkpoint(
         &self,
     ) -> Option<&crate::state::upgrade_checkpoint::UpgradeCheckpointV1> {

@@ -282,7 +282,6 @@ where
     value.encode_to(writer);
 }
 #[inline]
-#[inline]
 fn partial_u64_from_le_bytes(bytes: [u8; 8], len: usize) -> u64 {
     debug_assert!(len <= bytes.len());
     let word = u64::from_le_bytes(bytes);

@@ -122,7 +122,7 @@ fn current_contract_owner_originates_and_revokes_exact_tokens_without_code_manag
             .execute_instruction(
                 &mut tx,
                 &owner,
-                Grant::account_permission(permission.clone(), recipient.clone()).into(),
+                &Grant::account_permission(permission.clone(), recipient.clone()).into(),
             )
             .expect("current lifecycle owner originates exact grant");
         assert!(authority_has_permission(&tx.world, &recipient, &permission).unwrap());
@@ -130,7 +130,7 @@ fn current_contract_owner_originates_and_revokes_exact_tokens_without_code_manag
             .execute_instruction(
                 &mut tx,
                 &owner,
-                Revoke::account_permission(permission.clone(), recipient.clone()).into(),
+                &Revoke::account_permission(permission.clone(), recipient.clone()).into(),
             )
             .expect("current lifecycle owner revokes exact grant without possessing it");
         assert!(!authority_has_permission(&tx.world, &recipient, &permission).unwrap());
@@ -188,14 +188,14 @@ fn suspended_contract_permissions_can_be_repaired_without_authorizing_invocation
             .execute_instruction(
                 &mut tx,
                 &owner,
-                Grant::account_permission(permission.clone(), holder.clone()).into(),
+                &Grant::account_permission(permission.clone(), holder.clone()).into(),
             )
             .expect("owner grants a retained declaration while suspended");
         executor
             .execute_instruction(
                 &mut tx,
                 &holder,
-                Grant::account_permission(permission.clone(), owner.clone()).into(),
+                &Grant::account_permission(permission.clone(), owner.clone()).into(),
             )
             .expect("exact holder delegates a retained declaration while suspended");
         for authority in [&owner, &holder] {
@@ -215,22 +215,22 @@ fn suspended_contract_permissions_can_be_repaired_without_authorizing_invocation
             .execute_instruction(
                 &mut tx,
                 &holder,
-                Revoke::account_permission(permission.clone(), owner.clone()).into(),
+                &Revoke::account_permission(permission.clone(), owner.clone()).into(),
             )
             .expect("exact holder revokes a retained declaration while suspended");
         executor
             .execute_instruction(
                 &mut tx,
                 &owner,
-                Revoke::account_permission(permission.clone(), holder.clone()).into(),
+                &Revoke::account_permission(permission.clone(), holder.clone()).into(),
             )
             .expect("owner revokes a retained declaration while suspended");
         assert!(!authority_has_permission(&tx.world, &owner, &permission).unwrap());
         assert!(!authority_has_permission(&tx.world, &holder, &permission).unwrap());
         let typo = owner_entrypoint_permission(&address, "writeTypo");
         for instruction in [
-            Grant::account_permission(typo.clone(), holder.clone()).into(),
-            Revoke::account_permission(typo, holder.clone()).into(),
+            &Grant::account_permission(typo.clone(), holder.clone()).into(),
+            &Revoke::account_permission(typo, holder.clone()).into(),
         ] {
             assert!(
                 executor
@@ -342,7 +342,7 @@ fn contract_owner_delegation_rejects_foreign_transferred_pending_and_parliament_
             for instruction in &instructions {
                 assert!(
                     executor
-                        .execute_instruction(&mut tx, &authority, instruction.clone())
+                        .execute_instruction(&mut tx, &authority, &instruction)
                         .is_err(),
                     "scenario {scenario} accepted an owned permission mutation: {instruction:?}"
                 );
@@ -504,7 +504,7 @@ seiyaku OwnerPermission { permission write; permission touch_caller;
         .execute_instruction(
             &mut tx,
             &authority,
-            Grant::account_permission(
+            &Grant::account_permission(
                 owner_entrypoint_permission(&address, "touch_caller"),
                 authority.clone(),
             )
@@ -539,7 +539,7 @@ seiyaku OwnerPermission { permission write; permission touch_caller;
         .execute_instruction(
             &mut tx,
             &authority,
-            Revoke::account_permission(permission.clone(), authority.clone()).into(),
+            &Revoke::account_permission(permission.clone(), authority.clone()).into(),
         )
         .expect("owner revokes exact invocation grant");
     tx.apply();
@@ -691,7 +691,7 @@ fn contract_runtime_delegates_only_its_exact_asset_and_trigger_capabilities() {
                 .execute_instruction_with_contract_runtime_context(
                     &mut tx,
                     &subject,
-                    Grant::account_permission(permission.clone(), recipient.clone()).into(),
+                    &Grant::account_permission(permission.clone(), recipient.clone()).into(),
                     Some(&context),
                 )
                 .expect("active contract delegates only its exact owned capability");
@@ -735,8 +735,8 @@ fn contract_runtime_delegates_only_its_exact_asset_and_trigger_capabilities() {
             tx.world
                 .add_account_permission(&subject, permission.clone());
             for instruction in [
-                Grant::account_permission(permission.clone(), recipient.clone()).into(),
-                Revoke::account_permission(permission.clone(), recipient.clone()).into(),
+                &Grant::account_permission(permission.clone(), recipient.clone()).into(),
+                &Revoke::account_permission(permission.clone(), recipient.clone()).into(),
             ] {
                 assert!(matches!(
                     executor.execute_instruction_with_contract_runtime_context(
@@ -767,7 +767,7 @@ fn contract_runtime_delegates_only_its_exact_asset_and_trigger_capabilities() {
                 executor.execute_instruction_with_contract_runtime_context(
                     &mut tx,
                     &subject,
-                    Grant::account_permission(exact, recipient).into(),
+                    &Grant::account_permission(exact, recipient).into(),
                     Some(&context),
                 ),
                 Err(ValidationFail::NotPermitted(_))
