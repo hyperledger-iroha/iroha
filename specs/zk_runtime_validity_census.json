@@ -872,7 +872,7 @@
    "owner": null,
    "path": "crates/irohad/src/main.rs",
    "symbol": "install_zk_config_before_kura_replay",
-   "gates": "Reads and writes of `config.zk` outside the configuration crate: the daemon installing local resources into State (install_node_zk), starting the local diagnostic ZK lane from the node's own verifier settings, FASTPQ prover selection, device labels and the compatibility probe; the staged-genesis builder and the test network installing the same local resources; and the localnet builder passing the settings value to the execution-policy digest.",
+   "gates": "Reads and writes of `config.zk` outside the configuration crate: the daemon installing local resources into State (install_node_zk), starting the local diagnostic ZK lane from the node's own verifier settings, FASTPQ prover selection, device labels, the compatibility probe and the offline replay check, which restores a snapshot with the node's ZK resources as Strict startup does; the staged-genesis builder and the test network installing the same local resources; and the localnet builder passing the settings value to the execution-policy digest.",
    "decided_by": "Stays node-local: the settings value a configuration produces holds this node's local resources and the protocol-default validity values, because the node schema has no validity field (cfg.zk.node_schema).",
    "attribution": "read",
    "note": "Negative test: installs_actual_zk_and_settlement_config_before_kura_replay (irohad) asserts that an SCCP limit placed in a settings value by hand does not reach State. The writes are `config.zk.fastpq.*` assignments of the daemon's FASTPQ command-line overrides. The two startup_preparation reads moved from main: one configures local FASTPQ sidecar limits, and one supplies node ZK resources to snapshot recovery before the same install/replay boundary; neither introduces an independent validity-policy owner. iroha_test_network retained_genesis.rs passes the runtime ZK configuration to config::validate_genesis_with_runtime_config, which installs it through install_node_zk (local resources only); the committed policy of the genesis under validation supplies validity.",
@@ -891,6 +891,7 @@
     ["crates/irohad/src/compatibility_probe.rs", "node_config_read", "zk", 1],
     ["crates/irohad/src/main.rs", "node_config_read", "zk", 14],
     ["crates/irohad/src/main.rs", "zk_settings_write", "fastpq", 8],
+    ["crates/irohad/src/replay_check.rs", "node_config_read", "zk", 1],
     ["crates/irohad/src/startup_preparation.rs", "node_config_read", "zk", 2]
    ]
   },
@@ -6756,7 +6757,7 @@
  },
  "summary": {
   "entries": 235,
-  "sites": 1505,
+  "sites": 1506,
   "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 118, "open": 40, "out_of_plan": 21, "unsupported": 19},
   "by_owner": {"-": 139, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }

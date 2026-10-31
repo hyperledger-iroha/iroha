@@ -25651,7 +25651,7 @@
         }
       },
       {
-        "reason": "Shapes of the runtime governance records of the live-upgrade foundation (specs/live_runtime_upgrades.md): the JSON ceiling of the committed notice policy (runtime_upgrade_policy_v1), provenance policy (runtime_provenance_policy_v1) and emergency panel (runtime_emergency_panel_v1) parameters, checked before decoding; the text length, reference count, carrier-schema nodes, depth, members and declared length bound, and initial storage bytes a runtime definition descriptor may hold; and the lifetime of an emergency containment endorsement. Change-set admission and containment check them on governance records, and a proposal carries at most one endorsement per trusted release signer the committed provenance policy lists; an instruction or proof is judged by the definitions a selection activates, so they bound no transaction, block or proof.",
+        "reason": "Shapes of the runtime governance records of the live-upgrade foundation (specs/live_runtime_upgrades.md): the JSON ceiling of the committed notice policy (runtime_upgrade_policy_v1), provenance policy (runtime_provenance_policy_v1) and emergency panel (runtime_emergency_panel_v1) parameters, checked before decoding; the text length, reference count, carrier-schema nodes, depth, members and declared length bound, and initial storage bytes a runtime definition descriptor may hold; and the lifetime of an emergency containment endorsement. Change-set admission and containment check them on governance records, and a proposal carries at most one endorsement per trusted release signer the committed provenance policy lists; an instruction or proof is judged by the definitions a selection activates, so they bound no transaction, block or proof. The one exception is the wire-ID length of an instruction envelope (§5.2): it is the definition text limit by construction, so every wire ID an interface can declare fits, and it is a structural decode rule of an envelope that travels inside transaction.max_tx_bytes, not a separate resource bound.",
         "files": [
           {
             "path": "crates/iroha_data_model/src/parameter/runtime_upgrade_policy.rs",
@@ -25699,6 +25699,15 @@
               "MAX_CARRIER_MEMBERS": "64",
               "MAX_CARRIER_LENGTH_BOUND": "1 << 20",
               "MAX_INITIAL_BYTES": "64 * 1024"
+            }
+          },
+          {
+            "path": "crates/iroha_data_model/src/isi/envelope.rs",
+            "symbols": [
+              "MAX_INSTRUCTION_WIRE_ID_BYTES"
+            ],
+            "exprs": {
+              "MAX_INSTRUCTION_WIRE_ID_BYTES": "crate::runtime::definition::MAX_DEFINITION_TEXT_BYTES"
             }
           },
           {

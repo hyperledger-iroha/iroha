@@ -1,6 +1,6 @@
 {
   "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
-  "generated_at": "2026-10-31T05:58:49Z",
+  "generated_at": "2026-10-31T11:14:28Z",
   "root": "iroha",
   "total_refs": 1149,
   "unique_vars": 285,
@@ -1956,7 +1956,7 @@
         },
         {
           "context": "std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 1684,
+          "line": 1714,
           "path": "crates/iroha_data_model/src/transaction/signed/ordered_intent_tests.rs",
           "scope": "test"
         },
@@ -3156,19 +3156,19 @@
         },
         {
           "context": "let path = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../defaults/nexus/config.toml\");",
-          "line": 7113,
+          "line": 7130,
           "path": "crates/irohad/src/main.rs",
           "scope": "test"
         },
         {
           "context": "let path = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../defaults/nexus/config.toml\");",
-          "line": 7152,
+          "line": 7169,
           "path": "crates/irohad/src/main.rs",
           "scope": "test"
         },
         {
           "context": "let path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 10013,
+          "line": 10033,
           "path": "crates/irohad/src/main.rs",
           "scope": "test"
         },
@@ -4312,19 +4312,19 @@
         },
         {
           "context": "version = env!(\"CARGO_PKG_VERSION\"),",
-          "line": 940,
+          "line": 952,
           "path": "crates/irohad/src/main.rs",
           "scope": "prod"
         },
         {
           "context": "env!(\"CARGO_PKG_VERSION\"),",
-          "line": 8084,
+          "line": 8101,
           "path": "crates/irohad/src/main.rs",
           "scope": "test"
         },
         {
           "context": "env!(\"CARGO_PKG_VERSION\"),",
-          "line": 11982,
+          "line": 12002,
           "path": "crates/irohad/src/main.rs",
           "scope": "test"
         },

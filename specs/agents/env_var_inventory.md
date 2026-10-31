@@ -367,7 +367,7 @@ Total references: **1149** · Unique variables: **285**
 - prod: crates/iroha_data_model/src/testing/axt.rs:18 — `env!("CARGO_MANIFEST_DIR"),`
 - prod: crates/iroha_data_model/src/testing/axt.rs:22 — `env!("CARGO_MANIFEST_DIR"),`
 - prod: crates/iroha_data_model/src/testing/cancel_asset_lock.rs:43 — `Path::new(env!("CARGO_MANIFEST_DIR"))`
-- test: crates/iroha_data_model/src/transaction/signed/ordered_intent_tests.rs:1684 — `std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
+- test: crates/iroha_data_model/src/transaction/signed/ordered_intent_tests.rs:1714 — `std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_data_model/src/transaction/signed_norito_rpc_fixture_tests.rs:12 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_data_model/src/transaction/signed_norito_rpc_fixture_tests.rs:20 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_data_model/src/validation_fee/retail.rs:732 — `env!("CARGO_MANIFEST_DIR"),`
@@ -567,9 +567,9 @@ Total references: **1149** · Unique variables: **285**
 - test: crates/iroha_zkp_vole/tests/conformance_crt.rs:268 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/irohad/bins/src/bin/sorafs_external_software_signer.rs:1553 — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/irohad/src/external_software_signer/consensus_threshold.rs:794 — `let path = Path::new(env!("CARGO_MANIFEST_DIR"))`
-- test: crates/irohad/src/main.rs:7113 — `let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/nexus/config.toml");`
-- test: crates/irohad/src/main.rs:7152 — `let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/nexus/config.toml");`
-- test: crates/irohad/src/main.rs:10013 — `let path = Path::new(env!("CARGO_MANIFEST_DIR"))`
+- test: crates/irohad/src/main.rs:7130 — `let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/nexus/config.toml");`
+- test: crates/irohad/src/main.rs:7169 — `let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/nexus/config.toml");`
+- test: crates/irohad/src/main.rs:10033 — `let path = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/irohad/src/main/node_file_tests.rs:42 — `.tempdir_in(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/irohad/src/main/shared_sorafs_provider_cache_tests.rs:48 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/irohad/src/node_secrets/tests.rs:29 — `.tempdir_in(env!("CARGO_MANIFEST_DIR"))`
@@ -763,9 +763,9 @@ Total references: **1149** · Unique variables: **285**
 - prod: crates/iroha_storage_client/src/client.rs:446 — `("version".into(), JsonValue::from(env!("CARGO_PKG_VERSION"))),`
 - prod: crates/iroha_torii/src/mcp.rs:1384 — `Value::String(env!("CARGO_PKG_VERSION").to_owned()),`
 - prod: crates/iroha_torii/src/mcp/protocol.rs:564 — `"version": (env!("CARGO_PKG_VERSION"))`
-- prod: crates/irohad/src/main.rs:940 — `version = env!("CARGO_PKG_VERSION"),`
-- test: crates/irohad/src/main.rs:8084 — `env!("CARGO_PKG_VERSION"),`
-- test: crates/irohad/src/main.rs:11982 — `env!("CARGO_PKG_VERSION"),`
+- prod: crates/irohad/src/main.rs:952 — `version = env!("CARGO_PKG_VERSION"),`
+- test: crates/irohad/src/main.rs:8101 — `env!("CARGO_PKG_VERSION"),`
+- test: crates/irohad/src/main.rs:12002 — `env!("CARGO_PKG_VERSION"),`
 - prod: crates/kotodama_lang/src/compiler.rs:142 — `const COMPILER_FINGERPRINT: &str = concat!("kotodama_lang/", env!("CARGO_PKG_VERSION"));`
 - prod: crates/kotodama_toolchain/src/bin/koto.rs:82 — `const KOTO_VERSION: &str = env!("CARGO_PKG_VERSION");`
 - test: crates/kotodama_toolchain/src/lsp/lsp_transport.rs:464 — `Some(env!("CARGO_PKG_VERSION"))`
